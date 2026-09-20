@@ -30,6 +30,10 @@ pub(crate) enum Peer {
         mode: SecurityMode,
         auth_started: Instant,
     },
+    /// A terminal auth decision keeps only bounded wire retransmission state until expiry.
+    ServerReject {
+        expires_at: Instant,
+    },
     ClientHello {
         session: Handle,
         started: Instant,
@@ -68,7 +72,10 @@ impl Peer {
             | Self::ClientResponse { session, .. }
             | Self::ClientAuth { session, .. }
             | Self::Established { session, .. } => Some(*session),
-            Self::Cookie { .. } | Self::ServerFirst { .. } | Self::ServerFinish { .. } => None,
+            Self::Cookie { .. }
+            | Self::ServerFirst { .. }
+            | Self::ServerFinish { .. }
+            | Self::ServerReject { .. } => None,
         }
     }
 

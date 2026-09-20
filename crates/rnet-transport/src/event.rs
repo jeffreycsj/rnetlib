@@ -44,10 +44,20 @@ impl SecurityChange {
 }
 
 /// Decoded authentication request with an owned key and borrowed join payload.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct AuthRequest<'a> {
     pub client_public_key: [u8; 32],
     pub join_payload: &'a [u8],
+}
+
+impl std::fmt::Debug for AuthRequest<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthRequest")
+            .field("client_public_key", &self.client_public_key)
+            .field("join_payload_len", &self.join_payload.len())
+            .finish()
+    }
 }
 
 impl<'a> AuthRequest<'a> {

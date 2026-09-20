@@ -1,5 +1,5 @@
 use crate::config::GameProtocol;
-use crate::join::{decode, encode};
+use crate::join::{decode, encode, encode_resume};
 use rnet_core::ErrorCode;
 
 #[test]
@@ -59,5 +59,24 @@ fn ticket_size_is_bounded_before_allocation() {
             .expect_err("zero ID is reserved")
             .code(),
         ErrorCode::InvalidArgument
+    );
+}
+
+#[test]
+fn resume_join_uses_explicit_magic_and_keeps_login_ticket_separate() {
+    let protocol = GameProtocol::new(42, 2);
+    let resume = [9_u8; 48];
+    let encoded = encode_resume(protocol, b"login", &resume, 1024).unwrap();
+    let decoded = decode(&encoded).unwrap();
+    assert_eq!(decoded.ticket, b"login");
+    assert_eq!(decoded.resume_ticket, Some(resume.as_slice()));
+    let mut truncated = encoded.clone();
+    truncated.pop();
+    assert!(decode(&truncated).is_err());
+    assert_eq!(
+        decode(&encode(protocol, b"login", 1024).unwrap())
+            .unwrap()
+            .resume_ticket,
+        None
     );
 }

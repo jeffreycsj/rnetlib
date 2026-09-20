@@ -134,7 +134,7 @@ pub enum EventType {
     GameControl = 12,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Event {
     pub event_type: EventType,
     pub endpoint: Handle,
@@ -146,6 +146,23 @@ pub struct Event {
     pub data: Vec<u8>,
     #[doc(hidden)]
     pub queued_at: Instant,
+}
+
+impl std::fmt::Debug for Event {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Event")
+            .field("event_type", &self.event_type)
+            .field("endpoint", &self.endpoint)
+            .field("session", &self.session)
+            .field("msg_type", &self.msg_type)
+            .field("stream_id", &self.stream_id)
+            .field("request_id", &self.request_id)
+            .field("status", &self.status)
+            .field("data_len", &self.data.len())
+            .field("queued_at", &self.queued_at)
+            .finish()
+    }
 }
 
 impl Event {

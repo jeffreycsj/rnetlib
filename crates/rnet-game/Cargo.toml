@@ -16,3 +16,4 @@ rnet-observe = { version = "0.1.0", path = "../rnet-observe" }
 rnet-protocol = { version = "0.1.0", path = "../rnet-protocol" }
 rnet-security = { version = "0.1.0", path = "../rnet-security" }
 rnet-transport = { version = "0.1.0", path = "../rnet-transport" }
+zeroize.workspace = true

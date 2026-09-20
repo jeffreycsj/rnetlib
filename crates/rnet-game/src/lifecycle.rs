@@ -7,6 +7,7 @@ use std::time::Duration;
 impl GameRuntime {
     /// Closes one game session while leaving its listener and other players active.
     pub fn close_session(&self, session: Handle) -> Result<()> {
+        self.revoke_resume_session(session);
         self.network.close_session(session, ErrorCode::Cancelled)?;
         self.forget_ready_session(session);
         Ok(())
@@ -39,6 +40,13 @@ impl GameRuntime {
             .lock()
             .expect("game session table poisoned")
             .clear();
+        let mut resume = self.resume.lock().expect("resume state poisoned");
+        resume.tickets.clear();
+        resume.server_sessions.clear();
+        resume.pending_server.clear();
+        resume.inflight_server.clear();
+        resume.revoked_inflight.clear();
+        resume.client_endpoints.clear();
         Ok(())
     }
 }

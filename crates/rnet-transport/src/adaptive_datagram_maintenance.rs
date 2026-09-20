@@ -26,6 +26,11 @@ pub(crate) fn cleanup_peer(
     session: Handle,
 ) {
     if let Some(current) = peers.get(&peer) {
+        if matches!(current, Peer::ServerReject { .. }) {
+            // The session is gone, but UDP/KCP still owns a bounded terminal control response.
+            // Dropping it here would turn an explicit rejection into a client-side timeout.
+            return;
+        }
         if current.session() != Some(session) {
             return;
         }
@@ -56,6 +61,10 @@ pub(crate) async fn drive_server(
         };
         let state = match state {
             Peer::Cookie { expires_at } if Instant::now() >= expires_at => {
+                wire.remove_peer(peer);
+                continue;
+            }
+            Peer::ServerReject { expires_at } if Instant::now() >= expires_at => {
                 wire.remove_peer(peer);
                 continue;
             }
@@ -152,7 +161,9 @@ pub(crate) async fn drive_server(
                             session,
                             ErrorCode::AuthRejected,
                         );
-                        continue;
+                        Peer::ServerReject {
+                            expires_at: Instant::now() + shared.config.handshake_timeout,
+                        }
                     }
                 }
                 _ => Peer::ServerAuth {
@@ -295,5 +306,28 @@ mod tests {
         assert!(peers.is_empty());
         assert!(deferred.is_empty());
         assert_eq!(deferred_count, 0);
+    }
+
+    #[test]
+    fn cleanup_does_not_drop_a_rejection_waiting_for_control_retransmission() {
+        let peer = SocketAddr::from(([127, 0, 0, 1], 7011));
+        let mut peers = HashMap::from([(
+            peer,
+            Peer::ServerReject {
+                expires_at: Instant::now() + std::time::Duration::from_secs(1),
+            },
+        )]);
+        let mut deferred = HashMap::new();
+        let mut deferred_count = 0;
+        let mut wire = DatagramWire::new(Transport::Kcp, 1200, 1024);
+        cleanup_peer(
+            &mut peers,
+            &mut deferred,
+            &mut deferred_count,
+            &mut wire,
+            peer,
+            42,
+        );
+        assert!(matches!(peers.get(&peer), Some(Peer::ServerReject { .. })));
     }
 }

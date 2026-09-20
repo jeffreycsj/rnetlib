@@ -14,13 +14,18 @@ mod quality;
 mod quality_runtime;
 mod realtime;
 mod realtime_runtime;
+mod resume;
+mod resume_runtime;
 mod runtime;
 
 pub use config::{
     GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
 };
-pub use event::{GameEvent, GameMessage, NetworkQuality, QualityBasis, QualityGrade};
-pub use observe::HeartbeatMetricsSnapshot;
+pub use event::{
+    GameEvent, GameMessage, NetworkQuality, QualityBasis, QualityGrade, ResumeTicket,
+    SensitiveBytes,
+};
+pub use observe::{HeartbeatMetricsSnapshot, ResumeMetricsSnapshot};
 pub use quality::{QualityPolicy, UdpLossSnapshot};
 pub use realtime::{RealtimeQueueConfig, RealtimeQueueSnapshot};
 pub use rnet_transport::KcpRetransmissionSnapshot;
@@ -36,3 +41,5 @@ mod join_tests;
 mod quality_tests;
 #[cfg(test)]
 mod realtime_tests;
+#[cfg(test)]
+mod resume_tests;

@@ -49,6 +49,10 @@ pub struct GameRuntimeConfig {
     pub quality_policy: QualityPolicy,
     /// Independent bounded staging budget for coalesced realtime state messages.
     pub realtime_queue: RealtimeQueueConfig,
+    /// Lifetime of a one-use, client-key-bound resume credential.
+    pub resume_ticket_ttl: Duration,
+    /// Maximum outstanding credentials in this runtime; state is not shared across processes.
+    pub max_resume_tickets: usize,
 }
 
 impl GameRuntimeConfig {
@@ -60,6 +64,8 @@ impl GameRuntimeConfig {
             heartbeat_timeout: Duration::from_secs(15),
             quality_policy: QualityPolicy::default(),
             realtime_queue: RealtimeQueueConfig::default(),
+            resume_ticket_ttl: Duration::from_secs(30),
+            max_resume_tickets: 65_536,
         }
     }
 
@@ -77,6 +83,12 @@ impl GameRuntimeConfig {
 
     pub fn with_realtime_queue(mut self, queue: RealtimeQueueConfig) -> Self {
         self.realtime_queue = queue;
+        self
+    }
+
+    pub fn with_resume(mut self, ttl: Duration, max_tickets: usize) -> Self {
+        self.resume_ticket_ttl = ttl;
+        self.max_resume_tickets = max_tickets;
         self
     }
 
@@ -98,6 +110,8 @@ impl GameRuntimeConfig {
             heartbeat_timeout: Duration::from_secs(15),
             quality_policy: QualityPolicy::default(),
             realtime_queue: RealtimeQueueConfig::default(),
+            resume_ticket_ttl: Duration::from_secs(30),
+            max_resume_tickets: 65_536,
         }
     }
 }
@@ -121,7 +135,7 @@ pub struct GameServerConfig {
 }
 
 /// Client join configuration; encryption is intentionally controlled by the server.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GameClientConfig {
     pub transport: Transport,
     pub bind_addr: Option<SocketAddr>,
@@ -131,12 +145,38 @@ pub struct GameClientConfig {
     pub protocol: GameProtocol,
 }
 
+impl std::fmt::Debug for GameClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GameClientConfig")
+            .field("transport", &self.transport)
+            .field("bind_addr", &self.bind_addr)
+            .field("remote_addr", &self.remote_addr)
+            .field("join_ticket_len", &self.join_ticket.len())
+            .field("protocol", &self.protocol)
+            .finish()
+    }
+}
+
 /// Domain-name client join; resolution and cross-address-family retries use the transport layer.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GameHostClientConfig {
     pub transport: Transport,
     pub host: String,
     pub port: u16,
     pub join_ticket: Vec<u8>,
     pub protocol: GameProtocol,
+}
+
+impl std::fmt::Debug for GameHostClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GameHostClientConfig")
+            .field("transport", &self.transport)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("join_ticket_len", &self.join_ticket.len())
+            .field("protocol", &self.protocol)
+            .finish()
+    }
 }

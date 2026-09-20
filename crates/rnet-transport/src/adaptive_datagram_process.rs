@@ -40,6 +40,9 @@ pub(crate) async fn process(
 ) -> Result<()> {
     let previous = peers.remove(&peer);
     let next = match (security, previous, record.kind) {
+        (EndpointSecurity::AdaptiveServer { .. }, Some(state @ Peer::ServerReject { .. }), _) => {
+            Some(state)
+        }
         (EndpointSecurity::AdaptiveServer { .. }, previous, RecordKind::ClientHello)
             if record.payload.len() != COOKIE_LEN || !cookie.validate(peer, &record.payload) =>
         {

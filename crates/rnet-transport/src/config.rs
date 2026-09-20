@@ -239,7 +239,7 @@ pub struct ServerConfig {
 ///
 /// Security is deliberately absent: the client follows the server's authenticated policy. The
 /// runtime-level [`ClientSecurity`] supplies client identity and server trust verification.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ClientConfig {
     /// TCP, UDP, or KCP; must match the server listener.
     pub transport: Transport,
@@ -251,8 +251,20 @@ pub struct ClientConfig {
     pub join_payload: Vec<u8>,
 }
 
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClientConfig")
+            .field("transport", &self.transport)
+            .field("bind_addr", &self.bind_addr)
+            .field("remote_addr", &self.remote_addr)
+            .field("join_payload_len", &self.join_payload.len())
+            .finish()
+    }
+}
+
 /// Client configuration for a DNS host name or textual IP address.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HostClientConfig {
     pub transport: Transport,
     pub host: String,
@@ -260,12 +272,35 @@ pub struct HostClientConfig {
     pub join_payload: Vec<u8>,
 }
 
+impl std::fmt::Debug for HostClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HostClientConfig")
+            .field("transport", &self.transport)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("join_payload_len", &self.join_payload.len())
+            .finish()
+    }
+}
+
 /// Client configuration with caller-resolved candidates in retry order.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ResolvedClientConfig {
     pub transport: Transport,
     pub remote_addrs: Vec<SocketAddr>,
     pub join_payload: Vec<u8>,
+}
+
+impl std::fmt::Debug for ResolvedClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolvedClientConfig")
+            .field("transport", &self.transport)
+            .field("remote_addrs", &self.remote_addrs)
+            .field("join_payload_len", &self.join_payload.len())
+            .finish()
+    }
 }
 
 impl From<ServerConfig> for EndpointConfig {
@@ -290,7 +325,7 @@ impl From<ClientConfig> for EndpointConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum EndpointSecurity {
     Server {
         local_key: Keypair,
@@ -307,6 +342,39 @@ pub enum EndpointSecurity {
     AdaptiveClient {
         join_payload: Vec<u8>,
     },
+}
+
+impl std::fmt::Debug for EndpointSecurity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Server { local_key } => formatter
+                .debug_struct("Server")
+                .field("local_key", local_key)
+                .finish(),
+            Self::Client {
+                local_key,
+                expected_server_public,
+                join_payload,
+            } => formatter
+                .debug_struct("Client")
+                .field("local_key", local_key)
+                .field("expected_server_public", expected_server_public)
+                .field("join_payload_len", &join_payload.len())
+                .finish(),
+            Self::AdaptiveServer {
+                local_key,
+                initial_mode,
+            } => formatter
+                .debug_struct("AdaptiveServer")
+                .field("local_key", local_key)
+                .field("initial_mode", initial_mode)
+                .finish(),
+            Self::AdaptiveClient { join_payload } => formatter
+                .debug_struct("AdaptiveClient")
+                .field("join_payload_len", &join_payload.len())
+                .finish(),
+        }
+    }
 }
 
 impl EndpointConfig {

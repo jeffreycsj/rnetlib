@@ -420,6 +420,7 @@ dependencies = [
  "rnet-protocol",
  "rnet-security",
  "rnet-transport",
+ "zeroize",
 ]
 
 [[package]]

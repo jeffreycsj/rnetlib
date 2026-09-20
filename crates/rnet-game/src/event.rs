@@ -5,6 +5,84 @@ use bytes::Bytes;
 use rnet_core::{ErrorCode, Handle};
 use rnet_transport::{KcpRetransmissionSnapshot, SecurityOperation};
 use std::time::Duration;
+use zeroize::Zeroize;
+
+/// Sensitive application bytes exposed to authorization callbacks. Debug output is redacted,
+/// and the owned copy is erased when the event is dropped.
+#[derive(Clone, Eq, PartialEq)]
+pub struct SensitiveBytes(Vec<u8>);
+
+impl SensitiveBytes {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Vec<u8>> for SensitiveBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl std::fmt::Debug for SensitiveBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SensitiveBytes(<redacted>)")
+    }
+}
+
+impl Drop for SensitiveBytes {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl std::ops::Deref for SensitiveBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_bytes()
+    }
+}
+
+impl<const N: usize> PartialEq<&[u8; N]> for SensitiveBytes {
+    fn eq(&self, other: &&[u8; N]) -> bool {
+        self.0.as_slice() == other.as_slice()
+    }
+}
+
+/// Bearer credential delivered only over authenticated game control. Debug output is redacted.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ResumeTicket(Vec<u8>);
+
+impl ResumeTicket {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub(crate) fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl std::fmt::Debug for ResumeTicket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ResumeTicket(<redacted>)")
+    }
+}
+
+impl Drop for ResumeTicket {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl std::ops::Deref for ResumeTicket {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_bytes()
+    }
+}
 
 /// Last authenticated heartbeat sample for one established game session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,8 +143,19 @@ pub enum GameEvent {
         endpoint: Handle,
         session: Handle,
         client_public_key: [u8; 32],
-        join_ticket: Vec<u8>,
+        join_ticket: SensitiveBytes,
         /// Authenticated build metadata; application policy may reject it.
+        build_id: u64,
+        capabilities: u64,
+    },
+    /// A valid one-time claim still requires the game server to call `auth_decide`.
+    ResumeRequest {
+        endpoint: Handle,
+        session: Handle,
+        old_session: Handle,
+        identity: SensitiveBytes,
+        client_public_key: [u8; 32],
+        join_ticket: SensitiveBytes,
         build_id: u64,
         capabilities: u64,
     },
@@ -79,6 +168,18 @@ pub enum GameEvent {
     SessionReady {
         endpoint: Handle,
         session: Handle,
+    },
+    /// The new session is ready; the old network handle is invalid on this runtime.
+    SessionResumed {
+        endpoint: Handle,
+        old_session: Handle,
+        new_session: Handle,
+    },
+    /// A short-lived credential; applications may persist it but must never log it.
+    ResumeTicket {
+        endpoint: Handle,
+        session: Handle,
+        ticket: ResumeTicket,
     },
     SessionClosed {
         endpoint: Handle,

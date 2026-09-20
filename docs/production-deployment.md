@@ -19,6 +19,7 @@ CI additionally runs RustSec, cargo-deny, six libFuzzer smoke campaigns, and an 
 - Keep plaintext business data and legacy unauthenticated endpoints disabled unless a reviewed compatibility exception requires them.
 - Continuously poll every game runtime. Heartbeat scheduling and authenticated reply handling are poll-driven; a stalled game event loop cannot make progress on liveness or per-session quality.
 - `send_latest` is a best-effort pre-transport coalescing path for replaceable snapshots. Poll continuously or explicitly call `flush_realtime`; monitor admission rejection, replacement, close/backpressure drops, send failures, and queued bytes. Keep commands that require reliable delivery on ordinary `send`.
+- Resume tickets are single-runtime and one-use; a server restart or a different instance cannot recover the identity. Keep the same client Noise static key, reauthorize every `ResumeRequest`, monitor `rnet_game_resume_*`, and revoke tickets on an application kick. Do not advertise rolling-restart recovery until a shared atomic ticket store is implemented and tested.
 - Persist private keys in an external keystore, pin or verify the server public key, and rotate identities according to the application's incident policy. Never log key, cookie, ticket, or payload bytes.
 - Size event and send byte budgets from a process RSS limit. Alert before gauges remain above 80% of their configured limits.
 - Size KCP unacknowledged-data budgets for the loss envelope. Application queue bytes and KCP retransmission bytes are independently bounded layers, so include both when deriving the process RSS limit; reserved control capacity prevents data saturation from blocking protocol progress.
@@ -61,7 +62,8 @@ not a substitute for a distributed target-environment capacity test. An exit sta
 the probe completed without an unexpected session failure; apply deployment-specific SLOs to the
 report before accepting a release. Reports mark whether the source tree was dirty; a commit ID from
 a dirty run does not identify the exact tested source. The script refuses to start below 15 GiB
-`MemAvailable`.
+`MemAvailable`. The `game_soak` cargo smoke test treats only that exact resource-guard refusal as
+an explicit skip on smaller CI runners; a green test run with this skip is **not** soak evidence.
 
 Repeat with production-sized connection counts and the application consumer. Add a `tc netem` matrix covering expected and failure-envelope RTT, jitter, loss, duplication, and reordering. A release passes only if its documented SLO is met, RSS reaches a stable plateau, queues recover after bursts, no close reason is unexplained, and no peer starves another. Archive the raw report with kernel, CPU, memory, toolchain, commit/package hash, and configuration.
 

@@ -23,6 +23,42 @@ pub struct HeartbeatMetricsSnapshot {
     pub rtt: LatencySnapshot,
 }
 
+/// Low-cardinality, cumulative resume telemetry. No ticket or player identifier is exported.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ResumeMetricsSnapshot {
+    pub tickets_issued: u64,
+    pub requests_received: u64,
+    pub tickets_rejected: u64,
+    pub authorization_denied: u64,
+    pub pending_revoked: u64,
+    pub sessions_resumed: u64,
+    pub outstanding_tickets: usize,
+}
+
+#[derive(Default)]
+pub(crate) struct ResumeMetrics {
+    pub(crate) tickets_issued: AtomicU64,
+    pub(crate) requests_received: AtomicU64,
+    pub(crate) tickets_rejected: AtomicU64,
+    pub(crate) authorization_denied: AtomicU64,
+    pub(crate) pending_revoked: AtomicU64,
+    pub(crate) sessions_resumed: AtomicU64,
+}
+
+impl ResumeMetrics {
+    fn snapshot(&self, outstanding_tickets: usize) -> ResumeMetricsSnapshot {
+        ResumeMetricsSnapshot {
+            tickets_issued: self.tickets_issued.load(Ordering::Relaxed),
+            requests_received: self.requests_received.load(Ordering::Relaxed),
+            tickets_rejected: self.tickets_rejected.load(Ordering::Relaxed),
+            authorization_denied: self.authorization_denied.load(Ordering::Relaxed),
+            pending_revoked: self.pending_revoked.load(Ordering::Relaxed),
+            sessions_resumed: self.sessions_resumed.load(Ordering::Relaxed),
+            outstanding_tickets,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct HeartbeatMetrics {
     pub(crate) probes_sent: AtomicU64,
@@ -60,6 +96,16 @@ impl HeartbeatMetrics {
 }
 
 impl GameRuntime {
+    pub fn resume_metrics_snapshot(&self) -> ResumeMetricsSnapshot {
+        let outstanding = self
+            .resume
+            .lock()
+            .expect("resume state poisoned")
+            .tickets
+            .outstanding();
+        self.resume_metrics.snapshot(outstanding)
+    }
+
     /// Returns cumulative heartbeat counters and RTT percentiles across this runtime's sessions.
     pub fn heartbeat_metrics_snapshot(&self) -> HeartbeatMetricsSnapshot {
         self.heartbeat_metrics.snapshot()
@@ -160,6 +206,40 @@ impl GameRuntime {
         ] {
             let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
         }
+        let resume = self.resume_metrics_snapshot();
+        for (name, value) in [
+            (
+                "rnet_game_resume_tickets_issued_total",
+                resume.tickets_issued,
+            ),
+            (
+                "rnet_game_resume_requests_received_total",
+                resume.requests_received,
+            ),
+            (
+                "rnet_game_resume_tickets_rejected_total",
+                resume.tickets_rejected,
+            ),
+            (
+                "rnet_game_resume_authorization_denied_total",
+                resume.authorization_denied,
+            ),
+            (
+                "rnet_game_resume_pending_revoked_total",
+                resume.pending_revoked,
+            ),
+            (
+                "rnet_game_resume_sessions_resumed_total",
+                resume.sessions_resumed,
+            ),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
+        }
+        let _ = writeln!(
+            output,
+            "# TYPE rnet_game_resume_outstanding_tickets gauge\nrnet_game_resume_outstanding_tickets {}",
+            resume.outstanding_tickets
+        );
         output
     }
 

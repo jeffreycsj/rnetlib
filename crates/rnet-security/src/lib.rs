@@ -28,10 +28,20 @@ impl From<snow::Error> for SecurityError {
 
 pub type Result<T> = std::result::Result<T, SecurityError>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Eq, PartialEq, Zeroize, ZeroizeOnDrop)]
 pub struct Keypair {
     pub private: Vec<u8>,
     pub public: Vec<u8>,
+}
+
+impl std::fmt::Debug for Keypair {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Keypair")
+            .field("private", &"<redacted>")
+            .field("public", &self.public)
+            .finish()
+    }
 }
 
 impl Keypair {
