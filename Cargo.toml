@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "crates/rnet-core",
+    "crates/rnet-protocol",
+    "crates/rnet-security",
+    "crates/rnet-transport",
+    "crates/rnet-observe",
+    "crates/rnet-ffi",
+    "crates/rnet-game",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+bytes = "1.10.1"
+curve25519-dalek = "4.1.3"
+kcp = "=0.6.0"
+prost = "0.14.1"
+ring = "=0.17.14"
+socket2 = "0.6.5"
+snow = "=0.10.0"
+thiserror = "2.0.16"
+tokio = { version = "1.47.1", features = ["macros", "net", "rt-multi-thread", "sync", "time", "io-util"] }
+zeroize = { version = "1.8.1", features = ["zeroize_derive"] }

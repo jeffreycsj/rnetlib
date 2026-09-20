@@ -1,0 +1,18 @@
+/target/
+/dist/
+/fuzz/artifacts/
+/fuzz/corpus/
+/lib/
+
+# Local build, test, coverage, and profiling artifacts.
+*.test
+*.profraw
+*.profdata
+coverage.out
+
+# Editor and operating-system files.
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store

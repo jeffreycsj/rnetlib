@@ -1,0 +1,61 @@
+[package]
+name = "rnet-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+bytes = "1.10.1"
+libfuzzer-sys = "0.4"
+rnet-protocol = { path = "../crates/rnet-protocol" }
+rnet = { package = "rnet-ffi", path = "../crates/rnet-ffi" }
+rnet-transport = { path = "../crates/rnet-transport", features = ["fuzzing"] }
+rnet-game = { path = "../crates/rnet-game", features = ["fuzzing"] }
+
+[[bin]]
+name = "frame_parser"
+path = "fuzz_targets/frame_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control_parser"
+path = "fuzz_targets/control_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "datagram_preflight"
+path = "fuzz_targets/datagram_preflight.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kcp_engine"
+path = "fuzz_targets/kcp_engine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ffi_config"
+path = "fuzz_targets/ffi_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "game_wire"
+path = "fuzz_targets/game_wire.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

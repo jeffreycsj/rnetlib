@@ -1,0 +1,11 @@
+[package]
+name = "rnet-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes.workspace = true
+prost.workspace = true
+rnet-core = { version = "0.1.0", path = "../rnet-core" }
