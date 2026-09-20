@@ -65,12 +65,6 @@ pub unsafe extern "C" fn rnet_metrics_snapshot(runtime: u64, out: *mut RnetMetri
             events_dropped,
             send_would_block,
             protocol_errors,
-            lifecycle_events_rejected: _,
-            queued_send_bytes: _,
-            peak_queued_send_bytes: _,
-            queued_event_bytes: _,
-            admission_rejected: _,
-            session_closed_by_reason: _,
             ..
         } = entry.network.metrics_snapshot();
         let logger = entry.logger.lock().expect("logger lock poisoned");
