@@ -93,6 +93,23 @@ fn heartbeat_quality_uses_protected_controls_even_when_business_data_is_plaintex
         assert!(quality.samples >= 1);
         assert!(quality.last_rtt < Duration::from_millis(500));
         assert!(runtime.network_quality(client_session).is_ok());
+        let heartbeat = runtime.heartbeat_metrics_snapshot();
+        assert!(heartbeat.probes_sent >= 1);
+        assert!(heartbeat.replies_sent >= 1);
+        assert!(heartbeat.replies_matched >= 1);
+        assert!(heartbeat.rtt.sample_count >= 1);
+        assert!(heartbeat.rtt.p95_us <= heartbeat.rtt.max_us);
+        let interval = runtime.drain_heartbeat_rtt_window();
+        assert!(interval.sample_count >= 1);
+        assert_eq!(runtime.drain_heartbeat_rtt_window().sample_count, 0);
+        assert_eq!(
+            runtime.heartbeat_metrics_snapshot().rtt.sample_count,
+            heartbeat.rtt.sample_count,
+            "draining a monitoring window must not erase cumulative RTT history"
+        );
+        let prometheus = runtime.prometheus_snapshot();
+        assert!(prometheus.contains("rnet_game_heartbeat_replies_matched_total "));
+        assert!(prometheus.contains("rnet_game_heartbeat_rtt_us{quantile=\"0.99\"}"));
         runtime
             .set_encryption(server_session, true)
             .expect("enable business encryption while heartbeats continue");
@@ -164,6 +181,11 @@ fn absent_heartbeat_ack_closes_only_the_unresponsive_session() {
         |event| matches!(event, GameEvent::SessionClosed { session: closed, reason: rnet_core::ErrorCode::Timeout, .. } if *closed == session),
     );
     assert!(matches!(closed, GameEvent::SessionClosed { .. }));
+    let heartbeat = server.heartbeat_metrics_snapshot();
+    assert!(heartbeat.probes_sent >= 1);
+    assert_eq!(heartbeat.replies_matched, 0);
+    assert_eq!(heartbeat.timeouts, 1);
+    assert_eq!(heartbeat.rtt.sample_count, 0);
     assert_eq!(
         server
             .network_quality(session)

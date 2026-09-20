@@ -7,6 +7,7 @@ use crate::envelope::{decode, encode_application, DecodedEnvelope};
 use crate::event::{GameEvent, GameMessage};
 use crate::heartbeat::HeartbeatTracker;
 use crate::join;
+use crate::observe::HeartbeatMetrics;
 use rnet_core::{ErrorCode, Event, EventType, Handle, Result, RnetError, Transport};
 use rnet_protocol::control::SecurityMode;
 use rnet_transport::{
@@ -33,6 +34,7 @@ pub struct GameRuntime {
     pub(crate) heartbeat_interval: Duration,
     pub(crate) heartbeat_timeout: Duration,
     pub(crate) heartbeat_trackers: Mutex<HashMap<Handle, HeartbeatTracker>>,
+    pub(crate) heartbeat_metrics: HeartbeatMetrics,
     poll_guard: Mutex<()>,
 }
 
@@ -71,6 +73,7 @@ impl GameRuntime {
             heartbeat_interval: config.heartbeat_interval,
             heartbeat_timeout: config.heartbeat_timeout,
             heartbeat_trackers: Mutex::new(HashMap::new()),
+            heartbeat_metrics: HeartbeatMetrics::default(),
             poll_guard: Mutex::new(()),
         })
     }
@@ -470,6 +473,35 @@ mod tests {
                 .expect("stale control is ignored"),
             None
         );
+        assert_eq!(
+            runtime.heartbeat_metrics_snapshot().probes_rate_limited,
+            0,
+            "closed sessions must not be mistaken for rate-limited live sessions"
+        );
+    }
+
+    #[test]
+    fn unmatched_heartbeat_ack_does_not_enter_latency_distribution() {
+        let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
+        runtime.track_session(42);
+        let mut event = Event::simple(EventType::GameControl);
+        event.session = 42;
+        event.data = crate::heartbeat::encode_heartbeat(
+            crate::heartbeat::HeartbeatPacket {
+                kind: crate::heartbeat::HeartbeatKind::Ack,
+                challenge: 7,
+            },
+            1024,
+        )
+        .expect("heartbeat")
+        .to_vec();
+
+        assert_eq!(runtime.convert_event(event).expect("ack ignored"), None);
+        let metrics = runtime.heartbeat_metrics_snapshot();
+        assert_eq!(metrics.replies_rejected, 1);
+        assert_eq!(metrics.replies_matched, 0);
+        assert_eq!(metrics.rtt.sample_count, 0);
+        assert_eq!(runtime.drain_heartbeat_rtt_window().sample_count, 0);
     }
 
     #[test]

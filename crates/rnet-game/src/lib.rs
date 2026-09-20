@@ -16,6 +16,7 @@ pub use config::{
     GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
 };
 pub use event::{GameEvent, GameMessage, NetworkQuality};
+pub use observe::HeartbeatMetricsSnapshot;
 pub use runtime::{GameRuntime, GameSendOptions};
 
 #[cfg(test)]

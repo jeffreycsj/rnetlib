@@ -29,6 +29,8 @@ CI additionally runs RustSec, cargo-deny, six libFuzzer smoke campaigns, and an 
 
 Export `metrics_snapshot_v3` and rotate latency windows at the monitoring interval. At minimum alert on event drops, lifecycle rejection, admission rejection by reason, endpoint/session/pending-handshake gauges, protocol errors, close reason, send backpressure, queued bytes, KCP update delay, and P99/P99.9. Use logger v2 to retain the timestamp, event name, runtime, endpoint, session, transport, error code, and correlation ID needed to join an incident timeline.
 
+For Rust game deployments, also scrape `GameRuntime::prometheus_snapshot()` or sample `heartbeat_metrics_snapshot()`. Track heartbeat timeouts, rejected replies, probe/reply send failures, and RTT P95/P99 together; the percentile values are zero until `rtt_samples_total` is nonzero. For incident-sensitive RTT percentiles, call `drain_heartbeat_rtt_window()` at each monitoring interval; it does not reset cumulative data. These are runtime-wide aggregates, not per-player labels. The per-session `network_quality(session)` snapshot is intended for targeted diagnosis and is removed when the session closes.
+
 Runtime/session/endpoint failure log records are emitted when the corresponding event is polled. Production consumers must continuously drain events; an application that stops polling also stops advancing these event-derived log records and applies backpressure to the bounded event queue.
 
 ## Capacity and soak

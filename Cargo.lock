@@ -416,6 +416,7 @@ dependencies = [
  "bytes",
  "ring",
  "rnet-core",
+ "rnet-observe",
  "rnet-protocol",
  "rnet-security",
  "rnet-transport",

@@ -9,6 +9,7 @@ use crate::heartbeat::{
 use crate::runtime::GameRuntime;
 use ring::rand::{SecureRandom, SystemRandom};
 use rnet_core::{ErrorCode, Event, Handle, Result, RnetError};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 impl GameRuntime {
@@ -56,17 +57,6 @@ impl GameRuntime {
             ));
         };
         let packet = decode_heartbeat(&payload)?;
-        if !self
-            .heartbeat_trackers
-            .lock()
-            .expect("heartbeat table poisoned")
-            .contains_key(&event.session)
-        {
-            // A locally closed session can still have an authenticated control already queued.
-            // Transport accepts these controls only for established sessions, so no tracker now
-            // means the game session has since left the ready state.
-            return Ok(None);
-        }
         match packet.kind {
             HeartbeatKind::Probe => {
                 let admitted = self
@@ -74,9 +64,17 @@ impl GameRuntime {
                     .lock()
                     .expect("heartbeat table poisoned")
                     .get_mut(&event.session)
-                    .is_some_and(|tracker| tracker.admit_probe(event.queued_at));
-                if !admitted {
-                    return Ok(None);
+                    .map(|tracker| tracker.admit_probe(event.queued_at));
+                match admitted {
+                    Some(true) => {}
+                    Some(false) => {
+                        self.heartbeat_metrics
+                            .probes_rate_limited
+                            .fetch_add(1, Ordering::Relaxed);
+                        return Ok(None);
+                    }
+                    // A locally closed session may still have an authenticated control queued.
+                    None => return Ok(None),
                 }
                 let ack = encode_heartbeat(
                     HeartbeatPacket {
@@ -87,7 +85,15 @@ impl GameRuntime {
                 )?;
                 // A full bounded queue may drop this reply; the probing peer will time out.
                 // Transport send failures are not malformed peer input.
-                let _ = self.network.send_game_control(event.session, &ack);
+                if self.network.send_game_control(event.session, &ack).is_ok() {
+                    self.heartbeat_metrics
+                        .replies_sent
+                        .fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.heartbeat_metrics
+                        .reply_send_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                }
             }
             HeartbeatKind::Ack => {
                 let mut trackers = self
@@ -95,7 +101,15 @@ impl GameRuntime {
                     .lock()
                     .expect("heartbeat table poisoned");
                 if let Some(tracker) = trackers.get_mut(&event.session) {
-                    tracker.accept_ack(packet.challenge, event.queued_at, Instant::now());
+                    if let Some(sample) =
+                        tracker.accept_ack(packet.challenge, event.queued_at, Instant::now())
+                    {
+                        self.heartbeat_metrics.record_matched_rtt(sample.last_rtt);
+                    } else {
+                        self.heartbeat_metrics
+                            .replies_rejected
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
         }
@@ -118,6 +132,9 @@ impl GameRuntime {
                 .checked_sub(std::time::Duration::from_millis(50))
                 .is_some_and(|earlier| tracker.timed_out(earlier))
             {
+                self.heartbeat_metrics
+                    .timeouts
+                    .fetch_add(1, Ordering::Relaxed);
                 close.push((session, ErrorCode::Timeout));
                 continue;
             }
@@ -145,6 +162,13 @@ impl GameRuntime {
             };
             if self.network.send_game_control(session, &encoded).is_ok() {
                 let _ = tracker.mark_sent(challenge, now);
+                self.heartbeat_metrics
+                    .probes_sent
+                    .fetch_add(1, Ordering::Relaxed);
+            } else {
+                self.heartbeat_metrics
+                    .probe_send_failures
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
         drop(trackers);
