@@ -1,8 +1,10 @@
 use super::{DatagramWire, RustKcpEngine, KCP_CONV, RETRY_INTERVAL};
 use crate::kcp::KcpEngine;
+use crate::kcp::KcpTelemetryRegistry;
 use rnet_core::Transport;
 use rnet_protocol::control::{Record, RecordKind};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 
@@ -104,6 +106,32 @@ async fn kcp_wire_enforces_the_runtime_unacknowledged_byte_budget() {
 
     assert_eq!(error.code(), rnet_core::ErrorCode::WouldBlock);
     assert!(wire.kcp_queued_bytes <= wire.max_runtime_queued_bytes);
+}
+
+#[tokio::test]
+async fn kcp_telemetry_is_removed_with_peer_and_endpoint() {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let first = SocketAddr::from(([127, 0, 0, 1], 7010));
+    let second = SocketAddr::from(([127, 0, 0, 1], 7011));
+    let telemetry = Arc::new(KcpTelemetryRegistry::default());
+    let mut wire = DatagramWire::new(Transport::Kcp, 1200, TEST_MAX_PEERS)
+        .with_telemetry(42, Arc::clone(&telemetry));
+    for peer in [first, second] {
+        wire.authorize_peer(peer).unwrap();
+        wire.send(
+            &socket,
+            peer,
+            &Record::new(RecordKind::Handshake, 0, b"data"),
+            1200,
+        )
+        .await
+        .unwrap();
+        assert!(telemetry.snapshot(42, peer).is_some());
+    }
+    wire.remove_peer(first);
+    assert!(telemetry.snapshot(42, first).is_none());
+    drop(wire);
+    assert!(telemetry.snapshot(42, second).is_none());
 }
 
 #[test]

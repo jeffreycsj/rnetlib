@@ -11,6 +11,7 @@ fn authenticated_join_metadata_round_trips_without_exposing_ticket_prefix() {
         capabilities: 0b101,
     };
     let encoded = encode(protocol, b"opaque-ticket", 1024).expect("encode join");
+    assert_eq!(&encoded[..4], b"RGJ2", "wire v2 joins must not mix with v1");
     let decoded = decode(&encoded).expect("decode join");
     assert_eq!(decoded.protocol, protocol);
     assert_eq!(decoded.ticket, b"opaque-ticket");
@@ -27,6 +28,9 @@ fn malformed_join_lengths_and_magic_are_rejected() {
     let mut wrong_magic = encoded.clone();
     wrong_magic[0] ^= 1;
     invalid_cases.push(wrong_magic);
+    let mut old_version = encoded.clone();
+    old_version[..4].copy_from_slice(b"RGJ1");
+    invalid_cases.push(old_version);
     let mut trailing = encoded.clone();
     trailing.push(0);
     invalid_cases.push(trailing);

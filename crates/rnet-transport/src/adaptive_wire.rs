@@ -1,6 +1,6 @@
 //! UDP control retransmission and KCP record transport for adaptive sessions.
 
-use crate::kcp::{KcpEngine, RustKcpEngine};
+use crate::kcp::{KcpEngine, KcpTelemetryRegistry, RustKcpEngine};
 use crate::metrics::LatencyKind;
 use crate::state::Shared;
 use bytes::BytesMut;
@@ -10,6 +10,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
@@ -40,6 +41,7 @@ pub(crate) struct DatagramWire {
     active_pending: Option<(SocketAddr, Vec<u8>)>,
     scratch_peers: Vec<SocketAddr>,
     output_packets: Vec<(SocketAddr, Vec<u8>)>,
+    telemetry: Option<(u64, Arc<KcpTelemetryRegistry>)>,
 }
 
 struct PendingRecord {
@@ -84,13 +86,26 @@ impl DatagramWire {
             active_pending: None,
             scratch_peers: Vec::new(),
             output_packets: Vec::new(),
+            telemetry: None,
         }
+    }
+
+    pub(crate) fn with_telemetry(
+        mut self,
+        endpoint: u64,
+        registry: Arc<KcpTelemetryRegistry>,
+    ) -> Self {
+        self.telemetry = Some((endpoint, registry));
+        self
     }
 
     /// Releases all transport state owned by one remote address.
     pub(crate) fn remove_peer(&mut self, peer: SocketAddr) {
         if let Some(engine) = self.engines.remove(&peer) {
             self.kcp_queued_bytes = self.kcp_queued_bytes.saturating_sub(engine.queued_bytes());
+        }
+        if let Some((endpoint, registry)) = &self.telemetry {
+            registry.remove(*endpoint, peer);
         }
         self.authorized_peers.remove(&peer);
         self.scheduled_updates.remove(&peer);
@@ -170,6 +185,9 @@ impl DatagramWire {
                     )?;
                     engine.input(packet, now)?;
                     created = true;
+                    if let Some((endpoint, registry)) = &self.telemetry {
+                        registry.insert_engine(*endpoint, peer, &engine);
+                    }
                     entry.insert(engine)
                 }
             };
@@ -438,9 +456,17 @@ impl DatagramWire {
         }
         match self.engines.entry(peer) {
             std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
-            std::collections::hash_map::Entry::Vacant(entry) => Ok(entry.insert(
-                RustKcpEngine::new_with_limits(KCP_CONV, self.mtu, self.max_session_queued_bytes)?,
-            )),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let engine = RustKcpEngine::new_with_limits(
+                    KCP_CONV,
+                    self.mtu,
+                    self.max_session_queued_bytes,
+                )?;
+                if let Some((endpoint, registry)) = &self.telemetry {
+                    registry.insert_engine(*endpoint, peer, &engine);
+                }
+                Ok(entry.insert(engine))
+            }
         }
     }
 
@@ -492,6 +518,16 @@ impl DatagramWire {
     fn schedule_update(&mut self, peer: SocketAddr, deadline: u64) {
         self.scheduled_updates.insert(peer, deadline);
         self.update_deadlines.push(Reverse((deadline, peer)));
+    }
+}
+
+impl Drop for DatagramWire {
+    fn drop(&mut self) {
+        if let Some((endpoint, registry)) = &self.telemetry {
+            for peer in self.engines.keys() {
+                registry.remove(*endpoint, *peer);
+            }
+        }
     }
 }
 

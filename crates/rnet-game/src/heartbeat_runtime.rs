@@ -4,8 +4,8 @@ use crate::envelope::{decode, ControlKind, DecodedEnvelope};
 use crate::event::NetworkQuality;
 use crate::heartbeat::{
     decode_heartbeat, encode_heartbeat, HeartbeatKind, HeartbeatPacket, HeartbeatTracker,
-    QualitySample,
 };
+use crate::quality::classify;
 use crate::runtime::GameRuntime;
 use ring::rand::{SecureRandom, SystemRandom};
 use rnet_core::{ErrorCode, Event, Handle, Result, RnetError};
@@ -15,14 +15,32 @@ use std::time::Instant;
 impl GameRuntime {
     /// Returns the latest authenticated sample, or `None` before the first matching reply.
     pub fn network_quality(&self, session: Handle) -> Result<Option<NetworkQuality>> {
-        let trackers = self
-            .heartbeat_trackers
-            .lock()
-            .expect("heartbeat table poisoned");
-        let tracker = trackers
-            .get(&session)
-            .ok_or_else(|| RnetError::new(ErrorCode::InvalidHandle, "game session is not ready"))?;
-        Ok(tracker.sample().map(NetworkQuality::from))
+        let sample = {
+            let trackers = self
+                .heartbeat_trackers
+                .lock()
+                .expect("heartbeat table poisoned");
+            let tracker = trackers.get(&session).ok_or_else(|| {
+                RnetError::new(ErrorCode::InvalidHandle, "game session is not ready")
+            })?;
+            tracker.sample()
+        };
+        let udp_loss = self.udp_loss_snapshot(session)?;
+        let kcp_retransmissions = self.kcp_retransmission_snapshot(session)?;
+        Ok(sample.map(|sample| {
+            let (grade, basis) =
+                classify(sample, udp_loss, kcp_retransmissions, self.quality_policy);
+            NetworkQuality {
+                last_rtt: sample.last_rtt,
+                smoothed_rtt: sample.smoothed_rtt,
+                jitter: sample.jitter,
+                samples: sample.samples,
+                grade,
+                basis,
+                udp_loss,
+                kcp_retransmissions,
+            }
+        }))
     }
 
     pub(crate) fn track_session(&self, session: Handle) {
@@ -96,20 +114,41 @@ impl GameRuntime {
                 }
             }
             HeartbeatKind::Ack => {
-                let mut trackers = self
+                let accepted = self
                     .heartbeat_trackers
                     .lock()
-                    .expect("heartbeat table poisoned");
-                if let Some(tracker) = trackers.get_mut(&event.session) {
-                    if let Some(sample) =
+                    .expect("heartbeat table poisoned")
+                    .get_mut(&event.session)
+                    .map(|tracker| {
                         tracker.accept_ack(packet.challenge, event.queued_at, Instant::now())
-                    {
+                    });
+                match accepted {
+                    Some(Some(sample)) => {
                         self.heartbeat_metrics.record_matched_rtt(sample.last_rtt);
-                    } else {
+                        if let Ok(Some(quality)) = self.network_quality(event.session) {
+                            let publish = self
+                                .heartbeat_trackers
+                                .lock()
+                                .expect("heartbeat table poisoned")
+                                .get_mut(&event.session)
+                                .is_some_and(|tracker| {
+                                    tracker.quality_changed(quality.grade, quality.basis)
+                                });
+                            if publish {
+                                return Ok(Some(crate::GameEvent::QualityChanged {
+                                    endpoint: event.endpoint,
+                                    session: event.session,
+                                    quality,
+                                }));
+                            }
+                        }
+                    }
+                    Some(None) => {
                         self.heartbeat_metrics
                             .replies_rejected
                             .fetch_add(1, Ordering::Relaxed);
                     }
+                    None => return Ok(None),
                 }
             }
         }
@@ -175,17 +214,6 @@ impl GameRuntime {
         for (session, reason) in close {
             let _ = self.network.close_session(session, reason);
             self.forget_session(session);
-        }
-    }
-}
-
-impl From<QualitySample> for NetworkQuality {
-    fn from(sample: QualitySample) -> Self {
-        Self {
-            last_rtt: sample.last_rtt,
-            smoothed_rtt: sample.smoothed_rtt,
-            jitter: sample.jitter,
-            samples: sample.samples,
         }
     }
 }

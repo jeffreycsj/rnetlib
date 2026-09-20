@@ -9,6 +9,7 @@ impl GameRuntime {
     pub fn close_session(&self, session: Handle) -> Result<()> {
         self.network.close_session(session, ErrorCode::Cancelled)?;
         self.forget_session(session);
+        self.forget_quality_session(session);
         Ok(())
     }
 
@@ -18,6 +19,14 @@ impl GameRuntime {
         self.heartbeat_trackers
             .lock()
             .expect("heartbeat table poisoned")
+            .clear();
+        self.udp_sessions
+            .lock()
+            .expect("UDP quality table poisoned")
+            .clear();
+        self.endpoint_transports
+            .lock()
+            .expect("game endpoint table poisoned")
             .clear();
         Ok(())
     }

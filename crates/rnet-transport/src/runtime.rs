@@ -62,6 +62,7 @@ impl NetworkRuntime {
             sessions: Mutex::new(HandleTable::new()),
             metrics: Metrics::default(),
             latencies: Latencies::default(),
+            kcp_telemetry: Arc::new(crate::kcp::KcpTelemetryRegistry::default()),
             send_budget,
             stopped_event_emitted: Mutex::new(false),
         });

@@ -1,7 +1,7 @@
 use rnet_core::Transport;
 use rnet_game::{
     GameClientConfig, GameEvent, GameHostClientConfig, GameProtocol, GameRuntime,
-    GameRuntimeConfig, GameSendOptions, GameServerConfig,
+    GameRuntimeConfig, GameSendOptions, GameServerConfig, QualityGrade,
 };
 use rnet_security::Keypair;
 use rnet_transport::{ClientSecurity, SecurityOperation};
@@ -73,6 +73,13 @@ fn heartbeat_quality_uses_protected_controls_even_when_business_data_is_plaintex
         }
         let server_session = server_session.expect("server ready");
         let client_session = client_session.expect("client ready");
+        assert_eq!(
+            runtime
+                .kcp_retransmission_snapshot(server_session)
+                .expect("KCP snapshot")
+                .is_some(),
+            transport == Transport::Kcp,
+        );
         let deadline = Instant::now() + Duration::from_secs(3);
         let quality = loop {
             let events = runtime.poll(32, Duration::from_millis(10));
@@ -92,7 +99,23 @@ fn heartbeat_quality_uses_protected_controls_even_when_business_data_is_plaintex
         };
         assert!(quality.samples >= 1);
         assert!(quality.last_rtt < Duration::from_millis(500));
+        assert_eq!(
+            quality.kcp_retransmissions.is_some(),
+            transport == Transport::Kcp
+        );
+        if let Some(kcp) = quality.kcp_retransmissions {
+            assert!(kcp.segments_sent >= 1);
+            assert!(kcp.retransmitted <= kcp.segments_sent);
+        }
         assert!(runtime.network_quality(client_session).is_ok());
+        let changed = poll_until(
+            &runtime,
+            |event| matches!(event, GameEvent::QualityChanged { session, .. } if *session == server_session),
+        );
+        let GameEvent::QualityChanged { quality, .. } = changed else {
+            unreachable!();
+        };
+        assert_ne!(quality.grade, QualityGrade::Unknown);
         let heartbeat = runtime.heartbeat_metrics_snapshot();
         assert!(heartbeat.probes_sent >= 1);
         assert!(heartbeat.replies_sent >= 1);
@@ -323,6 +346,16 @@ fn exercise_game_session(transport: Transport) {
     let server_session = server_session.expect("server session ready");
     let client_session = client_session.expect("client session ready");
 
+    if transport == Transport::Udp {
+        assert_eq!(
+            runtime
+                .send(client_session, &[0x5a; 2048])
+                .expect_err("oversized UDP message must not enter the send queue")
+                .code(),
+            rnet_core::ErrorCode::MessageTooLarge
+        );
+    }
+
     // There is deliberately no message type or transport argument here.
     runtime
         .send(client_session, b"protobuf-payload")
@@ -407,6 +440,17 @@ fn exercise_game_session(transport: Transport) {
     let message = assert_message(&runtime, server_session, b"tick-owned-by-envelope");
     assert_eq!(message.sequence, Some(u32::MAX));
     assert_eq!(message.tick, Some(60));
+
+    let loss = runtime
+        .udp_loss_snapshot(server_session)
+        .expect("loss snapshot");
+    if transport == Transport::Udp {
+        let loss = loss.expect("UDP has library-owned sequence sampling");
+        assert_eq!((loss.expected, loss.received, loss.missing), (5, 5, 0));
+        assert_eq!(loss.recent_loss_per_mille, 0);
+    } else {
+        assert_eq!(loss, None, "TCP and KCP must not claim UDP loss");
+    }
 
     let metrics = runtime.metrics_snapshot();
     assert!(metrics.frames_sent >= 5);

@@ -1,5 +1,6 @@
 use super::envelope::{
-    decode, encode_application, encode_control, ControlKind, DecodedEnvelope, HEADER_LEN,
+    decode, encode_application, encode_control, encode_udp_application, ControlKind,
+    DecodedEnvelope, HEADER_LEN,
 };
 use rnet_core::ErrorCode;
 
@@ -16,6 +17,7 @@ fn application_payload_round_trips_without_a_public_message_type() {
         DecodedEnvelope::Application {
             sequence: None,
             tick: None,
+            datagram_sequence: None,
             payload: payload.as_slice().into(),
         }
     );
@@ -31,8 +33,34 @@ fn optional_sequence_and_tick_are_owned_by_the_network_envelope() {
         DecodedEnvelope::Application {
             sequence: Some(u32::MAX),
             tick: Some(42),
+            datagram_sequence: None,
             payload: b"input".as_slice().into(),
         }
+    );
+}
+
+#[test]
+fn wire_v2_udp_sequence_is_internal_and_does_not_replace_business_metadata() {
+    let encoded = encode_udp_application(b"snapshot", Some(8), Some(42), u32::MAX, 1024)
+        .expect("encode v2 UDP application");
+    assert_eq!(&encoded[2..4], &16_u16.to_be_bytes());
+    assert_eq!(
+        decode(&encoded, 1024).expect("decode v2 UDP application"),
+        DecodedEnvelope::Application {
+            sequence: Some(8),
+            tick: Some(42),
+            datagram_sequence: Some(u32::MAX),
+            payload: b"snapshot".as_slice().into(),
+        }
+    );
+
+    let mut truncated_extension = encoded[..HEADER_LEN].to_vec();
+    truncated_extension[2..4].copy_from_slice(&(HEADER_LEN as u16).to_be_bytes());
+    assert_eq!(
+        decode(&truncated_extension, 1024)
+            .expect_err("UDP sequence flag requires its extension")
+            .code(),
+        ErrorCode::ProtocolError
     );
 }
 

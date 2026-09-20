@@ -3,6 +3,7 @@ use rnet_core::ErrorCode;
 use rnet_core::Result;
 use rnet_core::RnetError;
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::io::Write;
 use std::panic::AssertUnwindSafe;
@@ -43,6 +44,97 @@ pub struct RustKcpEngine {
     observed_rtt: Option<Duration>,
     max_queued_bytes: usize,
     failed: bool,
+    transmitted_sequences: HashSet<u32>,
+    telemetry: Arc<Mutex<KcpTelemetry>>,
+}
+
+/// Counts KCP PUSH segment retransmissions, not IP-layer packet loss.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KcpRetransmissionSnapshot {
+    pub segments_sent: u64,
+    pub retransmitted: u64,
+    pub recent_segments: u16,
+    pub recent_retransmitted: u16,
+    pub recent_retransmission_per_mille: u16,
+}
+
+#[derive(Default)]
+struct KcpTelemetry {
+    segments_sent: u64,
+    retransmitted: u64,
+    recent: VecDeque<bool>,
+    recent_retransmitted: u16,
+}
+
+impl KcpTelemetry {
+    fn record(&mut self, retransmission: bool) {
+        const WINDOW: usize = 128;
+        self.segments_sent = self.segments_sent.saturating_add(1);
+        self.retransmitted = self.retransmitted.saturating_add(u64::from(retransmission));
+        if self.recent.len() == WINDOW && self.recent.pop_front() == Some(true) {
+            self.recent_retransmitted -= 1;
+        }
+        self.recent.push_back(retransmission);
+        self.recent_retransmitted += u16::from(retransmission);
+    }
+
+    fn snapshot(&self) -> KcpRetransmissionSnapshot {
+        let recent_segments = self.recent.len() as u16;
+        KcpRetransmissionSnapshot {
+            segments_sent: self.segments_sent,
+            retransmitted: self.retransmitted,
+            recent_segments,
+            recent_retransmitted: self.recent_retransmitted,
+            recent_retransmission_per_mille: u32::from(self.recent_retransmitted)
+                .saturating_mul(1000)
+                .checked_div(u32::from(recent_segments))
+                .unwrap_or(0) as u16,
+        }
+    }
+}
+
+/// Bounded by active KCP peers; removed with the peer and when its endpoint task exits.
+type KcpPeerTelemetry = Arc<Mutex<KcpTelemetry>>;
+
+#[derive(Default)]
+pub(crate) struct KcpTelemetryRegistry {
+    peers: Mutex<HashMap<(u64, std::net::SocketAddr), KcpPeerTelemetry>>,
+}
+
+impl KcpTelemetryRegistry {
+    pub(crate) fn insert_engine(
+        &self,
+        endpoint: u64,
+        peer: std::net::SocketAddr,
+        engine: &RustKcpEngine,
+    ) {
+        self.peers
+            .lock()
+            .expect("KCP telemetry table poisoned")
+            .insert((endpoint, peer), engine.telemetry());
+    }
+
+    pub(crate) fn remove(&self, endpoint: u64, peer: std::net::SocketAddr) {
+        self.peers
+            .lock()
+            .expect("KCP telemetry table poisoned")
+            .remove(&(endpoint, peer));
+    }
+
+    pub(crate) fn snapshot(
+        &self,
+        endpoint: u64,
+        peer: std::net::SocketAddr,
+    ) -> Option<KcpRetransmissionSnapshot> {
+        let telemetry = self
+            .peers
+            .lock()
+            .expect("KCP telemetry table poisoned")
+            .get(&(endpoint, peer))
+            .cloned()?;
+        let snapshot = telemetry.lock().expect("KCP telemetry poisoned").snapshot();
+        Some(snapshot)
+    }
 }
 
 impl RustKcpEngine {
@@ -75,6 +167,8 @@ impl RustKcpEngine {
             observed_rtt: None,
             max_queued_bytes,
             failed: false,
+            transmitted_sequences: HashSet::new(),
+            telemetry: Arc::new(Mutex::new(KcpTelemetry::default())),
         })
     }
 
@@ -86,6 +180,17 @@ impl RustKcpEngine {
         payload_len
             .div_ceil(self.inner.mss())
             .saturating_mul(self.inner.mss())
+    }
+
+    fn telemetry(&self) -> Arc<Mutex<KcpTelemetry>> {
+        Arc::clone(&self.telemetry)
+    }
+
+    pub fn retransmission_snapshot(&self) -> KcpRetransmissionSnapshot {
+        self.telemetry
+            .lock()
+            .expect("KCP telemetry poisoned")
+            .snapshot()
     }
 }
 
@@ -115,6 +220,9 @@ impl KcpEngine for RustKcpEngine {
         }
         self.observed_rtt = kcp_ack_rtt(packet, self.now_ms as u32)
             .map(|rtt_ms| Duration::from_millis(u64::from(rtt_ms)));
+        // Only a successfully accepted ACK/UNA may retire an outstanding sequence. The set is
+        // bounded by KCP's send window rather than the lifetime of a long-running connection.
+        retire_acked_sequences(packet, &mut self.transmitted_sequences);
         Ok(())
     }
 
@@ -176,6 +284,7 @@ impl KcpEngine for RustKcpEngine {
         }
         let mut packets = self.output.0.lock().expect("KCP output queue poisoned");
         while let Some(packet) = packets.pop_front() {
+            observe_push_segments(&packet, &mut self.transmitted_sequences, &self.telemetry);
             output(&packet);
         }
     }
@@ -187,6 +296,46 @@ impl KcpEngine for RustKcpEngine {
 
     fn observed_rtt(&self) -> Option<Duration> {
         self.observed_rtt
+    }
+}
+
+fn observe_push_segments(
+    mut packet: &[u8],
+    transmitted: &mut HashSet<u32>,
+    telemetry: &Mutex<KcpTelemetry>,
+) {
+    while packet.len() >= 24 {
+        let length =
+            u32::from_le_bytes(packet[20..24].try_into().expect("KCP segment length")) as usize;
+        let Some(segment_length) = 24_usize.checked_add(length) else {
+            break;
+        };
+        if segment_length > packet.len() {
+            break;
+        }
+        if packet[4] == 81 {
+            let sequence = u32::from_le_bytes(packet[12..16].try_into().expect("KCP sequence"));
+            telemetry
+                .lock()
+                .expect("KCP telemetry poisoned")
+                .record(!transmitted.insert(sequence));
+        }
+        packet = &packet[segment_length..];
+    }
+}
+
+fn retire_acked_sequences(mut packet: &[u8], transmitted: &mut HashSet<u32>) {
+    while packet.len() >= 24 {
+        let length =
+            u32::from_le_bytes(packet[20..24].try_into().expect("validated KCP length")) as usize;
+        let segment_length = 24 + length; // Packet validation already checked this addition.
+        let una = u32::from_le_bytes(packet[16..20].try_into().expect("KCP UNA"));
+        transmitted.retain(|sequence| *sequence >= una);
+        if packet[4] == 82 {
+            let sequence = u32::from_le_bytes(packet[12..16].try_into().expect("KCP ACK sequence"));
+            transmitted.remove(&sequence);
+        }
+        packet = &packet[segment_length..];
     }
 }
 
@@ -343,4 +492,31 @@ fn map_kcp_error(error: ::kcp::Error) -> RnetError {
         _ => ErrorCode::ProtocolError,
     };
     RnetError::new(code, error.to_string())
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::{KcpEngine, RustKcpEngine};
+
+    #[test]
+    fn retransmission_counters_track_push_segments_without_ack() {
+        let mut engine = RustKcpEngine::new(11).expect("KCP engine");
+        engine.send(b"hello").expect("queue data");
+        let mut output = Vec::new();
+        engine.update(0, &mut |packet| output.push(packet.to_vec()));
+        assert_eq!(engine.retransmission_snapshot().segments_sent, 1);
+        assert_eq!(engine.retransmission_snapshot().retransmitted, 0);
+        engine.update(1000, &mut |packet| output.push(packet.to_vec()));
+        let stats = engine.retransmission_snapshot();
+        assert!(
+            stats.segments_sent >= 2,
+            "KCP should retry unacknowledged data"
+        );
+        assert!(stats.retransmitted >= 1);
+        assert_eq!(
+            stats.recent_retransmission_per_mille,
+            (u32::from(stats.recent_retransmitted) * 1000 / u32::from(stats.recent_segments))
+                as u16
+        );
+    }
 }

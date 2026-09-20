@@ -3,11 +3,12 @@
 use crate::config::{
     GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
 };
-use crate::envelope::{decode, encode_application, DecodedEnvelope};
+use crate::envelope::{decode, DecodedEnvelope};
 use crate::event::{GameEvent, GameMessage};
 use crate::heartbeat::HeartbeatTracker;
 use crate::join;
 use crate::observe::HeartbeatMetrics;
+use crate::quality::{QualityPolicy, UdpSessionQuality};
 use rnet_core::{ErrorCode, Event, EventType, Handle, Result, RnetError, Transport};
 use rnet_protocol::control::SecurityMode;
 use rnet_transport::{
@@ -16,7 +17,7 @@ use rnet_transport::{
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Optional network metadata. Business message typing remains inside `payload`.
@@ -31,10 +32,13 @@ pub struct GameRuntime {
     pub(crate) network: NetworkRuntime,
     pub(crate) maximum_envelope_len: usize,
     server_protocols: Mutex<HashMap<Handle, GameProtocol>>,
+    pub(crate) endpoint_transports: Mutex<HashMap<Handle, Transport>>,
+    pub(crate) udp_sessions: Mutex<HashMap<Handle, Arc<Mutex<UdpSessionQuality>>>>,
     pub(crate) heartbeat_interval: Duration,
     pub(crate) heartbeat_timeout: Duration,
     pub(crate) heartbeat_trackers: Mutex<HashMap<Handle, HeartbeatTracker>>,
     pub(crate) heartbeat_metrics: HeartbeatMetrics,
+    pub(crate) quality_policy: QualityPolicy,
     poll_guard: Mutex<()>,
 }
 
@@ -64,16 +68,25 @@ impl GameRuntime {
             config.heartbeat_timeout,
             Instant::now(),
         )?;
+        if !config.quality_policy.is_valid() {
+            return Err(RnetError::new(
+                ErrorCode::InvalidArgument,
+                "quality thresholds must be ordered and sample minima must be positive",
+            ));
+        }
         let maximum_envelope_len = config.network.max_body_len;
         let network = NetworkRuntime::new_with_client_security(config.network, client_security)?;
         Ok(Self {
             network,
             maximum_envelope_len,
             server_protocols: Mutex::new(HashMap::new()),
+            endpoint_transports: Mutex::new(HashMap::new()),
+            udp_sessions: Mutex::new(HashMap::new()),
             heartbeat_interval: config.heartbeat_interval,
             heartbeat_timeout: config.heartbeat_timeout,
             heartbeat_trackers: Mutex::new(HashMap::new()),
             heartbeat_metrics: HeartbeatMetrics::default(),
+            quality_policy: config.quality_policy,
             poll_guard: Mutex::new(()),
         })
     }
@@ -86,6 +99,16 @@ impl GameRuntime {
                 "game protocol ID and version must be positive",
             ));
         }
+        // Hold both maps until the endpoint is registered: a concurrent poll must not observe
+        // an authentication or ready event before its game-level policy is installed.
+        let mut protocols = self
+            .server_protocols
+            .lock()
+            .expect("game protocol table poisoned");
+        let mut transports = self
+            .endpoint_transports
+            .lock()
+            .expect("game endpoint table poisoned");
         let endpoint = self.network.listen(ServerConfig {
             transport: config.transport,
             bind_addr: config.bind_addr,
@@ -96,10 +119,8 @@ impl GameRuntime {
                 SecurityMode::Plaintext
             },
         })?;
-        self.server_protocols
-            .lock()
-            .expect("game protocol table poisoned")
-            .insert(endpoint, config.protocol);
+        protocols.insert(endpoint, config.protocol);
+        transports.insert(endpoint, config.transport);
         Ok(endpoint)
     }
 
@@ -125,12 +146,18 @@ impl GameRuntime {
                 )
             })
         });
-        self.network.connect(ClientConfig {
+        let mut transports = self
+            .endpoint_transports
+            .lock()
+            .expect("game endpoint table poisoned");
+        let endpoint = self.network.connect(ClientConfig {
             transport: config.transport,
             bind_addr,
             remote_addr: config.remote_addr,
             join_payload,
-        })
+        })?;
+        transports.insert(endpoint, config.transport);
+        Ok(endpoint)
     }
 
     /// Resolves a hostname and joins without exposing address-candidate or encryption plumbing.
@@ -140,12 +167,18 @@ impl GameRuntime {
             &config.join_ticket,
             self.maximum_envelope_len.min(60 * 1024),
         )?;
-        self.network.connect_host(HostClientConfig {
+        let mut transports = self
+            .endpoint_transports
+            .lock()
+            .expect("game endpoint table poisoned");
+        let endpoint = self.network.connect_host(HostClientConfig {
             transport: config.transport,
             host: config.host,
             port: config.port,
             join_payload,
-        })
+        })?;
+        transports.insert(endpoint, config.transport);
+        Ok(endpoint)
     }
 
     /// Closes an endpoint and releases its game protocol policy.
@@ -154,6 +187,10 @@ impl GameRuntime {
         self.server_protocols
             .lock()
             .expect("game protocol table poisoned")
+            .remove(&endpoint);
+        self.endpoint_transports
+            .lock()
+            .expect("game endpoint table poisoned")
             .remove(&endpoint);
         Ok(())
     }
@@ -178,13 +215,7 @@ impl GameRuntime {
         payload: &[u8],
         options: GameSendOptions,
     ) -> Result<()> {
-        let envelope = encode_application(
-            payload,
-            options.sequence,
-            options.tick,
-            self.maximum_envelope_len,
-        )?;
-        self.network.send_payload(session, &envelope)
+        self.send_game_application(session, payload, options)
     }
 
     /// Changes business-data encryption on an established server-side session.
@@ -330,7 +361,20 @@ impl GameRuntime {
                 }
             }
             EventType::SessionOpened => {
+                let transport = self
+                    .endpoint_transports
+                    .lock()
+                    .expect("game endpoint table poisoned")
+                    .get(&event.endpoint)
+                    .copied();
+                let Some(transport) = transport else {
+                    let _ = self
+                        .network
+                        .close_session(event.session, ErrorCode::Cancelled);
+                    return Ok(None);
+                };
                 self.track_session(event.session);
+                self.track_quality_session(event.session, transport);
                 GameEvent::SessionReady {
                     endpoint: event.endpoint,
                     session: event.session,
@@ -338,6 +382,7 @@ impl GameRuntime {
             }
             EventType::SessionClosed => {
                 self.forget_session(event.session);
+                self.forget_quality_session(event.session);
                 GameEvent::SessionClosed {
                     endpoint: event.endpoint,
                     session: event.session,
@@ -363,14 +408,18 @@ impl GameRuntime {
                     DecodedEnvelope::Application {
                         sequence,
                         tick,
+                        datagram_sequence,
                         payload,
-                    } => GameEvent::Message(GameMessage {
-                        endpoint: event.endpoint,
-                        session: event.session,
-                        sequence,
-                        tick,
-                        payload,
-                    }),
+                    } => {
+                        self.observe_datagram_sequence(event.session, datagram_sequence)?;
+                        GameEvent::Message(GameMessage {
+                            endpoint: event.endpoint,
+                            session: event.session,
+                            sequence,
+                            tick,
+                            payload,
+                        })
+                    }
                     // A future control state machine must explicitly consume each kind. Silently
                     // ignoring a known kind today would let peers believe heartbeat, resume, or
                     // protocol synchronization succeeded when none of those paths is active.
@@ -436,6 +485,56 @@ mod tests {
         .err()
         .expect("zero heartbeat interval must be rejected");
         assert_eq!(error.code(), ErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn runtime_rejects_unordered_quality_thresholds() {
+        let policy = crate::quality::QualityPolicy {
+            good_udp_loss_per_mille: 1,
+            ..Default::default()
+        };
+        let error = GameRuntime::new(GameRuntimeConfig::production().with_quality_policy(policy))
+            .err()
+            .expect("unordered quality policy must be rejected");
+        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn udp_sequence_extension_is_required_only_on_udp_game_sessions() {
+        let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
+        runtime.track_session(41);
+        runtime.track_quality_session(41, Transport::Udp);
+        assert_eq!(
+            runtime
+                .observe_datagram_sequence(41, None)
+                .expect_err("UDP must carry the v2 sequence")
+                .code(),
+            ErrorCode::ProtocolError
+        );
+        runtime
+            .observe_datagram_sequence(41, Some(0))
+            .expect("first UDP sequence");
+        assert_eq!(
+            runtime
+                .udp_loss_snapshot(41)
+                .expect("UDP snapshot")
+                .unwrap()
+                .received,
+            1
+        );
+
+        runtime.track_session(42);
+        assert_eq!(
+            runtime
+                .observe_datagram_sequence(42, Some(0))
+                .expect_err("TCP/KCP must reject a UDP-only extension")
+                .code(),
+            ErrorCode::ProtocolError
+        );
+        assert_eq!(
+            runtime.udp_loss_snapshot(42).expect("non-UDP snapshot"),
+            None
+        );
     }
 
     #[test]

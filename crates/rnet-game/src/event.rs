@@ -1,8 +1,9 @@
 //! Game-facing events that hide compatibility framing and transport details.
 
+use crate::quality::UdpLossSnapshot;
 use bytes::Bytes;
 use rnet_core::{ErrorCode, Handle};
-use rnet_transport::SecurityOperation;
+use rnet_transport::{KcpRetransmissionSnapshot, SecurityOperation};
 use std::time::Duration;
 
 /// Last authenticated heartbeat sample for one established game session.
@@ -12,6 +13,29 @@ pub struct NetworkQuality {
     pub smoothed_rtt: Duration,
     pub jitter: Duration,
     pub samples: u64,
+    /// Quality classification uses only signals listed by `basis`.
+    pub grade: QualityGrade,
+    pub basis: QualityBasis,
+    /// Receiver-side data-sequence gaps. `None` for TCP/KCP, not zero loss.
+    pub udp_loss: Option<UdpLossSnapshot>,
+    /// Transport retransmission ratio, not raw network loss; `None` for UDP/TCP.
+    pub kcp_retransmissions: Option<KcpRetransmissionSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum QualityGrade {
+    Unknown,
+    Excellent,
+    Good,
+    Fair,
+    Poor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QualityBasis {
+    LatencyOnly,
+    UdpSequenceGap,
+    KcpRetransmission,
 }
 
 /// Opaque business bytes received from an established game session.
@@ -77,6 +101,12 @@ pub enum GameEvent {
         encrypted: bool,
         epoch: u64,
         operation: SecurityOperation,
+    },
+    /// Emitted only after two consecutive non-unknown samples support a changed grade/basis.
+    QualityChanged {
+        endpoint: Handle,
+        session: Handle,
+        quality: NetworkQuality,
     },
     /// The peer sent framing that cannot be produced by this game API.
     ProtocolViolation {

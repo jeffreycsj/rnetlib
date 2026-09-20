@@ -250,6 +250,7 @@ pub(crate) struct Shared {
     pub(crate) sessions: Mutex<HandleTable<SessionRoute>>,
     pub(crate) metrics: Metrics,
     pub(crate) latencies: Latencies,
+    pub(crate) kcp_telemetry: Arc<crate::kcp::KcpTelemetryRegistry>,
     pub(crate) send_budget: Arc<ByteBudget>,
     pub(crate) stopped_event_emitted: Mutex<bool>,
 }

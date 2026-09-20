@@ -47,7 +47,7 @@ pub use config::{
     ResolvedClientConfig, RuntimeConfig, SecurityPolicy, ServerConfig,
 };
 pub use event::{AuthRequest, SecurityChange, SecurityOperation};
-pub use kcp::{KcpEngine, RustKcpEngine};
+pub use kcp::{KcpEngine, KcpRetransmissionSnapshot, RustKcpEngine};
 pub use metrics::{
     AdmissionRejectReason, LatencyKind, LatencyMetricSnapshot, MetricsSnapshot,
     ADMISSION_REJECT_REASON_COUNT, LATENCY_KIND_COUNT,

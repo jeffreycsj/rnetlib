@@ -1,12 +1,43 @@
 //! Runtime address, event polling, and metrics query APIs.
 
+use crate::kcp::KcpRetransmissionSnapshot;
 use crate::metrics::{LatencyKind, LatencyMetricSnapshot, MetricsSnapshot, LATENCY_KIND_COUNT};
 use crate::runtime::NetworkRuntime;
+use crate::state::SessionTarget;
 use rnet_core::{ErrorCode, Event, Handle, Lifecycle, Result, RnetError};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 impl NetworkRuntime {
+    /// Returns authenticated-session KCP retransmissions; UDP/TCP have no such metric.
+    pub fn kcp_retransmission_snapshot(
+        &self,
+        session: Handle,
+    ) -> Result<Option<KcpRetransmissionSnapshot>> {
+        let target = {
+            let sessions = self.shared.sessions.lock().expect("session table poisoned");
+            let route = sessions
+                .get(session)
+                .ok_or_else(|| RnetError::new(ErrorCode::InvalidHandle, "invalid session"))?;
+            if !route.established {
+                return Err(RnetError::new(
+                    ErrorCode::InvalidState,
+                    "session is not established",
+                ));
+            }
+            match &route.target {
+                SessionTarget::Kcp { peer, .. } => Some((route.endpoint, *peer)),
+                _ => None,
+            }
+        };
+        Ok(target.map(|(endpoint, peer)| {
+            self.shared
+                .kcp_telemetry
+                .snapshot(endpoint, peer)
+                .unwrap_or_default()
+        }))
+    }
+
     pub fn endpoint_local_addr(&self, endpoint: Handle) -> Result<SocketAddr> {
         self.shared
             .endpoints

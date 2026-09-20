@@ -1,5 +1,6 @@
 //! Public game-facing configuration.
 
+use crate::quality::QualityPolicy;
 use rnet_core::Transport;
 use rnet_security::Keypair;
 use rnet_transport::RuntimeConfig;
@@ -43,6 +44,8 @@ pub struct GameRuntimeConfig {
     pub heartbeat_interval: Duration,
     /// Maximum time to wait for a matching probe acknowledgement.
     pub heartbeat_timeout: Duration,
+    /// Thresholds for RTT/jitter and, when available, UDP sequence-gap classification.
+    pub quality_policy: QualityPolicy,
 }
 
 impl GameRuntimeConfig {
@@ -52,6 +55,7 @@ impl GameRuntimeConfig {
             network: RuntimeConfig::production(),
             heartbeat_interval: Duration::from_secs(5),
             heartbeat_timeout: Duration::from_secs(15),
+            quality_policy: QualityPolicy::default(),
         }
     }
 
@@ -59,6 +63,11 @@ impl GameRuntimeConfig {
     pub fn with_heartbeat(mut self, interval: Duration, timeout: Duration) -> Self {
         self.heartbeat_interval = interval;
         self.heartbeat_timeout = timeout;
+        self
+    }
+
+    pub fn with_quality_policy(mut self, policy: QualityPolicy) -> Self {
+        self.quality_policy = policy;
         self
     }
 
@@ -78,6 +87,7 @@ impl GameRuntimeConfig {
             network: RuntimeConfig::default(),
             heartbeat_interval: Duration::from_secs(5),
             heartbeat_timeout: Duration::from_secs(15),
+            quality_policy: QualityPolicy::default(),
         }
     }
 }

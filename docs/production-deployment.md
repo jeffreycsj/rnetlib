@@ -43,6 +43,23 @@ Run one transport at a time so results have an unambiguous resource profile:
 ./scripts/run-soak.sh kcp 86400 4096 /var/tmp/rnet-soak
 ```
 
+The transport probe above does not exercise the game facade. For a local game-layer baseline,
+run each transport with the intended duration, client count, payload bytes, and send rate per
+client (the examples below run 24 hours):
+
+```sh
+./scripts/run-game-soak.sh tcp 86400 128 256 20 /var/tmp/rnet-game-soak
+./scripts/run-game-soak.sh udp 86400 128 256 20 /var/tmp/rnet-game-soak
+./scripts/run-game-soak.sh kcp 86400 128 256 20 /var/tmp/rnet-game-soak
+```
+
+The game probe reports completion, successful sends/receives, backpressure, heartbeat RTT P95/P99,
+timeouts, protocol/event errors, process CPU, and RSS every 60 seconds. It keeps client and server
+endpoints in one process on loopback, so it is a reproducible facade regression and local soak,
+not a substitute for a distributed target-environment capacity test. An exit status of zero means
+the probe completed without an unexpected session failure; apply deployment-specific SLOs to the
+report before accepting a release. The script refuses to start below 15 GiB `MemAvailable`.
+
 Repeat with production-sized connection counts and the application consumer. Add a `tc netem` matrix covering expected and failure-envelope RTT, jitter, loss, duplication, and reordering. A release passes only if its documented SLO is met, RSS reaches a stable plateau, queues recover after bursts, no close reason is unexplained, and no peer starves another. Archive the raw report with kernel, CPU, memory, toolchain, commit/package hash, and configuration.
 
 ## Remaining external assurance

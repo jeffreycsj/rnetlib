@@ -3,7 +3,7 @@
 use crate::config::GameProtocol;
 use rnet_core::{ErrorCode, Result, RnetError};
 
-const MAGIC: &[u8; 4] = b"RGJ1";
+const MAGIC: &[u8; 4] = b"RGJ2";
 pub(crate) const HEADER_LEN: usize = 34;
 
 #[derive(Debug)]

@@ -15,7 +15,8 @@ const RESUME: u8 = 3;
 const PROTOCOL: u8 = 4;
 const HAS_SEQUENCE: u8 = 1 << 0;
 const HAS_TICK: u8 = 1 << 1;
-const SUPPORTED_FLAGS: u8 = HAS_SEQUENCE | HAS_TICK;
+const HAS_DATAGRAM_SEQUENCE: u8 = 1 << 2;
+const SUPPORTED_FLAGS: u8 = HAS_SEQUENCE | HAS_TICK | HAS_DATAGRAM_SEQUENCE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ControlKind {
@@ -30,6 +31,7 @@ pub(crate) enum DecodedEnvelope {
     Application {
         sequence: Option<u32>,
         tick: Option<u32>,
+        datagram_sequence: Option<u32>,
         payload: Bytes,
     },
     Control {
@@ -57,6 +59,33 @@ pub(crate) fn encode_application(
         flags,
         sequence.unwrap_or_default(),
         tick.unwrap_or_default(),
+        None,
+        payload,
+        maximum_len,
+    )
+}
+
+/// Adds a library-owned sequence to UDP business datagrams without consuming application metadata.
+pub(crate) fn encode_udp_application(
+    payload: &[u8],
+    sequence: Option<u32>,
+    tick: Option<u32>,
+    datagram_sequence: u32,
+    maximum_len: usize,
+) -> Result<Bytes> {
+    let mut flags = HAS_DATAGRAM_SEQUENCE;
+    if sequence.is_some() {
+        flags |= HAS_SEQUENCE;
+    }
+    if tick.is_some() {
+        flags |= HAS_TICK;
+    }
+    encode(
+        APPLICATION,
+        flags,
+        sequence.unwrap_or_default(),
+        tick.unwrap_or_default(),
+        Some(datagram_sequence),
         payload,
         maximum_len,
     )
@@ -75,7 +104,7 @@ pub(crate) fn encode_control(
         ControlKind::Resume => RESUME,
         ControlKind::Protocol => PROTOCOL,
     };
-    encode(wire_kind, 0, 0, 0, payload, maximum_len)
+    encode(wire_kind, 0, 0, 0, None, payload, maximum_len)
 }
 
 /// Validates the complete untrusted envelope before returning a payload view owned by the caller.
@@ -100,6 +129,18 @@ pub(crate) fn decode(input: &[u8], maximum_len: usize) -> Result<DecodedEnvelope
     }
     let sequence = u32::from_be_bytes(input[4..8].try_into().expect("fixed sequence field"));
     let tick = u32::from_be_bytes(input[8..12].try_into().expect("fixed tick field"));
+    let datagram_sequence = if flags & HAS_DATAGRAM_SEQUENCE != 0 {
+        if header_len < HEADER_LEN + 4 || kind != APPLICATION {
+            return Err(protocol_error("UDP sequence extension is invalid"));
+        }
+        Some(u32::from_be_bytes(
+            input[HEADER_LEN..HEADER_LEN + 4]
+                .try_into()
+                .expect("validated UDP sequence extension"),
+        ))
+    } else {
+        None
+    };
     let payload = Bytes::copy_from_slice(&input[header_len..]);
 
     if kind == APPLICATION {
@@ -112,6 +153,7 @@ pub(crate) fn decode(input: &[u8], maximum_len: usize) -> Result<DecodedEnvelope
         return Ok(DecodedEnvelope::Application {
             sequence: (flags & HAS_SEQUENCE != 0).then_some(sequence),
             tick: (flags & HAS_TICK != 0).then_some(tick),
+            datagram_sequence,
             payload,
         });
     }
@@ -138,10 +180,12 @@ fn encode(
     flags: u8,
     sequence: u32,
     tick: u32,
+    datagram_sequence: Option<u32>,
     payload: &[u8],
     maximum_len: usize,
 ) -> Result<Bytes> {
-    let encoded_len = HEADER_LEN.checked_add(payload.len()).ok_or_else(|| {
+    let header_len = HEADER_LEN + 4 * usize::from(datagram_sequence.is_some());
+    let encoded_len = header_len.checked_add(payload.len()).ok_or_else(|| {
         RnetError::new(ErrorCode::MessageTooLarge, "game envelope length overflow")
     })?;
     if encoded_len > maximum_len {
@@ -153,9 +197,12 @@ fn encode(
     let mut encoded = BytesMut::with_capacity(encoded_len);
     encoded.put_u8(kind);
     encoded.put_u8(flags);
-    encoded.put_u16(HEADER_LEN as u16);
+    encoded.put_u16(header_len as u16);
     encoded.put_u32(sequence);
     encoded.put_u32(tick);
+    if let Some(datagram_sequence) = datagram_sequence {
+        encoded.put_u32(datagram_sequence);
+    }
     encoded.extend_from_slice(payload);
     Ok(encoded.freeze())
 }

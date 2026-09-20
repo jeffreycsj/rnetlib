@@ -4,6 +4,8 @@
 //! Noise-protected control path, including when business data is configured as plaintext.
 
 use crate::envelope::{encode_control, ControlKind};
+use crate::event::{QualityBasis, QualityGrade};
+use crate::quality::QualityChangeGate;
 use bytes::Bytes;
 use rnet_core::{ErrorCode, Result, RnetError};
 use std::time::{Duration, Instant};
@@ -68,6 +70,7 @@ pub(crate) struct HeartbeatTracker {
     last_inbound_probe: Option<Instant>,
     pending: Option<(u64, Instant)>,
     sample: Option<QualitySample>,
+    quality_change_gate: QualityChangeGate,
 }
 
 impl HeartbeatTracker {
@@ -85,6 +88,7 @@ impl HeartbeatTracker {
             last_inbound_probe: None,
             pending: None,
             sample: None,
+            quality_change_gate: QualityChangeGate::default(),
         })
     }
 
@@ -174,6 +178,10 @@ impl HeartbeatTracker {
 
     pub(crate) fn sample(&self) -> Option<QualitySample> {
         self.sample
+    }
+
+    pub(crate) fn quality_changed(&mut self, grade: QualityGrade, basis: QualityBasis) -> bool {
+        self.quality_change_gate.observe(grade, basis)
     }
 }
 

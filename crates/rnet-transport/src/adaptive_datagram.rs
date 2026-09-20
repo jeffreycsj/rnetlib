@@ -65,7 +65,8 @@ pub(crate) async fn run_adaptive_datagram(
         shared.config.max_sessions_per_endpoint,
         shared.config.max_session_queued_bytes,
         shared.config.max_runtime_queued_bytes,
-    );
+    )
+    .with_telemetry(endpoint, Arc::clone(&shared.kcp_telemetry));
     let mut preflight_authorized = HashMap::<SocketAddr, Instant>::new();
     let per_ip = AdmissionController::new(
         shared.config.max_sessions_per_ip,
