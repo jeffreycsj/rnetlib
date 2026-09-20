@@ -1,5 +1,7 @@
 //! Game-oriented session and messaging facade over RNet's transport runtime.
 
+mod clock_sync;
+mod clock_sync_runtime;
 mod config;
 mod diagnostics;
 mod envelope;
@@ -19,6 +21,8 @@ mod resume;
 mod resume_runtime;
 mod runtime;
 
+pub use clock_sync::ClockSyncSample;
+pub use clock_sync_runtime::ClockSyncMetricsSnapshot;
 pub use config::{
     GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
 };
@@ -34,6 +38,8 @@ pub use rnet_observe::{BoundedLogger, LogLevel, LogRecord, LoggerConfig};
 pub use rnet_transport::KcpRetransmissionSnapshot;
 pub use runtime::{GameRuntime, GameSendOptions};
 
+#[cfg(test)]
+mod clock_sync_tests;
 #[cfg(test)]
 mod envelope_tests;
 #[cfg(test)]

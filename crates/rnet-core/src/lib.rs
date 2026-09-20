@@ -144,6 +144,10 @@ pub struct Event {
     pub request_id: u64,
     pub status: ErrorCode,
     pub data: Vec<u8>,
+    /// Whether the transport verified this message record's cryptographic integrity.
+    /// This describes the received record, not the session's current security mode.
+    #[doc(hidden)]
+    pub integrity_verified: bool,
     #[doc(hidden)]
     pub queued_at: Instant,
 }
@@ -160,6 +164,7 @@ impl std::fmt::Debug for Event {
             .field("request_id", &self.request_id)
             .field("status", &self.status)
             .field("data_len", &self.data.len())
+            .field("integrity_verified", &self.integrity_verified)
             .field("queued_at", &self.queued_at)
             .finish()
     }
@@ -176,6 +181,7 @@ impl Event {
             request_id: 0,
             status: ErrorCode::Ok,
             data: Vec::new(),
+            integrity_verified: false,
             queued_at: Instant::now(),
         }
     }

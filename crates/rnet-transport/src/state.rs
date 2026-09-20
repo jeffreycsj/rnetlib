@@ -463,6 +463,15 @@ pub(crate) fn message_event(
     session: Handle,
     frame: rnet_protocol::Frame,
 ) -> Event {
+    message_event_with_integrity(endpoint, session, frame, false)
+}
+
+pub(crate) fn message_event_with_integrity(
+    endpoint: Handle,
+    session: Handle,
+    frame: rnet_protocol::Frame,
+    integrity_verified: bool,
+) -> Event {
     Event {
         event_type: EventType::Message,
         endpoint,
@@ -472,6 +481,7 @@ pub(crate) fn message_event(
         request_id: frame.header.request_id,
         status: ErrorCode::Ok,
         data: frame.body.to_vec(),
+        integrity_verified,
         queued_at: Instant::now(),
     }
 }

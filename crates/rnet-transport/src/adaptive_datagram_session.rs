@@ -4,7 +4,8 @@ use crate::adaptive_codec::{apply, decrypt, protected_record, protocol};
 use crate::adaptive_wire::DatagramWire;
 use crate::event::{completed_operation, security_changed_event};
 use crate::state::{
-    game_control_event, message_event, session_active, try_push_session_event, Shared,
+    game_control_event, message_event_with_integrity, session_active, try_push_session_event,
+    Shared,
 };
 use rnet_core::{Handle, Result};
 use rnet_protocol::control::{
@@ -56,7 +57,15 @@ pub(crate) async fn handle_established(
                 .metrics
                 .bytes_received
                 .fetch_add(frame.body.len() as u64, Ordering::Relaxed);
-            try_push_session_event(shared, message_event(endpoint, session, frame))?;
+            try_push_session_event(
+                shared,
+                message_event_with_integrity(
+                    endpoint,
+                    session,
+                    frame,
+                    record.kind == RecordKind::Protected,
+                ),
+            )?;
         }
         ProtectedKind::GameControl if record.kind == RecordKind::Protected => {
             if message.payload.len() > shared.config.max_body_len {

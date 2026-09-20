@@ -1,5 +1,7 @@
 //! Game facade orchestration over the transport runtime.
 
+use crate::clock_sync::ClockSyncTracker;
+use crate::clock_sync_runtime::ClockSyncMetrics;
 use crate::config::{
     GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
 };
@@ -42,6 +44,10 @@ pub struct GameRuntime {
     pub(crate) heartbeat_interval: Duration,
     pub(crate) heartbeat_timeout: Duration,
     pub(crate) heartbeat_trackers: Mutex<HashMap<Handle, HeartbeatTracker>>,
+    pub(crate) clock_origin: Instant,
+    pub(crate) clock_trackers: Mutex<HashMap<Handle, ClockSyncTracker>>,
+    pub(crate) clock_next_scan: Mutex<Instant>,
+    pub(crate) clock_metrics: ClockSyncMetrics,
     pub(crate) ready_sessions: RwLock<HashSet<Handle>>,
     pub(crate) heartbeat_metrics: HeartbeatMetrics,
     pub(crate) resume_metrics: ResumeMetrics,
@@ -69,10 +75,10 @@ impl GameRuntime {
     }
 
     fn build(config: GameRuntimeConfig, client_security: Option<ClientSecurity>) -> Result<Self> {
-        if config.network.max_body_len < join::HEADER_LEN {
+        if config.network.max_body_len < join::HEADER_LEN.max(12 + crate::clock_sync::REPLY_LEN) {
             return Err(RnetError::new(
                 ErrorCode::InvalidArgument,
-                "maximum body length cannot contain the game join header",
+                "maximum body length cannot contain the game join header or clock reply",
             ));
         }
         HeartbeatTracker::new(
@@ -93,6 +99,7 @@ impl GameRuntime {
             config.network.security_policy.allow_plaintext_business_data;
         let resume = ResumeRuntimeState::new(config.resume_ticket_ttl, config.max_resume_tickets)?;
         let network = NetworkRuntime::new_with_client_security(config.network, client_security)?;
+        let clock_origin = Instant::now();
         Ok(Self {
             network,
             maximum_envelope_len,
@@ -103,6 +110,10 @@ impl GameRuntime {
             heartbeat_interval: config.heartbeat_interval,
             heartbeat_timeout: config.heartbeat_timeout,
             heartbeat_trackers: Mutex::new(HashMap::new()),
+            clock_origin,
+            clock_trackers: Mutex::new(HashMap::new()),
+            clock_next_scan: Mutex::new(clock_origin),
+            clock_metrics: ClockSyncMetrics::default(),
             ready_sessions: RwLock::new(HashSet::new()),
             heartbeat_metrics: HeartbeatMetrics::default(),
             resume_metrics: ResumeMetrics::default(),
@@ -338,6 +349,7 @@ impl GameRuntime {
             .expect("game session table poisoned")
             .remove(&session);
         self.forget_session(session);
+        self.forget_clock_session(session);
         self.forget_quality_session(session);
         self.forget_game_ready(session);
         self.realtime
@@ -405,6 +417,7 @@ impl GameRuntime {
                 // Hidden controls and public events alike must not defer liveness scheduling.
                 // Conversion runs first so already queued authenticated acknowledgements win.
                 self.drive_heartbeats();
+                self.drive_clock_sync();
                 if !output.is_empty() {
                     return output;
                 }
@@ -416,6 +429,7 @@ impl GameRuntime {
                 continue;
             }
             self.drive_heartbeats();
+            self.drive_clock_sync();
             let remaining = deadline
                 .map(|deadline| deadline.saturating_duration_since(Instant::now()))
                 .unwrap_or(timeout);
@@ -433,6 +447,7 @@ impl GameRuntime {
             internal_events = internal_events.saturating_add(events.len());
             let output = self.convert_events(events);
             self.drive_heartbeats();
+            self.drive_clock_sync();
             if !output.is_empty()
                 || timeout.is_zero()
                 || deadline.is_some_and(|deadline| Instant::now() >= deadline)
@@ -449,6 +464,7 @@ impl GameRuntime {
             let endpoint = event.endpoint;
             let session = event.session;
             let is_business_message = event.event_type == EventType::Message;
+            let integrity_verified = event.integrity_verified;
             match self.convert_event(event) {
                 Ok(Some(event)) => {
                     self.log_game_event(&event);
@@ -456,10 +472,12 @@ impl GameRuntime {
                 }
                 Ok(None) => {}
                 Err(_) => {
-                    // When plaintext business traffic is permitted, an on-path party can
-                    // corrupt or forge it. Report the violation, but never let those bytes
-                    // force a session close. Authenticated controls still fail closed.
-                    if session != 0 && !(self.allow_plaintext_business_data && is_business_message)
+                    // Only an actual plaintext business record may be treated as untrusted
+                    // input. A later encrypted record must still fail closed after a mode switch.
+                    if session != 0
+                        && !(self.allow_plaintext_business_data
+                            && is_business_message
+                            && !integrity_verified)
                     {
                         let _ = self
                             .network
@@ -490,6 +508,11 @@ impl GameRuntime {
                 converted?
             }
             EventType::SessionOpened => {
+                let server_session = self
+                    .server_protocols
+                    .lock()
+                    .expect("game protocol table poisoned")
+                    .contains_key(&event.endpoint);
                 let transports = self
                     .endpoint_transports
                     .lock()
@@ -524,6 +547,7 @@ impl GameRuntime {
                     self.forget_ready_session(old);
                 }
                 self.track_session(event.session);
+                self.track_clock_session(event.session, !server_session);
                 self.track_quality_session(event.session, transport);
                 self.session_endpoints
                     .lock()
@@ -907,6 +931,114 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_business_violation_closes_even_when_plaintext_is_permitted() {
+        for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+            assert_encrypted_business_violation_closes(transport);
+        }
+    }
+
+    fn assert_encrypted_business_violation_closes(transport: Transport) {
+        let server_key = Keypair::generate().expect("server key");
+        let client_key = Keypair::generate().expect("client key");
+        let client_security = ClientSecurity::pinned(client_key, server_key.public.clone());
+        let runtime = GameRuntime::new_with_client_security(
+            GameRuntimeConfig::production().allow_plaintext_business_data(true),
+            client_security,
+        )
+        .expect("runtime");
+        let listener = runtime
+            .listen(GameServerConfig {
+                transport,
+                bind_addr: "127.0.0.1:0".parse().expect("address"),
+                local_key: server_key,
+                initial_encryption: false,
+                protocol: GameProtocol::new(94, 1),
+            })
+            .expect("listener");
+        let client_endpoint = runtime
+            .connect(GameClientConfig {
+                transport,
+                bind_addr: None,
+                remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
+                join_ticket: b"ticket".to_vec(),
+                protocol: GameProtocol::new(94, 1),
+            })
+            .expect("connect");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut server_session = None;
+        let mut client_session = None;
+        while server_session.is_none() || client_session.is_none() {
+            assert!(Instant::now() < deadline, "game session did not open");
+            for event in runtime.poll(16, Duration::from_millis(10)) {
+                match event {
+                    GameEvent::AuthRequest { session, .. } => {
+                        runtime.auth_decide(session, true).expect("authorize");
+                    }
+                    GameEvent::SessionReady { endpoint, session } if endpoint == listener => {
+                        server_session = Some(session);
+                    }
+                    GameEvent::SessionReady { endpoint, session }
+                        if endpoint == client_endpoint =>
+                    {
+                        client_session = Some(session);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let server_session = server_session.expect("server session");
+        let client_session = client_session.expect("client session");
+        runtime
+            .set_encryption(server_session, true)
+            .expect("enable encryption");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut changed = 0;
+        while changed < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "security transition did not complete"
+            );
+            changed += runtime
+                .poll(16, Duration::from_millis(10))
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        GameEvent::SecurityChanged {
+                            encrypted: true,
+                            ..
+                        }
+                    )
+                })
+                .count();
+        }
+        let forged = encode_control(ControlKind::Heartbeat, b"", 1024).expect("control");
+        runtime
+            .network
+            .send(client_session, 0, &forged)
+            .expect("send authenticated business frame");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            assert!(Instant::now() < deadline, "violation not reported");
+            if runtime
+                .poll(16, Duration::from_millis(10))
+                .iter()
+                .any(|event| matches!(event, GameEvent::ProtocolViolation { session, .. } if *session == server_session))
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            runtime
+                .network
+                .validate_payload_len(server_session, 0)
+                .expect_err("authenticated violation closes session")
+                .code(),
+            ErrorCode::InvalidHandle
+        );
+    }
+
+    #[test]
     fn queued_authenticated_control_after_local_close_is_not_a_protocol_violation() {
         let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
         let mut event = Event::simple(EventType::GameControl);
@@ -995,13 +1127,13 @@ mod tests {
     }
 
     #[test]
-    fn runtime_rejects_body_limits_that_cannot_carry_game_join_metadata() {
+    fn runtime_rejects_body_limits_that_cannot_carry_clock_reply() {
         let mut config = GameRuntimeConfig::production();
-        config.network.max_body_len = 33;
+        config.network.max_body_len = 44;
 
         let error = GameRuntime::new(config)
             .err()
-            .expect("impossible game handshake must fail at construction");
+            .expect("impossible protected clock reply must fail at construction");
         assert_eq!(error.code(), ErrorCode::InvalidArgument);
     }
 }

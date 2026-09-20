@@ -20,6 +20,10 @@ impl GameRuntime {
             .lock()
             .expect("heartbeat table poisoned")
             .clear();
+        self.clock_trackers
+            .lock()
+            .expect("clock table poisoned")
+            .clear();
         self.ready_sessions
             .write()
             .expect("game ready table poisoned")

@@ -4,8 +4,8 @@ use crate::{
     metrics::LatencyKind,
     state::{
         fail_secure_session, insert_session_route, map_security_error, mark_session_established,
-        message_event, push_tcp_event, remove_session, session_active, session_event, ByteBudget,
-        Outbound, SessionRoute, SessionTarget, Shared,
+        message_event_with_integrity, push_tcp_event, remove_session, session_active,
+        session_event, ByteBudget, Outbound, SessionRoute, SessionTarget, Shared,
     },
     HANDSHAKE_TIMEOUT,
 };
@@ -477,7 +477,7 @@ pub(crate) async fn handle_secure_udp_packet(
                 .fetch_add(frame.body.len() as u64, Ordering::Relaxed);
             if shared
                 .events
-                .try_push(message_event(endpoint, session, frame))
+                .try_push(message_event_with_integrity(endpoint, session, frame, true))
                 .is_err()
             {
                 shared

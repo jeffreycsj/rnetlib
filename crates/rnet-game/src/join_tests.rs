@@ -11,7 +11,7 @@ fn authenticated_join_metadata_round_trips_without_exposing_ticket_prefix() {
         capabilities: 0b101,
     };
     let encoded = encode(protocol, b"opaque-ticket", 1024).expect("encode join");
-    assert_eq!(&encoded[..4], b"RGJ2", "wire v2 joins must not mix with v1");
+    assert_eq!(&encoded[..4], b"RGV3", "wire v3 ordinary join marker");
     let decoded = decode(&encoded).expect("decode join");
     assert_eq!(decoded.protocol, protocol);
     assert_eq!(decoded.ticket, b"opaque-ticket");
@@ -29,8 +29,11 @@ fn malformed_join_lengths_and_magic_are_rejected() {
     wrong_magic[0] ^= 1;
     invalid_cases.push(wrong_magic);
     let mut old_version = encoded.clone();
-    old_version[..4].copy_from_slice(b"RGJ1");
+    old_version[..4].copy_from_slice(b"RGJ2");
     invalid_cases.push(old_version);
+    let mut old_resume = encoded.clone();
+    old_resume[..4].copy_from_slice(b"RGJ3");
+    invalid_cases.push(old_resume);
     let mut trailing = encoded.clone();
     trailing.push(0);
     invalid_cases.push(trailing);
@@ -67,6 +70,7 @@ fn resume_join_uses_explicit_magic_and_keeps_login_ticket_separate() {
     let protocol = GameProtocol::new(42, 2);
     let resume = [9_u8; 48];
     let encoded = encode_resume(protocol, b"login", &resume, 1024).unwrap();
+    assert_eq!(&encoded[..4], b"RGR3", "wire v3 resume join marker");
     let decoded = decode(&encoded).unwrap();
     assert_eq!(decoded.ticket, b"login");
     assert_eq!(decoded.resume_ticket, Some(resume.as_slice()));

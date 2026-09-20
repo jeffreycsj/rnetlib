@@ -177,6 +177,16 @@ impl GameRuntime {
             "# TYPE rnet_game_heartbeat_rtt_max_us gauge\nrnet_game_heartbeat_rtt_max_us {}",
             metrics.rtt.max_us
         );
+        let clock = self.clock_sync_metrics_snapshot();
+        for (name, value) in [
+            ("rnet_game_clock_probes_sent_total", clock.probes_sent),
+            ("rnet_game_clock_replies_sent_total", clock.replies_sent),
+            ("rnet_game_clock_samples_total", clock.samples),
+            ("rnet_game_clock_rejected_total", clock.rejected),
+            ("rnet_game_clock_send_failures_total", clock.send_failures),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
+        }
         let realtime = self.realtime_queue_snapshot();
         for (name, value) in [
             (

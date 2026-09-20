@@ -122,6 +122,10 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 			if err := runtime.SendLatest(clientSession, 7, []byte("go-latest")); err != nil {
 				t.Fatal(err)
 			}
+			queue, err := runtime.RealtimeQueueSnapshot()
+			if err != nil || queue.QueuedMessages != 1 || queue.QueuedBytes == 0 {
+				t.Fatalf("snapshot not staged: %+v, %v", queue, err)
+			}
 			deadline = time.Now().Add(3 * time.Second)
 			latestReceived := false
 			for time.Now().Before(deadline) && !latestReceived {
@@ -141,6 +145,10 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 			if !latestReceived {
 				t.Fatal("game latest message did not arrive")
 			}
+			queue, err = runtime.RealtimeQueueSnapshot()
+			if err != nil || queue.QueuedMessages != 0 || queue.Forwarded == 0 {
+				t.Fatalf("snapshot not forwarded: %+v, %v", queue, err)
+			}
 			deadline = time.Now().Add(3 * time.Second)
 			var quality GameQuality
 			for time.Now().Before(deadline) && !quality.Available {
@@ -158,6 +166,25 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 				quality.HasUDPLoss != (transport == TransportUDP) ||
 				quality.HasKCPRetransmissions != (transport == TransportKCP) {
 				t.Fatalf("invalid quality availability: %+v", quality)
+			}
+			if micros, err := runtime.ClockMicros(); err != nil || micros == 0 {
+				t.Fatalf("game clock unavailable: %d, %v", micros, err)
+			}
+			deadline = time.Now().Add(3 * time.Second)
+			var clock GameClockSync
+			for time.Now().Before(deadline) && !clock.Available {
+				clock, err = runtime.ClockSyncSnapshot(clientSession)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !clock.Available {
+					if _, err := runtime.Poll(16, 10*time.Millisecond); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if !clock.Available || clock.Samples == 0 {
+				t.Fatalf("clock sync unavailable: %+v", clock)
 			}
 			metrics, err := runtime.PrometheusSnapshot()
 			if err != nil || !strings.Contains(metrics, "rnet_game_heartbeat_") {

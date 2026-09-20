@@ -131,6 +131,28 @@ type GameQuality struct {
 	KCPRetransmitted                uint64
 }
 
+// GameClockSync maps this client's runtime-local monotonic clock to the
+// server's runtime-local monotonic clock. It is not UTC or a trusted time source.
+type GameClockSync struct {
+	Available         bool
+	ServerMinusClient time.Duration
+	RTT               time.Duration
+	Samples           uint64
+}
+
+// GameRealtimeQueue reports runtime-wide LatestOnly staging; Forwarded means
+// admitted to the transport queue, not delivered to the peer.
+type GameRealtimeQueue struct {
+	QueuedMessages      uint64
+	QueuedBytes         uint64
+	AdmissionRejected   uint64
+	Replaced            uint64
+	ClosedDropped       uint64
+	BackpressureDropped uint64
+	SendFailed          uint64
+	Forwarded           uint64
+}
+
 func (event GameEvent) String() string {
 	return fmt.Sprintf("GameEvent{Type:%d Endpoint:%d Session:%d RelatedSession:%d Status:%d DataLen:%d AuxDataLen:%d}",
 		event.Type, event.Endpoint, event.Session, event.RelatedSession, event.Status,
@@ -380,6 +402,54 @@ func (r *GameRuntime) NetworkQuality(session Session) (GameQuality, error) {
 		Jitter:                          microseconds(C.uint64_t(raw.jitter_us)), Samples: uint64(raw.samples),
 		UDPExpected: uint64(raw.udp_expected), UDPMissing: uint64(raw.udp_missing),
 		KCPSegmentsSent: uint64(raw.kcp_segments_sent), KCPRetransmitted: uint64(raw.kcp_retransmitted),
+	}, nil
+}
+
+// ClockMicros returns microseconds since this runtime's monotonic origin.
+func (r *GameRuntime) ClockMicros() (uint64, error) {
+	handle, err := r.handleValue()
+	if err != nil {
+		return 0, err
+	}
+	var value C.uint64_t
+	if err := statusError(C.rnet_game_clock_micros(handle, &value)); err != nil {
+		return 0, err
+	}
+	return uint64(value), nil
+}
+
+// ClockSyncSnapshot returns the latest client-side four-timestamp sample.
+func (r *GameRuntime) ClockSyncSnapshot(session Session) (GameClockSync, error) {
+	handle, err := r.handleValue()
+	if err != nil {
+		return GameClockSync{}, err
+	}
+	var raw C.rnet_game_clock_sync_t
+	if err := statusError(C.rnet_game_clock_sync_snapshot(handle, C.rnet_session_t(session), &raw)); err != nil {
+		return GameClockSync{}, err
+	}
+	return GameClockSync{
+		Available:         raw.available != 0,
+		ServerMinusClient: time.Duration(raw.server_minus_client_us) * time.Microsecond,
+		RTT:               microseconds(C.uint64_t(raw.rtt_us)),
+		Samples:           uint64(raw.samples),
+	}, nil
+}
+
+func (r *GameRuntime) RealtimeQueueSnapshot() (GameRealtimeQueue, error) {
+	handle, err := r.handleValue()
+	if err != nil {
+		return GameRealtimeQueue{}, err
+	}
+	var raw C.rnet_game_realtime_queue_t
+	if err := statusError(C.rnet_game_realtime_queue_snapshot(handle, &raw)); err != nil {
+		return GameRealtimeQueue{}, err
+	}
+	return GameRealtimeQueue{
+		QueuedMessages: uint64(raw.queued_messages), QueuedBytes: uint64(raw.queued_bytes),
+		AdmissionRejected: uint64(raw.admission_rejected), Replaced: uint64(raw.replaced),
+		ClosedDropped: uint64(raw.closed_dropped), BackpressureDropped: uint64(raw.backpressure_dropped),
+		SendFailed: uint64(raw.send_failed), Forwarded: uint64(raw.forwarded),
 	}, nil
 }
 

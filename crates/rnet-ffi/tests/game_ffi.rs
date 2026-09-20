@@ -1,15 +1,16 @@
 use rnet::{
     rnet_game_auth_decide, rnet_game_buffer_release, rnet_game_client_connect,
-    rnet_game_client_resume_connect, rnet_game_config_init, rnet_game_endpoint_local_port,
-    rnet_game_issue_resume_ticket, rnet_game_network_quality, rnet_game_poll_events,
-    rnet_game_prometheus_snapshot, rnet_game_runtime_create, rnet_game_runtime_destroy,
+    rnet_game_client_resume_connect, rnet_game_clock_micros, rnet_game_clock_sync_snapshot,
+    rnet_game_config_init, rnet_game_endpoint_local_port, rnet_game_issue_resume_ticket,
+    rnet_game_network_quality, rnet_game_poll_events, rnet_game_prometheus_snapshot,
+    rnet_game_realtime_queue_snapshot, rnet_game_runtime_create, rnet_game_runtime_destroy,
     rnet_game_runtime_stop, rnet_game_send, rnet_game_send_latest, rnet_game_server_listen,
     rnet_game_session_close, rnet_runtime_create_v5, rnet_runtime_destroy, rnet_runtime_stop,
-    RnetClientSecurity, RnetConfigV5, RnetGameBuffer, RnetGameClientConfig, RnetGameConfig,
-    RnetGameEvent, RnetGameQuality, RnetGameServerConfig, RnetSlice, RNET_ABI_VERSION,
-    RNET_E_HANDSHAKE_REQUIRED, RNET_E_INVALID_ARGUMENT, RNET_E_INVALID_HANDLE,
-    RNET_E_INVALID_STATE, RNET_E_WOULD_BLOCK, RNET_GAME_AUTH_REQUEST, RNET_GAME_MESSAGE,
-    RNET_GAME_RESUME_REQUEST, RNET_GAME_RESUME_TICKET, RNET_GAME_SESSION_READY,
+    RnetClientSecurity, RnetConfigV5, RnetGameBuffer, RnetGameClientConfig, RnetGameClockSync,
+    RnetGameConfig, RnetGameEvent, RnetGameQuality, RnetGameRealtimeQueue, RnetGameServerConfig,
+    RnetSlice, RNET_ABI_VERSION, RNET_E_HANDSHAKE_REQUIRED, RNET_E_INVALID_ARGUMENT,
+    RNET_E_INVALID_HANDLE, RNET_E_INVALID_STATE, RNET_E_WOULD_BLOCK, RNET_GAME_AUTH_REQUEST,
+    RNET_GAME_MESSAGE, RNET_GAME_RESUME_REQUEST, RNET_GAME_RESUME_TICKET, RNET_GAME_SESSION_READY,
     RNET_GAME_SESSION_RESUMED, RNET_OK, RNET_TRANSPORT_TCP,
 };
 use rnet_security::Keypair;
@@ -218,10 +219,36 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
     }
     assert!(client_session.is_some());
     assert!(received);
+    let mut realtime = RnetGameRealtimeQueue::default();
+    assert_eq!(
+        unsafe { rnet_game_realtime_queue_snapshot(runtime, &mut realtime) },
+        RNET_OK
+    );
+    assert_eq!(
+        realtime.struct_size as usize,
+        size_of::<RnetGameRealtimeQueue>()
+    );
+    assert_eq!(realtime.queued_messages, 0);
+    assert_eq!(realtime.replaced, 0);
+    assert_eq!(
+        unsafe { rnet_game_realtime_queue_snapshot(runtime, std::ptr::null_mut()) },
+        RNET_E_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { rnet_game_send_latest(runtime, client_session.unwrap(), 7, slice(b"stale")) },
+        RNET_OK
+    );
     assert_eq!(
         unsafe { rnet_game_send_latest(runtime, client_session.unwrap(), 7, slice(b"latest")) },
         RNET_OK
     );
+    assert_eq!(
+        unsafe { rnet_game_realtime_queue_snapshot(runtime, &mut realtime) },
+        RNET_OK
+    );
+    assert_eq!(realtime.queued_messages, 1);
+    assert!(realtime.queued_bytes >= b"latest".len() as u64);
+    assert_eq!(realtime.replaced, 1);
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut latest_received = false;
     while Instant::now() < deadline && !latest_received {
@@ -250,6 +277,12 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
         }
     }
     assert!(latest_received);
+    assert_eq!(
+        unsafe { rnet_game_realtime_queue_snapshot(runtime, &mut realtime) },
+        RNET_OK
+    );
+    assert_eq!(realtime.queued_messages, 0);
+    assert!(realtime.forwarded >= 1);
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut quality = RnetGameQuality::default();
     while Instant::now() < deadline && quality.available == 0 {
@@ -287,6 +320,57 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
     assert_eq!(quality.basis, 1);
     assert_eq!(quality.has_udp_loss, 0);
     assert_eq!(quality.has_kcp_retransmissions, 0);
+    let mut clock_us = 0;
+    assert_eq!(
+        unsafe { rnet_game_clock_micros(runtime, &mut clock_us) },
+        RNET_OK
+    );
+    assert!(clock_us > 0);
+    assert_eq!(
+        unsafe { rnet_game_clock_micros(runtime, std::ptr::null_mut()) },
+        RNET_E_INVALID_ARGUMENT
+    );
+    let mut clock = RnetGameClockSync::default();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && clock.available == 0 {
+        assert_eq!(
+            unsafe { rnet_game_clock_sync_snapshot(runtime, client_session.unwrap(), &mut clock) },
+            RNET_OK
+        );
+        if clock.available == 0 {
+            let mut events = [RnetGameEvent::default(); 16];
+            let mut count = 0;
+            assert_eq!(
+                unsafe {
+                    rnet_game_poll_events(
+                        runtime,
+                        events.as_mut_ptr(),
+                        events.len(),
+                        10,
+                        &mut count,
+                    )
+                },
+                RNET_OK
+            );
+            for event in events.iter().take(count) {
+                if event.buffer_token != 0 {
+                    assert_eq!(
+                        rnet_game_buffer_release(runtime, event.buffer_token),
+                        RNET_OK
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(clock.available, 1);
+    assert!(clock.samples >= 1);
+    assert_eq!(clock.struct_size as usize, size_of::<RnetGameClockSync>());
+    assert_eq!(
+        unsafe {
+            rnet_game_clock_sync_snapshot(runtime, client_session.unwrap(), std::ptr::null_mut())
+        },
+        RNET_E_INVALID_ARGUMENT
+    );
     let mut prometheus = RnetGameBuffer::default();
     assert_eq!(
         unsafe { rnet_game_prometheus_snapshot(runtime, &mut prometheus) },

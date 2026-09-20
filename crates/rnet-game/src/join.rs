@@ -3,8 +3,10 @@
 use crate::config::GameProtocol;
 use rnet_core::{ErrorCode, Result, RnetError};
 
-const MAGIC: &[u8; 4] = b"RGJ2";
-const RESUME_MAGIC: &[u8; 4] = b"RGJ3";
+// The old RGJ3 marker denoted a v2 resume join, so v3 uses disjoint markers
+// for ordinary and resumed joins. Old clients fail before business authorization.
+const MAGIC: &[u8; 4] = b"RGV3";
+const RESUME_MAGIC: &[u8; 4] = b"RGR3";
 pub(crate) const HEADER_LEN: usize = 34;
 const RESUME_HEADER_LEN: usize = 36;
 

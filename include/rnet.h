@@ -635,6 +635,33 @@ typedef struct rnet_game_quality {
   uint64_t kcp_retransmitted;
 } rnet_game_quality_t;
 
+/* Four-timestamp sample. Offset maps the client runtime-local monotonic clock
+ * to the server runtime-local monotonic clock; never use it as UTC or trust. */
+typedef struct rnet_game_clock_sync {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t available;
+  uint32_t reserved;
+  int64_t server_minus_client_us;
+  uint64_t rtt_us;
+  uint64_t samples;
+} rnet_game_clock_sync_t;
+
+/* Runtime-wide LatestOnly staging metrics. Gauges describe the current
+ * pre-transport queue; forwarded counts transport admission, not delivery. */
+typedef struct rnet_game_realtime_queue {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint64_t queued_messages;
+  uint64_t queued_bytes;
+  uint64_t admission_rejected;
+  uint64_t replaced;
+  uint64_t closed_dropped;
+  uint64_t backpressure_dropped;
+  uint64_t send_failed;
+  uint64_t forwarded;
+} rnet_game_realtime_queue_t;
+
 typedef struct rnet_game_buffer {
   uint32_t struct_size;
   uint32_t abi_version;
@@ -681,6 +708,12 @@ int32_t rnet_game_security_set(rnet_runtime_t runtime,
 int32_t rnet_game_network_quality(rnet_runtime_t runtime,
                                   rnet_session_t session,
                                   rnet_game_quality_t *out);
+int32_t rnet_game_clock_micros(rnet_runtime_t runtime, uint64_t *out);
+int32_t rnet_game_clock_sync_snapshot(rnet_runtime_t runtime,
+                                      rnet_session_t session,
+                                      rnet_game_clock_sync_t *out);
+int32_t rnet_game_realtime_queue_snapshot(
+    rnet_runtime_t runtime, rnet_game_realtime_queue_t *out);
 /* Prometheus text has no per-player labels; release its nonzero token. */
 int32_t rnet_game_prometheus_snapshot(rnet_runtime_t runtime,
                                       rnet_game_buffer_t *out);

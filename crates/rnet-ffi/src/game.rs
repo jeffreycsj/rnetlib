@@ -2,8 +2,8 @@
 
 use crate::abi::{RnetClientSecurity, RnetSlice};
 use crate::game_abi::{
-    RnetGameBuffer, RnetGameClientConfig, RnetGameConfig, RnetGameEvent, RnetGameQuality,
-    RnetGameServerConfig,
+    RnetGameBuffer, RnetGameClientConfig, RnetGameClockSync, RnetGameConfig, RnetGameEvent,
+    RnetGameQuality, RnetGameRealtimeQueue, RnetGameServerConfig,
 };
 use crate::game_events;
 use crate::game_registry;
@@ -379,6 +379,62 @@ pub unsafe extern "C" fn rnet_game_network_quality(
             .runtime
             .network_quality(session)?;
         unsafe { out.write(quality.map_or_else(RnetGameQuality::default, Into::into)) };
+        Ok(())
+    })
+}
+
+#[no_mangle]
+/// Runtime-local monotonic microseconds, not a wall-clock timestamp.
+/// # Safety
+/// `out` must point to writable storage for one `u64`.
+pub unsafe extern "C" fn rnet_game_clock_micros(runtime: u64, out: *mut u64) -> i32 {
+    ffi_status(|| {
+        if out.is_null() {
+            return invalid_argument("game clock output is null");
+        }
+        let now = game_registry::lease(runtime)?.runtime.clock_micros();
+        unsafe { out.write(now) };
+        Ok(())
+    })
+}
+
+#[no_mangle]
+/// # Safety
+/// `out` must point to writable storage for one `RnetGameClockSync`.
+pub unsafe extern "C" fn rnet_game_clock_sync_snapshot(
+    runtime: u64,
+    session: u64,
+    out: *mut RnetGameClockSync,
+) -> i32 {
+    ffi_status(|| {
+        if out.is_null() {
+            return invalid_argument("game clock snapshot output is null");
+        }
+        let sample = game_registry::lease(runtime)?
+            .runtime
+            .clock_sync_snapshot(session)?;
+        unsafe { out.write(sample.map_or_else(RnetGameClockSync::default, Into::into)) };
+        Ok(())
+    })
+}
+
+#[no_mangle]
+/// Returns runtime-wide `LatestOnly` staging gauges and cumulative loss counters.
+///
+/// # Safety
+/// `out` must point to writable storage for one `RnetGameRealtimeQueue`.
+pub unsafe extern "C" fn rnet_game_realtime_queue_snapshot(
+    runtime: u64,
+    out: *mut RnetGameRealtimeQueue,
+) -> i32 {
+    ffi_status(|| {
+        if out.is_null() {
+            return invalid_argument("game realtime queue output is null");
+        }
+        let snapshot = game_registry::lease(runtime)?
+            .runtime
+            .realtime_queue_snapshot();
+        unsafe { out.write(snapshot.into()) };
         Ok(())
     })
 }

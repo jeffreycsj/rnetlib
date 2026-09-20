@@ -6,7 +6,7 @@ use crate::event::{completed_operation, security_changed_event, SecurityOperatio
 use crate::metrics::LatencyKind;
 use crate::record_reader::RecordReader;
 use crate::state::{
-    game_control_event, message_event, push_tcp_event, receive_security_command,
+    game_control_event, message_event_with_integrity, push_tcp_event, receive_security_command,
     remove_session_with_reason, session_active, wait_for_deadline, Outbound, OutboundKind,
     SecurityCommand, Shared,
 };
@@ -209,7 +209,16 @@ async fn process_inbound(
                 .metrics
                 .bytes_received
                 .fetch_add(frame.body.len() as u64, Ordering::Relaxed);
-            push_tcp_event(shared, message_event(endpoint, session, frame)).await;
+            push_tcp_event(
+                shared,
+                message_event_with_integrity(
+                    endpoint,
+                    session,
+                    frame,
+                    record.kind == RecordKind::Protected,
+                ),
+            )
+            .await;
         }
         ProtectedKind::GameControl if record.kind == RecordKind::Protected => {
             if message.payload.len() > shared.config.max_body_len {

@@ -231,6 +231,10 @@ impl GameRuntime {
                 ..
             } => self.handle_heartbeat_event(event),
             DecodedEnvelope::Control {
+                kind: ControlKind::ClockSync,
+                payload,
+            } => self.handle_clock_sync_event(event, &payload),
+            DecodedEnvelope::Control {
                 kind: ControlKind::Resume,
                 payload,
             } => {

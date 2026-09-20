@@ -72,6 +72,26 @@ struct GameQuality {
   uint64_t kcp_retransmitted = 0;
 };
 
+// Runtime-local offset, not UTC or an authenticated time authority.
+struct GameClockSync {
+  bool available = false;
+  int64_t server_minus_client_us = 0;
+  uint64_t rtt_us = 0;
+  uint64_t samples = 0;
+};
+
+// Runtime-wide pre-transport snapshot queue; forwarded is not delivery.
+struct GameRealtimeQueue {
+  uint64_t queued_messages = 0;
+  uint64_t queued_bytes = 0;
+  uint64_t admission_rejected = 0;
+  uint64_t replaced = 0;
+  uint64_t closed_dropped = 0;
+  uint64_t backpressure_dropped = 0;
+  uint64_t send_failed = 0;
+  uint64_t forwarded = 0;
+};
+
 class GameRuntime {
  public:
   GameRuntime() {
@@ -228,6 +248,38 @@ class GameRuntime {
     value.udp_missing = raw.udp_missing;
     value.kcp_segments_sent = raw.kcp_segments_sent;
     value.kcp_retransmitted = raw.kcp_retransmitted;
+    return value;
+  }
+
+  uint64_t clock_micros() const {
+    uint64_t value = 0;
+    check(rnet_game_clock_micros(handle_, &value));
+    return value;
+  }
+
+  GameClockSync clock_sync_snapshot(rnet_session_t session) const {
+    rnet_game_clock_sync_t raw{};
+    check(rnet_game_clock_sync_snapshot(handle_, session, &raw));
+    GameClockSync value;
+    value.available = raw.available != 0;
+    value.server_minus_client_us = raw.server_minus_client_us;
+    value.rtt_us = raw.rtt_us;
+    value.samples = raw.samples;
+    return value;
+  }
+
+  GameRealtimeQueue realtime_queue_snapshot() const {
+    rnet_game_realtime_queue_t raw{};
+    check(rnet_game_realtime_queue_snapshot(handle_, &raw));
+    GameRealtimeQueue value;
+    value.queued_messages = raw.queued_messages;
+    value.queued_bytes = raw.queued_bytes;
+    value.admission_rejected = raw.admission_rejected;
+    value.replaced = raw.replaced;
+    value.closed_dropped = raw.closed_dropped;
+    value.backpressure_dropped = raw.backpressure_dropped;
+    value.send_failed = raw.send_failed;
+    value.forwarded = raw.forwarded;
     return value;
   }
 

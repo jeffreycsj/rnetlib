@@ -30,7 +30,7 @@ fn poll_until(runtime: &NetworkRuntime, event_type: EventType) -> Event {
     );
 }
 
-fn assert_message(runtime: &NetworkRuntime, expected: &[u8], stage: &str) {
+fn assert_message(runtime: &NetworkRuntime, expected: &[u8], stage: &str) -> Event {
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut event = None;
     while Instant::now() < deadline && event.is_none() {
@@ -46,6 +46,7 @@ fn assert_message(runtime: &NetworkRuntime, expected: &[u8], stage: &str) {
         )
     });
     assert_eq!(event.data, expected);
+    event
 }
 
 fn establish_pair(
@@ -152,7 +153,7 @@ fn assert_transport_follows_server_security_changes(transport: Transport) {
     assert_ne!(client_session, 0);
 
     runtime.send(client_session, 1, b"plain").unwrap();
-    assert_message(&runtime, b"plain", "plain");
+    assert!(!assert_message(&runtime, b"plain", "plain").integrity_verified);
 
     runtime
         .set_security_mode(server_session, SecurityMode::Encrypted)
@@ -163,7 +164,7 @@ fn assert_transport_follows_server_security_changes(transport: Transport) {
         SecurityOperation::ModeSwitch
     );
     runtime.send(client_session, 1, b"encrypted").unwrap();
-    assert_message(&runtime, b"encrypted", "encrypted");
+    assert!(assert_message(&runtime, b"encrypted", "encrypted").integrity_verified);
 
     runtime
         .rekey_session(server_session)
@@ -174,14 +175,14 @@ fn assert_transport_follows_server_security_changes(transport: Transport) {
     assert_eq!(change.mode, SecurityMode::Encrypted);
     assert!(change.epoch >= 3);
     runtime.send(client_session, 1, b"rekeyed").unwrap();
-    assert_message(&runtime, b"rekeyed", "rekeyed");
+    assert!(assert_message(&runtime, b"rekeyed", "rekeyed").integrity_verified);
 
     runtime
         .set_security_mode(server_session, SecurityMode::Plaintext)
         .expect("request plaintext");
     poll_until(&runtime, EventType::SecurityChanged);
     runtime.send(client_session, 1, b"plain-again").unwrap();
-    assert_message(&runtime, b"plain-again", "plain-again");
+    assert!(!assert_message(&runtime, b"plain-again", "plain-again").integrity_verified);
 }
 
 #[test]

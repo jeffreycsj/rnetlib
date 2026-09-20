@@ -2,7 +2,9 @@
 
 use crate::abi::{RnetSlice, RNET_ABI_VERSION};
 use crate::abi_config::RnetConfigV5;
-use rnet_game::{NetworkQuality, QualityBasis, QualityGrade};
+use rnet_game::{
+    ClockSyncSample, NetworkQuality, QualityBasis, QualityGrade, RealtimeQueueSnapshot,
+};
 use std::mem::size_of;
 
 pub const RNET_GAME_RUNTIME_STARTED: u32 = 1;
@@ -226,6 +228,96 @@ impl From<NetworkQuality> for RnetGameQuality {
             out.kcp_retransmitted = retransmissions.retransmitted;
         }
         out
+    }
+}
+
+/// `server_minus_client_us` maps this client runtime's monotonic clock to the
+/// server runtime's monotonic clock; it is not a UTC or security time source.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RnetGameClockSync {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub available: u32,
+    pub reserved: u32,
+    pub server_minus_client_us: i64,
+    pub rtt_us: u64,
+    pub samples: u64,
+}
+
+impl Default for RnetGameClockSync {
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: RNET_ABI_VERSION,
+            available: 0,
+            reserved: 0,
+            server_minus_client_us: 0,
+            rtt_us: 0,
+            samples: 0,
+        }
+    }
+}
+
+impl From<ClockSyncSample> for RnetGameClockSync {
+    fn from(sample: ClockSyncSample) -> Self {
+        Self {
+            available: 1,
+            server_minus_client_us: sample.server_minus_client_us,
+            rtt_us: micros(sample.rtt),
+            samples: sample.samples,
+            ..Self::default()
+        }
+    }
+}
+
+/// Runtime-wide staging gauges and cumulative counters. Forwarded means admitted to the
+/// transport send queue, not delivered to the peer; no per-player labels or payloads appear.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RnetGameRealtimeQueue {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub queued_messages: u64,
+    pub queued_bytes: u64,
+    pub admission_rejected: u64,
+    pub replaced: u64,
+    pub closed_dropped: u64,
+    pub backpressure_dropped: u64,
+    pub send_failed: u64,
+    pub forwarded: u64,
+}
+
+impl Default for RnetGameRealtimeQueue {
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: RNET_ABI_VERSION,
+            queued_messages: 0,
+            queued_bytes: 0,
+            admission_rejected: 0,
+            replaced: 0,
+            closed_dropped: 0,
+            backpressure_dropped: 0,
+            send_failed: 0,
+            forwarded: 0,
+        }
+    }
+}
+
+impl From<RealtimeQueueSnapshot> for RnetGameRealtimeQueue {
+    fn from(value: RealtimeQueueSnapshot) -> Self {
+        Self {
+            queued_messages: u64::try_from(value.queued_messages).unwrap_or(u64::MAX),
+            queued_bytes: u64::try_from(value.queued_bytes).unwrap_or(u64::MAX),
+            admission_rejected: value.admission_rejected,
+            replaced: value.replaced,
+            closed_dropped: value.closed_dropped,
+            backpressure_dropped: value.backpressure_dropped,
+            send_failed: value.send_failed,
+            forwarded: value.forwarded,
+            ..Self::default()
+        }
     }
 }
 

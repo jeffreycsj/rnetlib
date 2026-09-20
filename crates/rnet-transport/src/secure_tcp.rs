@@ -6,7 +6,7 @@ use crate::state::fail_secure_session;
 use crate::state::insert_session_route;
 use crate::state::map_security_error;
 use crate::state::mark_session_established;
-use crate::state::message_event;
+use crate::state::message_event_with_integrity;
 use crate::state::push_endpoint_error;
 use crate::state::push_tcp_event;
 use crate::state::remove_session;
@@ -304,7 +304,11 @@ async fn run_secure_tcp_session(
                     .metrics
                     .bytes_received
                     .fetch_add(frame.body.len() as u64, Ordering::Relaxed);
-                push_tcp_event(&shared, message_event(endpoint, session, frame)).await;
+                push_tcp_event(
+                    &shared,
+                    message_event_with_integrity(endpoint, session, frame, true),
+                )
+                .await;
                 continue;
             }
             Ok(None) => {}

@@ -60,13 +60,21 @@ int main() {
             return 3;
           first_received = true;
           runtime.send_latest(client_session, 7, std::string("cpp-latest"));
+          const rnet::GameRealtimeQueue queue = runtime.realtime_queue_snapshot();
+          if (queue.queued_messages != 1 || queue.queued_bytes == 0)
+            return 8;
           continue;
         }
         if (second_received || payload != "cpp-latest")
           return 3;
         second_received = true;
+        const rnet::GameRealtimeQueue queue = runtime.realtime_queue_snapshot();
+        if (queue.queued_messages != 0 || queue.forwarded == 0)
+          return 8;
         const rnet::GameQuality quality = runtime.network_quality(server_session);
+        const rnet::GameClockSync clock = runtime.clock_sync_snapshot(client_session);
         if (quality.has_udp_loss || quality.has_kcp_retransmissions ||
+            runtime.clock_micros() == 0 || (clock.samples > 0) != clock.available ||
             runtime.prometheus_snapshot().find("rnet_game_heartbeat_") ==
                 std::string::npos)
           return 7;

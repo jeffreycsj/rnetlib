@@ -13,6 +13,8 @@ rnet_game_auth_decide
 rnet_game_buffer_release
 rnet_game_client_connect
 rnet_game_client_resume_connect
+rnet_game_clock_micros
+rnet_game_clock_sync_snapshot
 rnet_game_config_init
 rnet_game_endpoint_close
 rnet_game_endpoint_local_port
@@ -20,6 +22,7 @@ rnet_game_issue_resume_ticket
 rnet_game_network_quality
 rnet_game_poll_events
 rnet_game_prometheus_snapshot
+rnet_game_realtime_queue_snapshot
 rnet_game_rekey
 rnet_game_runtime_create
 rnet_game_runtime_destroy

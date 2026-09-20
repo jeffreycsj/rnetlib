@@ -686,6 +686,11 @@ fn closing_one_session_is_observable_and_does_not_close_the_endpoint() {
                 && event.session == client_session
                 && event.status == RNET_E_CANCELLED
         });
+        for event in &events[..count] {
+            if event.buffer_token != 0 {
+                assert_eq!(rnet_buffer_release(runtime, event.buffer_token), RNET_OK);
+            }
+        }
     }
     assert!(closed);
     assert_eq!(
@@ -704,6 +709,11 @@ fn closing_one_session_is_observable_and_does_not_close_the_endpoint() {
     assert!(!events[..count].iter().any(|event| {
         event.event_type == RnetEventType::Message as u32 && event.session == client_session
     }));
+    for event in &events[..count] {
+        if event.buffer_token != 0 {
+            assert_eq!(rnet_buffer_release(runtime, event.buffer_token), RNET_OK);
+        }
+    }
 
     assert_eq!(rnet_runtime_stop(runtime, 0), RNET_OK);
     assert_eq!(rnet_runtime_destroy(runtime), RNET_OK);
