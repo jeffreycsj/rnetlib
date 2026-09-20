@@ -4,5 +4,6 @@
 #include "rnet/types.hpp"
 #include "rnet/keypair.hpp"
 #include "rnet/runtime.hpp"
+#include "rnet/game.hpp"
 
 #endif

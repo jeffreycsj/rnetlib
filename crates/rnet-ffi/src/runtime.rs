@@ -194,15 +194,20 @@ pub unsafe extern "C" fn rnet_runtime_create_v5(
             config.abi_version,
             size_of::<RnetConfigV5>(),
         )?;
-        let socket = config.v4_fields();
-        let mut runtime_config = runtime_config_v3(socket.v3_fields())?;
-        runtime_config.tcp_nodelay = socket.tcp_nodelay != 0;
-        runtime_config.tcp_send_buffer_bytes = optional_usize(socket.tcp_send_buffer_bytes)?;
-        runtime_config.tcp_recv_buffer_bytes = optional_usize(socket.tcp_recv_buffer_bytes)?;
-        runtime_config.max_endpoints = config.max_endpoints as usize;
-        runtime_config.max_pending_handshakes = config.max_pending_handshakes as usize;
+        let runtime_config = runtime_config_v5(config)?;
         unsafe { register_runtime(runtime_config, config.logger, config.logger_v2, client, out) }
     })
+}
+
+pub(crate) fn runtime_config_v5(config: RnetConfigV5) -> rnet_core::Result<RuntimeConfig> {
+    let socket = config.v4_fields();
+    let mut runtime_config = runtime_config_v3(socket.v3_fields())?;
+    runtime_config.tcp_nodelay = socket.tcp_nodelay != 0;
+    runtime_config.tcp_send_buffer_bytes = optional_usize(socket.tcp_send_buffer_bytes)?;
+    runtime_config.tcp_recv_buffer_bytes = optional_usize(socket.tcp_recv_buffer_bytes)?;
+    runtime_config.max_endpoints = config.max_endpoints as usize;
+    runtime_config.max_pending_handshakes = config.max_pending_handshakes as usize;
+    Ok(runtime_config)
 }
 
 fn runtime_config_v3(config: RnetConfigV3) -> rnet_core::Result<RuntimeConfig> {

@@ -12,6 +12,8 @@ cpp-test:
 	./target/rnet-cpp-echo
 	g++ -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp examples/cpp/secure_echo_smoke.cpp target/debug/librnet.a -lpthread -ldl -lm -o target/rnet-cpp-secure-echo
 	./target/rnet-cpp-secure-echo
+	g++ -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp examples/cpp/game_echo_smoke.cpp target/debug/librnet.a -lpthread -ldl -lm -o target/rnet-cpp-game-echo
+	./target/rnet-cpp-game-echo
 
 go-test:
 	cargo build -p rnet-ffi

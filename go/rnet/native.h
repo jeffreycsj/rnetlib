@@ -4,6 +4,91 @@
 #include "rnet.h"
 #include <string.h>
 
+static inline int32_t rnet_go_game_runtime_create(
+    const rnet_game_config_t *config, const rnet_config_v5_t *network_config,
+    const uint8_t *client_private_key,
+    const uint8_t *server_public_key, rnet_runtime_t *out) {
+  rnet_game_config_t configured = *config;
+  configured.network_config = network_config;
+  if (client_private_key == NULL || server_public_key == NULL) {
+    return rnet_game_runtime_create(&configured, NULL, out);
+  }
+  rnet_client_security_t security = {0};
+  security.struct_size = sizeof(security);
+  security.abi_version = RNET_ABI_VERSION;
+  security.local_private_key.ptr = client_private_key;
+  security.local_private_key.len = 32;
+  security.expected_server_public_key.ptr = server_public_key;
+  security.expected_server_public_key.len = 32;
+  return rnet_game_runtime_create(&configured, &security, out);
+}
+
+static inline int32_t rnet_go_game_server_listen(
+    rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
+    size_t host_len, uint16_t port, const uint8_t *private_key,
+    uint32_t initial_encryption, uint64_t protocol_id,
+    uint32_t protocol_version, rnet_endpoint_t *out) {
+  rnet_game_server_config_t config = {0};
+  config.struct_size = sizeof(config);
+  config.abi_version = RNET_ABI_VERSION;
+  config.transport = transport;
+  config.initial_encryption = initial_encryption;
+  config.bind_host.ptr = host;
+  config.bind_host.len = host_len;
+  config.bind_port = port;
+  config.local_private_key.ptr = private_key;
+  config.local_private_key.len = 32;
+  config.protocol_id = protocol_id;
+  config.protocol_version = protocol_version;
+  return rnet_game_server_listen(runtime, &config, out);
+}
+
+static inline int32_t rnet_go_game_client_connect(
+    rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
+    size_t host_len, uint16_t port, const uint8_t *join_ticket,
+    size_t join_ticket_len, uint64_t protocol_id, uint32_t protocol_version,
+    uint64_t build_id, uint64_t capabilities, rnet_endpoint_t *out) {
+  rnet_game_client_config_t config = {0};
+  config.struct_size = sizeof(config);
+  config.abi_version = RNET_ABI_VERSION;
+  config.transport = transport;
+  config.remote_host.ptr = host;
+  config.remote_host.len = host_len;
+  config.remote_port = port;
+  config.join_ticket.ptr = join_ticket;
+  config.join_ticket.len = join_ticket_len;
+  config.protocol_id = protocol_id;
+  config.protocol_version = protocol_version;
+  config.build_id = build_id;
+  config.capabilities = capabilities;
+  return rnet_game_client_connect(runtime, &config, out);
+}
+
+static inline int32_t rnet_go_game_client_resume_connect(
+    rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
+    size_t host_len, uint16_t port, const uint8_t *join_ticket,
+    size_t join_ticket_len, uint64_t protocol_id, uint32_t protocol_version,
+    uint64_t build_id, uint64_t capabilities, rnet_session_t old_session,
+    const uint8_t *resume_ticket, size_t resume_ticket_len,
+    rnet_endpoint_t *out) {
+  rnet_game_client_config_t config = {0};
+  config.struct_size = sizeof(config);
+  config.abi_version = RNET_ABI_VERSION;
+  config.transport = transport;
+  config.remote_host.ptr = host;
+  config.remote_host.len = host_len;
+  config.remote_port = port;
+  config.join_ticket.ptr = join_ticket;
+  config.join_ticket.len = join_ticket_len;
+  config.protocol_id = protocol_id;
+  config.protocol_version = protocol_version;
+  config.build_id = build_id;
+  config.capabilities = capabilities;
+  rnet_slice_t ticket = {resume_ticket, resume_ticket_len};
+  return rnet_game_client_resume_connect(runtime, &config, old_session,
+                                         ticket, out);
+}
+
 extern void rnet_go_log_v2_bridge(
     void *user_data, uint64_t timestamp_unix_ms, uint32_t level,
     uint8_t *event_name, size_t event_name_len, rnet_runtime_t runtime,

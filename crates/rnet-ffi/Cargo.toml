@@ -11,6 +11,8 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
 rnet-core = { version = "0.1.0", path = "../rnet-core" }
+rnet-game = { version = "0.1.0", path = "../rnet-game" }
 rnet-observe = { version = "0.1.0", path = "../rnet-observe" }
 rnet-security = { version = "0.1.0", path = "../rnet-security" }
 rnet-transport = { version = "0.1.0", path = "../rnet-transport" }
+zeroize = "1"

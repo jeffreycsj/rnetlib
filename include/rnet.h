@@ -515,6 +515,185 @@ int32_t rnet_latency_snapshot(rnet_runtime_t runtime,
 int32_t rnet_metrics_log_interval_set(rnet_runtime_t runtime,
                                       uint64_t interval_ms);
 
+/* Additive game facade. Game runtime handles are not interchangeable with
+ * transport runtime handles. The application never supplies msg_type or stream_id. */
+enum {
+  RNET_GAME_RUNTIME_STARTED = 1,
+  RNET_GAME_ENDPOINT_OPENED = 2,
+  RNET_GAME_ENDPOINT_ERROR = 3,
+  RNET_GAME_AUTH_REQUEST = 4,
+  RNET_GAME_RESUME_REQUEST = 5,
+  RNET_GAME_PROTOCOL_REJECTED = 6,
+  RNET_GAME_SESSION_READY = 7,
+  RNET_GAME_SESSION_RESUMED = 8,
+  RNET_GAME_RESUME_TICKET = 9,
+  RNET_GAME_SESSION_CLOSED = 10,
+  RNET_GAME_MESSAGE = 11,
+  RNET_GAME_WRITABLE = 12,
+  RNET_GAME_JOIN_FAILED = 13,
+  RNET_GAME_SECURITY_CHANGED = 14,
+  RNET_GAME_QUALITY_CHANGED = 15,
+  RNET_GAME_PROTOCOL_VIOLATION = 16,
+  RNET_GAME_RUNTIME_STOPPED = 17
+};
+
+typedef struct rnet_game_config {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  /* Zero selects the production default. */
+  uint32_t heartbeat_interval_ms;
+  uint32_t heartbeat_timeout_ms;
+  uint32_t allow_plaintext_business_data;
+  uint32_t reserved;
+  /* Optional borrowed V5 capacity/socket tuning; logger pointers must be NULL.
+   * The game-level plaintext flag remains authoritative. */
+  const rnet_config_v5_t *network_config;
+} rnet_game_config_t;
+
+typedef struct rnet_game_server_config {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t transport;
+  uint32_t initial_encryption;
+  rnet_slice_t bind_host; /* Numeric IPv4 or IPv6. */
+  uint16_t bind_port;
+  uint16_t reserved;
+  rnet_slice_t local_private_key;
+  uint64_t protocol_id;
+  uint32_t protocol_version;
+} rnet_game_server_config_t;
+
+typedef struct rnet_game_client_config {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t transport;
+  uint32_t reserved;
+  rnet_slice_t remote_host; /* Hostname or numeric address. */
+  uint16_t remote_port;
+  uint16_t reserved2;
+  rnet_slice_t join_ticket;
+  uint64_t protocol_id;
+  uint32_t protocol_version;
+  uint32_t reserved3;
+  uint64_t build_id;
+  uint64_t capabilities;
+} rnet_game_client_config_t;
+
+typedef struct rnet_game_event {
+  uint32_t struct_size;
+  uint32_t event_type;
+  rnet_endpoint_t endpoint;
+  rnet_session_t session;
+  rnet_session_t related_session; /* Old session for resume events. */
+  int32_t status;
+  /* Join ticket, identity, resume ticket, or opaque business payload. */
+  const uint8_t *data;
+  size_t data_len;
+  uint64_t buffer_token;
+  /* The resume request's separate join ticket. */
+  const uint8_t *aux_data;
+  size_t aux_data_len;
+  uint64_t aux_buffer_token;
+  uint8_t client_public_key[32];
+  uint64_t build_id;
+  uint64_t capabilities;
+  uint32_t encrypted;
+  uint64_t security_epoch;
+  uint32_t security_operation;
+  /* Grades: 0 unknown, 1 excellent, 2 good, 3 fair, 4 poor.
+   * Basis: 1 latency, 2 UDP sequence gap, 3 KCP retransmission. */
+  uint32_t quality_grade;
+  uint32_t quality_basis;
+  uint64_t last_rtt_us;
+  uint64_t jitter_us;
+  uint64_t quality_samples;
+  uint32_t has_sequence;
+  uint32_t sequence;
+  uint32_t has_tick;
+  uint32_t tick;
+} rnet_game_event_t;
+
+/* Quality loss is a UDP sequence-gap estimate; KCP reports retransmission,
+ * not raw IP loss. TCP has neither loss nor retransmission availability. */
+typedef struct rnet_game_quality {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t available;
+  uint32_t grade;
+  uint32_t basis;
+  uint32_t has_udp_loss;
+  uint32_t has_kcp_retransmissions;
+  uint32_t udp_recent_loss_per_mille;
+  uint32_t kcp_recent_retransmission_per_mille;
+  uint64_t last_rtt_us;
+  uint64_t smoothed_rtt_us;
+  uint64_t jitter_us;
+  uint64_t samples;
+  uint64_t udp_expected;
+  uint64_t udp_missing;
+  uint64_t kcp_segments_sent;
+  uint64_t kcp_retransmitted;
+} rnet_game_quality_t;
+
+typedef struct rnet_game_buffer {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  const uint8_t *data;
+  size_t len;
+  uint64_t token;
+} rnet_game_buffer_t;
+
+int32_t rnet_game_config_init(rnet_game_config_t *out);
+int32_t rnet_game_runtime_create(const rnet_game_config_t *config,
+                                 const rnet_client_security_t *client_security,
+                                 rnet_runtime_t *out);
+int32_t rnet_game_server_listen(rnet_runtime_t runtime,
+                                const rnet_game_server_config_t *config,
+                                rnet_endpoint_t *out);
+int32_t rnet_game_client_connect(rnet_runtime_t runtime,
+                                 const rnet_game_client_config_t *config,
+                                 rnet_endpoint_t *out);
+/* Resume always yields new network handles, then requires another AUTH decision.
+ * The server emits RESUME_REQUEST and both sides receive SESSION_RESUMED. */
+int32_t rnet_game_client_resume_connect(
+    rnet_runtime_t runtime, const rnet_game_client_config_t *config,
+    rnet_session_t old_session, rnet_slice_t resume_ticket,
+    rnet_endpoint_t *out);
+int32_t rnet_game_issue_resume_ticket(rnet_runtime_t runtime,
+                                      rnet_session_t session,
+                                      rnet_slice_t identity);
+int32_t rnet_game_endpoint_local_port(rnet_runtime_t runtime,
+                                      rnet_endpoint_t endpoint, uint16_t *out_port);
+int32_t rnet_game_auth_decide(rnet_runtime_t runtime,
+                              rnet_session_t session, uint32_t accept);
+int32_t rnet_game_send(rnet_runtime_t runtime, rnet_session_t session,
+                       rnet_slice_t payload);
+/* Best-effort coalescing before transport admission; already admitted reliable
+ * messages cannot be withdrawn. The key is scoped to one session. */
+int32_t rnet_game_send_latest(rnet_runtime_t runtime, rnet_session_t session,
+                              uint64_t key, rnet_slice_t payload);
+int32_t rnet_game_session_close(rnet_runtime_t runtime, rnet_session_t session);
+int32_t rnet_game_endpoint_close(rnet_runtime_t runtime,
+                                 rnet_endpoint_t endpoint);
+int32_t rnet_game_rekey(rnet_runtime_t runtime, rnet_session_t session);
+int32_t rnet_game_security_set(rnet_runtime_t runtime,
+                               rnet_session_t session, uint32_t encrypted);
+int32_t rnet_game_network_quality(rnet_runtime_t runtime,
+                                  rnet_session_t session,
+                                  rnet_game_quality_t *out);
+/* Prometheus text has no per-player labels; release its nonzero token. */
+int32_t rnet_game_prometheus_snapshot(rnet_runtime_t runtime,
+                                      rnet_game_buffer_t *out);
+/* Both nonzero event buffer tokens must be released separately. Sensitive
+ * event bytes are erased by the library when their tokens are released. */
+int32_t rnet_game_poll_events(rnet_runtime_t runtime, rnet_game_event_t *events,
+                              size_t capacity, uint32_t timeout_ms,
+                              size_t *out_count);
+int32_t rnet_game_buffer_release(rnet_runtime_t runtime, uint64_t token);
+int32_t rnet_game_runtime_stop(rnet_runtime_t runtime,
+                               uint32_t drain_timeout_ms);
+int32_t rnet_game_runtime_destroy(rnet_runtime_t runtime);
+
 #ifdef __cplusplus
 }
 #endif

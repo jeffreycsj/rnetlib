@@ -2,9 +2,9 @@
 
 RNet is a bounded, event-driven networking foundation for client/server games. The new Rust `rnet-game` facade selects TCP, UDP, or KCP once at listener/connect time, then sends opaque business bytes with `send(session, payload)`; protobuf or another application schema owns its own message type. The server owns the encryption policy and can change it for a live session without changing the client API.
 
-The game facade is under active development, **not yet production-certified**. It currently provides authenticated joins with exact protocol ID/version gating, a no-`msg_type` send/receive API, numeric-IP and hostname connections, server-led plaintext/encrypted transitions, authenticated heartbeats with per-session RTT/jitter samples and aggregate heartbeat percentiles/counters, wire-v2 UDP sequence-gap estimates, KCP retransmission estimates, configurable quality grades and suppressed quality-change events, bounded `LatestOnly` staging, single-runtime one-use reconnect tickets, lifecycle controls, and transport metrics on TCP, UDP, and KCP. Clock synchronization, cross-instance/rolling-restart recovery, transport-queue cancellation after staging, and game-level C/C++11/Go bindings are still pending. The existing transport C ABI, C++11 wrapper, and Go wrapper remain available as advanced lower-level APIs.
+The game facade is under active development, **not yet production-certified**. It currently provides authenticated joins with exact protocol ID/version gating, a no-`msg_type` send/receive API, numeric-IP and hostname connections, server-led plaintext/encrypted transitions, authenticated heartbeats with per-session RTT/jitter samples and aggregate heartbeat percentiles/counters, wire-v2 UDP sequence-gap estimates, KCP retransmission estimates, configurable quality grades and suppressed quality-change events, bounded `LatestOnly` staging, single-runtime one-use reconnect tickets, lifecycle controls, and transport metrics on TCP, UDP, and KCP. Basic game-level C/C++11/Go facades now cover joining, authorization, sending, polling, lifecycle, resume, quality, and Prometheus text. Clock synchronization, cross-instance/rolling-restart recovery, transport-queue cancellation after staging, and full cross-language diagnostics parity remain pending.
 
-See [Game networking quick start](docs/game-networking.md) for the current Rust interface and its security boundaries.
+See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, and Go entry points and their security boundaries.
 
 ## Implemented capabilities
 
@@ -46,11 +46,11 @@ Create the client runtime with `GameRuntime::new_with_client_security` and a pin
 
 For replaceable state snapshots, use `send_latest(session, key, payload)`. Repeated sends with the same `(session, key)` are coalesced in a bounded game queue before forwarding on `poll(...)` or explicit `flush_realtime(capacity)`. TCP/KCP continue to preserve their ordinary reliable FIFO sends; an already forwarded message cannot be recalled from their transport queues.
 
-See the [game networking guide](docs/game-networking.md) and the [TCP/UDP/KCP integration test](crates/rnet-game/tests/game_runtime.rs) for client setup, event handling, and security transitions. Raw UDP does not guarantee delivery; choose KCP or TCP if your game requires reliable messages.
+See the [game networking guide](docs/game-networking.md), the [TCP/UDP/KCP integration test](crates/rnet-game/tests/game_runtime.rs), the [C++11 example](examples/cpp/game_echo_smoke.cpp), and the [Go tests](go/rnet/game_test.go) for client setup, event handling, and security transitions. Raw UDP does not guarantee delivery; choose KCP or TCP if your game requires reliable messages.
 
 ## Advanced transport APIs
 
-The underlying `NetworkRuntime` exposes transport-level configuration and events for integrations that need them. Its C ABI, C++11 wrapper, and Go wrapper are available today; game-level bindings for those languages are still planned.
+The underlying `NetworkRuntime` exposes transport-level configuration and events for integrations that need them. Its C ABI, C++11 wrapper, and Go wrapper remain available, but game integrations should use the game-level interfaces above so framing and authenticated controls are handled by the library.
 
 The equivalent public names are:
 
