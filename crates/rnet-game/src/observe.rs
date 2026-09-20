@@ -131,6 +131,35 @@ impl GameRuntime {
             "# TYPE rnet_game_heartbeat_rtt_max_us gauge\nrnet_game_heartbeat_rtt_max_us {}",
             metrics.rtt.max_us
         );
+        let realtime = self.realtime_queue_snapshot();
+        for (name, value) in [
+            (
+                "rnet_game_realtime_admission_rejected_total",
+                realtime.admission_rejected,
+            ),
+            ("rnet_game_realtime_replaced_total", realtime.replaced),
+            (
+                "rnet_game_realtime_closed_dropped_total",
+                realtime.closed_dropped,
+            ),
+            (
+                "rnet_game_realtime_backpressure_dropped_total",
+                realtime.backpressure_dropped,
+            ),
+            ("rnet_game_realtime_send_failed_total", realtime.send_failed),
+            ("rnet_game_realtime_forwarded_total", realtime.forwarded),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
+        }
+        for (name, value) in [
+            (
+                "rnet_game_realtime_queued_messages",
+                realtime.queued_messages,
+            ),
+            ("rnet_game_realtime_queued_bytes", realtime.queued_bytes),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
+        }
         output
     }
 

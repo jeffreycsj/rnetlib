@@ -26,6 +26,47 @@ pub struct SendOptions {
 }
 
 impl NetworkRuntime {
+    /// Checks size and ready-state without allocating or enqueuing a frame.
+    /// Staging layers use the same UDP frame ceiling as the normal send path.
+    pub fn validate_payload_len(&self, session: Handle, payload_len: usize) -> Result<()> {
+        if self.shared.state.load() != Lifecycle::Running {
+            return Err(RnetError::new(
+                ErrorCode::InvalidState,
+                "runtime is not accepting sends",
+            ));
+        }
+        if payload_len > self.shared.config.max_body_len {
+            return Err(RnetError::new(
+                ErrorCode::MessageTooLarge,
+                "payload exceeds configured body limit",
+            ));
+        }
+        let sessions = self.shared.sessions.lock().expect("session table poisoned");
+        let route = sessions
+            .get(session)
+            .ok_or_else(|| RnetError::new(ErrorCode::InvalidHandle, "invalid session"))?;
+        if !route.established {
+            return Err(RnetError::new(
+                ErrorCode::HandshakeRequired,
+                "session handshake has not completed",
+            ));
+        }
+        if let SessionTarget::Udp { max_frame_len, .. } = &route.target {
+            let frame_len = payload_len
+                .checked_add(rnet_protocol::HEADER_LEN)
+                .ok_or_else(|| {
+                    RnetError::new(ErrorCode::MessageTooLarge, "frame length overflow")
+                })?;
+            if frame_len > *max_frame_len {
+                return Err(RnetError::new(
+                    ErrorCode::MessageTooLarge,
+                    "encoded frame exceeds UDP datagram limit",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Requests a server-led data security mode change for an established unified session.
     pub fn set_security_mode(&self, session: Handle, mode: SecurityMode) -> Result<()> {
         if mode == SecurityMode::Plaintext

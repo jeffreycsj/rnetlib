@@ -1,6 +1,7 @@
 //! Public game-facing configuration.
 
 use crate::quality::QualityPolicy;
+use crate::realtime::RealtimeQueueConfig;
 use rnet_core::Transport;
 use rnet_security::Keypair;
 use rnet_transport::RuntimeConfig;
@@ -46,6 +47,8 @@ pub struct GameRuntimeConfig {
     pub heartbeat_timeout: Duration,
     /// Thresholds for RTT/jitter and, when available, UDP sequence-gap classification.
     pub quality_policy: QualityPolicy,
+    /// Independent bounded staging budget for coalesced realtime state messages.
+    pub realtime_queue: RealtimeQueueConfig,
 }
 
 impl GameRuntimeConfig {
@@ -56,6 +59,7 @@ impl GameRuntimeConfig {
             heartbeat_interval: Duration::from_secs(5),
             heartbeat_timeout: Duration::from_secs(15),
             quality_policy: QualityPolicy::default(),
+            realtime_queue: RealtimeQueueConfig::default(),
         }
     }
 
@@ -68,6 +72,11 @@ impl GameRuntimeConfig {
 
     pub fn with_quality_policy(mut self, policy: QualityPolicy) -> Self {
         self.quality_policy = policy;
+        self
+    }
+
+    pub fn with_realtime_queue(mut self, queue: RealtimeQueueConfig) -> Self {
+        self.realtime_queue = queue;
         self
     }
 
@@ -88,6 +97,7 @@ impl GameRuntimeConfig {
             heartbeat_interval: Duration::from_secs(5),
             heartbeat_timeout: Duration::from_secs(15),
             quality_policy: QualityPolicy::default(),
+            realtime_queue: RealtimeQueueConfig::default(),
         }
     }
 }

@@ -8,8 +8,7 @@ impl GameRuntime {
     /// Closes one game session while leaving its listener and other players active.
     pub fn close_session(&self, session: Handle) -> Result<()> {
         self.network.close_session(session, ErrorCode::Cancelled)?;
-        self.forget_session(session);
-        self.forget_quality_session(session);
+        self.forget_ready_session(session);
         Ok(())
     }
 
@@ -20,13 +19,25 @@ impl GameRuntime {
             .lock()
             .expect("heartbeat table poisoned")
             .clear();
+        self.ready_sessions
+            .write()
+            .expect("game ready table poisoned")
+            .clear();
         self.udp_sessions
             .lock()
             .expect("UDP quality table poisoned")
             .clear();
+        self.realtime
+            .lock()
+            .expect("realtime queue poisoned")
+            .clear();
         self.endpoint_transports
             .lock()
             .expect("game endpoint table poisoned")
+            .clear();
+        self.session_endpoints
+            .lock()
+            .expect("game session table poisoned")
             .clear();
         Ok(())
     }

@@ -1,9 +1,10 @@
 //! Established adaptive TCP data path and security-transition loop.
 
-use crate::adaptive_tcp::{decrypt_protected, read_wire, write_protected, write_wire};
+use crate::adaptive_tcp::{decrypt_protected, write_protected, write_wire};
 use crate::auto_rekey::AutoRekey;
 use crate::event::{completed_operation, security_changed_event, SecurityOperation};
 use crate::metrics::LatencyKind;
+use crate::record_reader::RecordReader;
 use crate::state::{
     game_control_event, message_event, push_tcp_event, receive_security_command,
     remove_session_with_reason, session_active, wait_for_deadline, Outbound, OutboundKind,
@@ -11,8 +12,8 @@ use crate::state::{
 };
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
 use rnet_protocol::control::{
-    decode_control, encode_control, ProtectedKind, ProtectedMessage, Record, RecordKind,
-    SecurityMode,
+    decode_control, decode_record, encode_control, ProtectedKind, ProtectedMessage, Record,
+    RecordKind, SecurityMode,
 };
 use rnet_protocol::decode_datagram;
 use rnet_security::transition::{Effect, SecurityController};
@@ -20,6 +21,7 @@ use rnet_security::SecureTransport;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
@@ -35,6 +37,7 @@ pub(crate) async fn run_adaptive_session(
     mut controller: SecurityController,
 ) {
     let max_payload = shared.config.max_body_len + rnet_protocol::HEADER_LEN + 64;
+    let mut records = RecordReader::new(max_payload + 84);
     let mut transition_deadline = None;
     let server_authoritative = commands.is_some();
     let mut automatic_rekey = AutoRekey::new(
@@ -43,6 +46,40 @@ pub(crate) async fn run_adaptive_session(
         Instant::now(),
     );
     let reason = loop {
+        // Drain complete records before polling again; an outbound wakeup cannot discard a
+        // partially received length prefix or body from the previous read.
+        match records.take() {
+            Ok(Some(encoded)) => {
+                let record = match decode_record(&encoded, max_payload + 64) {
+                    Ok(record) => record,
+                    Err(error) => break error.code(),
+                };
+                if let Err(error) = process_inbound(
+                    &shared,
+                    endpoint,
+                    session,
+                    &mut stream,
+                    &mut transport,
+                    &mut controller,
+                    record,
+                    max_payload,
+                )
+                .await
+                {
+                    shared
+                        .metrics
+                        .protocol_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                    break error.code();
+                }
+                if !controller.is_transitioning() {
+                    transition_deadline = None;
+                }
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => break error.code(),
+        }
         let automatic_deadline = if server_authoritative
             && controller.mode() == SecurityMode::Encrypted
             && !controller.is_transitioning()
@@ -59,20 +96,11 @@ pub(crate) async fn run_adaptive_session(
             None
         };
         tokio::select! {
-            inbound = read_wire(&mut stream, max_payload + 64) => {
-                let record = match inbound {
-                    Ok(value) => value,
-                    Err(error) => break error.code(),
-                };
-                if let Err(error) = process_inbound(
-                    &shared, endpoint, session, &mut stream, &mut transport,
-                    &mut controller, record, max_payload,
-                ).await {
-                    shared.metrics.protocol_errors.fetch_add(1, Ordering::Relaxed);
-                    break error.code();
-                }
-                if !controller.is_transitioning() {
-                    transition_deadline = None;
+            inbound = stream.read_buf(records.buffer_mut()) => {
+                match inbound {
+                    Ok(0) => break ErrorCode::IoError,
+                    Ok(_) => {}
+                    Err(_) => break ErrorCode::IoError,
                 }
             }
             outbound = receiver.recv(), if !controller.is_transitioning() => {

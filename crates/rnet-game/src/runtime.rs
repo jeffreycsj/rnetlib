@@ -9,15 +9,16 @@ use crate::heartbeat::HeartbeatTracker;
 use crate::join;
 use crate::observe::HeartbeatMetrics;
 use crate::quality::{QualityPolicy, UdpSessionQuality};
+use crate::realtime::LatestQueue;
 use rnet_core::{ErrorCode, Event, EventType, Handle, Result, RnetError, Transport};
 use rnet_protocol::control::SecurityMode;
 use rnet_transport::{
     AuthRequest, ClientConfig, ClientSecurity, HostClientConfig, NetworkRuntime, SecurityChange,
     ServerConfig,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 /// Optional network metadata. Business message typing remains inside `payload`.
@@ -33,12 +34,16 @@ pub struct GameRuntime {
     pub(crate) maximum_envelope_len: usize,
     server_protocols: Mutex<HashMap<Handle, GameProtocol>>,
     pub(crate) endpoint_transports: Mutex<HashMap<Handle, Transport>>,
+    pub(crate) session_endpoints: Mutex<HashMap<Handle, Handle>>,
     pub(crate) udp_sessions: Mutex<HashMap<Handle, Arc<Mutex<UdpSessionQuality>>>>,
     pub(crate) heartbeat_interval: Duration,
     pub(crate) heartbeat_timeout: Duration,
     pub(crate) heartbeat_trackers: Mutex<HashMap<Handle, HeartbeatTracker>>,
+    pub(crate) ready_sessions: RwLock<HashSet<Handle>>,
     pub(crate) heartbeat_metrics: HeartbeatMetrics,
     pub(crate) quality_policy: QualityPolicy,
+    pub(crate) realtime: Mutex<LatestQueue>,
+    pub(crate) realtime_flush_batch: usize,
     poll_guard: Mutex<()>,
 }
 
@@ -75,18 +80,24 @@ impl GameRuntime {
             ));
         }
         let maximum_envelope_len = config.network.max_body_len;
+        let realtime = LatestQueue::from_config(config.realtime_queue)?;
+        let realtime_flush_batch = config.realtime_queue.flush_batch;
         let network = NetworkRuntime::new_with_client_security(config.network, client_security)?;
         Ok(Self {
             network,
             maximum_envelope_len,
             server_protocols: Mutex::new(HashMap::new()),
             endpoint_transports: Mutex::new(HashMap::new()),
+            session_endpoints: Mutex::new(HashMap::new()),
             udp_sessions: Mutex::new(HashMap::new()),
             heartbeat_interval: config.heartbeat_interval,
             heartbeat_timeout: config.heartbeat_timeout,
             heartbeat_trackers: Mutex::new(HashMap::new()),
+            ready_sessions: RwLock::new(HashSet::new()),
             heartbeat_metrics: HeartbeatMetrics::default(),
             quality_policy: config.quality_policy,
+            realtime: Mutex::new(realtime),
+            realtime_flush_batch,
             poll_guard: Mutex::new(()),
         })
     }
@@ -183,15 +194,32 @@ impl GameRuntime {
 
     /// Closes an endpoint and releases its game protocol policy.
     pub fn close_endpoint(&self, endpoint: Handle) -> Result<()> {
+        // Keep listener policy and transport registration locked in the same order as listen.
+        // SessionOpened conversion holds the transport lock through game-ready registration, so
+        // an in-flight poll cannot recreate game state after this cleanup has taken its snapshot.
+        let mut protocols = self
+            .server_protocols
+            .lock()
+            .expect("game protocol table poisoned");
+        let mut transports = self
+            .endpoint_transports
+            .lock()
+            .expect("game endpoint table poisoned");
         self.network.close_endpoint(endpoint)?;
-        self.server_protocols
+        // Transport closure invalidates routes immediately. Do not keep game heartbeat or
+        // replaceable-send state alive until the caller happens to poll close notifications.
+        let sessions: Vec<_> = self
+            .session_endpoints
             .lock()
-            .expect("game protocol table poisoned")
-            .remove(&endpoint);
-        self.endpoint_transports
-            .lock()
-            .expect("game endpoint table poisoned")
-            .remove(&endpoint);
+            .expect("game session table poisoned")
+            .iter()
+            .filter_map(|(session, owner)| (*owner == endpoint).then_some(*session))
+            .collect();
+        for session in sessions {
+            self.forget_ready_session(session);
+        }
+        protocols.remove(&endpoint);
+        transports.remove(&endpoint);
         Ok(())
     }
 
@@ -201,6 +229,47 @@ impl GameRuntime {
 
     pub fn auth_decide(&self, session: Handle, accept: bool) -> Result<()> {
         self.network.auth_decide(session, accept)
+    }
+
+    /// A completed transport handshake is insufficient until the facade has published Ready.
+    pub(crate) fn ensure_game_ready(&self, session: Handle) -> Result<()> {
+        if self
+            .ready_sessions
+            .read()
+            .expect("game ready table poisoned")
+            .contains(&session)
+        {
+            Ok(())
+        } else {
+            // Distinguish a genuinely pending game session from a stale/closed handle. Callers
+            // can then discard stale ownership without treating it as a recoverable handshake.
+            self.network.validate_payload_len(session, 0)?;
+            Err(RnetError::new(
+                ErrorCode::HandshakeRequired,
+                "game session is not ready",
+            ))
+        }
+    }
+
+    pub(crate) fn forget_game_ready(&self, session: Handle) {
+        self.ready_sessions
+            .write()
+            .expect("game ready table poisoned")
+            .remove(&session);
+    }
+
+    pub(crate) fn forget_ready_session(&self, session: Handle) {
+        self.session_endpoints
+            .lock()
+            .expect("game session table poisoned")
+            .remove(&session);
+        self.forget_session(session);
+        self.forget_quality_session(session);
+        self.forget_game_ready(session);
+        self.realtime
+            .lock()
+            .expect("realtime queue poisoned")
+            .forget_session(session);
     }
 
     /// Sends opaque business bytes. Message typing belongs to the serialized payload.
@@ -247,6 +316,7 @@ impl GameRuntime {
         // Game controls are handled by the same event queue as lifecycle changes. Serializing
         // polls preserves their order and keeps challenge state single-writer.
         let _guard = self.poll_guard.lock().expect("game poll lock poisoned");
+        self.flush_realtime(self.realtime_flush_batch);
         let deadline = Instant::now().checked_add(timeout);
         let mut internal_events = 0usize;
         loop {
@@ -361,12 +431,11 @@ impl GameRuntime {
                 }
             }
             EventType::SessionOpened => {
-                let transport = self
+                let transports = self
                     .endpoint_transports
                     .lock()
-                    .expect("game endpoint table poisoned")
-                    .get(&event.endpoint)
-                    .copied();
+                    .expect("game endpoint table poisoned");
+                let transport = transports.get(&event.endpoint).copied();
                 let Some(transport) = transport else {
                     let _ = self
                         .network
@@ -375,14 +444,22 @@ impl GameRuntime {
                 };
                 self.track_session(event.session);
                 self.track_quality_session(event.session, transport);
+                self.session_endpoints
+                    .lock()
+                    .expect("game session table poisoned")
+                    .insert(event.session, event.endpoint);
+                self.ready_sessions
+                    .write()
+                    .expect("game ready table poisoned")
+                    .insert(event.session);
+                drop(transports);
                 GameEvent::SessionReady {
                     endpoint: event.endpoint,
                     session: event.session,
                 }
             }
             EventType::SessionClosed => {
-                self.forget_session(event.session);
-                self.forget_quality_session(event.session);
+                self.forget_ready_session(event.session);
                 GameEvent::SessionClosed {
                     endpoint: event.endpoint,
                     session: event.session,
@@ -496,6 +573,18 @@ mod tests {
         let error = GameRuntime::new(GameRuntimeConfig::production().with_quality_policy(policy))
             .err()
             .expect("unordered quality policy must be rejected");
+        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn runtime_rejects_invalid_realtime_queue_limits() {
+        let queue = crate::realtime::RealtimeQueueConfig {
+            flush_batch: 0,
+            ..Default::default()
+        };
+        let error = GameRuntime::new(GameRuntimeConfig::production().with_realtime_queue(queue))
+            .err()
+            .expect("zero flush batch must be rejected");
         assert_eq!(error.code(), ErrorCode::InvalidArgument);
     }
 

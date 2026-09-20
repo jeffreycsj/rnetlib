@@ -12,6 +12,8 @@ mod lifecycle;
 mod observe;
 mod quality;
 mod quality_runtime;
+mod realtime;
+mod realtime_runtime;
 mod runtime;
 
 pub use config::{
@@ -20,6 +22,7 @@ pub use config::{
 pub use event::{GameEvent, GameMessage, NetworkQuality, QualityBasis, QualityGrade};
 pub use observe::HeartbeatMetricsSnapshot;
 pub use quality::{QualityPolicy, UdpLossSnapshot};
+pub use realtime::{RealtimeQueueConfig, RealtimeQueueSnapshot};
 pub use rnet_transport::KcpRetransmissionSnapshot;
 pub use runtime::{GameRuntime, GameSendOptions};
 
@@ -31,3 +34,5 @@ mod heartbeat_tests;
 mod join_tests;
 #[cfg(test)]
 mod quality_tests;
+#[cfg(test)]
+mod realtime_tests;

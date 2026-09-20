@@ -2,7 +2,7 @@
 
 RNet is a bounded, event-driven networking foundation for client/server games. The new Rust `rnet-game` facade selects TCP, UDP, or KCP once at listener/connect time, then sends opaque business bytes with `send(session, payload)`; protobuf or another application schema owns its own message type. The server owns the encryption policy and can change it for a live session without changing the client API.
 
-The game facade is under active development, **not yet production-certified**. It currently provides authenticated joins with exact protocol ID/version gating, a no-`msg_type` send/receive API, numeric-IP and hostname connections, server-led plaintext/encrypted transitions, authenticated heartbeats with per-session RTT/jitter samples and aggregate heartbeat percentiles/counters, wire-v2 UDP sequence-gap estimates, KCP retransmission estimates, configurable quality grades and suppressed quality-change events, lifecycle controls, and transport metrics on TCP, UDP, and KCP. Clock synchronization, reconnect tickets, real-time replacement queues, and game-level C/C++11/Go bindings are still pending. The existing transport C ABI, C++11 wrapper, and Go wrapper remain available as advanced lower-level APIs.
+The game facade is under active development, **not yet production-certified**. It currently provides authenticated joins with exact protocol ID/version gating, a no-`msg_type` send/receive API, numeric-IP and hostname connections, server-led plaintext/encrypted transitions, authenticated heartbeats with per-session RTT/jitter samples and aggregate heartbeat percentiles/counters, wire-v2 UDP sequence-gap estimates, KCP retransmission estimates, configurable quality grades and suppressed quality-change events, bounded `LatestOnly` staging, lifecycle controls, and transport metrics on TCP, UDP, and KCP. Clock synchronization, reconnect tickets, transport-queue cancellation after staging, and game-level C/C++11/Go bindings are still pending. The existing transport C ABI, C++11 wrapper, and Go wrapper remain available as advanced lower-level APIs.
 
 See [Game networking quick start](docs/game-networking.md) for the current Rust interface and its security boundaries.
 
@@ -43,6 +43,8 @@ let listener = runtime.listen(GameServerConfig {
 ```
 
 Create the client runtime with `GameRuntime::new_with_client_security` and a pinned server public key, then call `connect` with a numeric address or `connect_host` with a hostname. The server receives `GameEvent::AuthRequest` and calls `auth_decide` after validating the join ticket. Both peers receive `GameEvent::SessionReady` before they use `send(session, payload)` and `poll(...)`. No business message type, stream ID, or transport argument is required on send. The server alone can call `set_encryption` or `rekey`; clients follow the authenticated change using the same session handle.
+
+For replaceable state snapshots, use `send_latest(session, key, payload)`. Repeated sends with the same `(session, key)` are coalesced in a bounded game queue before forwarding on `poll(...)` or explicit `flush_realtime(capacity)`. TCP/KCP continue to preserve their ordinary reliable FIFO sends; an already forwarded message cannot be recalled from their transport queues.
 
 See the [game networking guide](docs/game-networking.md) and the [TCP/UDP/KCP integration test](crates/rnet-game/tests/game_runtime.rs) for client setup, event handling, and security transitions. Raw UDP does not guarantee delivery; choose KCP or TCP if your game requires reliable messages.
 

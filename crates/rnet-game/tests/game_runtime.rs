@@ -20,6 +20,61 @@ fn game_api_sends_opaque_payload_and_follows_server_encryption_changes() {
 }
 
 #[test]
+fn game_send_waits_for_game_ready_event_even_if_transport_handshake_finished() {
+    let server_key = Keypair::generate().expect("server key");
+    let client_key = Keypair::generate().expect("client key");
+    let security = ClientSecurity::pinned(client_key, server_key.public.clone());
+    let runtime = GameRuntime::new_with_client_security(GameRuntimeConfig::production(), security)
+        .expect("runtime");
+    let listener = runtime
+        .listen(GameServerConfig {
+            transport: Transport::Tcp,
+            bind_addr: localhost(0),
+            local_key: server_key,
+            initial_encryption: true,
+            protocol: GameProtocol::new(91, 1),
+        })
+        .expect("listener");
+    runtime
+        .connect(GameClientConfig {
+            transport: Transport::Tcp,
+            bind_addr: None,
+            remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
+            join_ticket: b"ticket".to_vec(),
+            protocol: GameProtocol::new(91, 1),
+        })
+        .expect("client");
+    let auth = poll_until(&runtime, |event| {
+        matches!(event, GameEvent::AuthRequest { .. })
+    });
+    let GameEvent::AuthRequest { session, .. } = auth else {
+        unreachable!()
+    };
+    runtime.auth_decide(session, true).expect("authorize");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while runtime.metrics_snapshot().established_sessions < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(runtime.metrics_snapshot().established_sessions, 2);
+    assert_eq!(
+        runtime.send(session, b"early").unwrap_err().code(),
+        rnet_core::ErrorCode::HandshakeRequired
+    );
+    assert_eq!(
+        runtime
+            .send_latest(session, 1, b"early")
+            .unwrap_err()
+            .code(),
+        rnet_core::ErrorCode::HandshakeRequired
+    );
+    poll_until(
+        &runtime,
+        |event| matches!(event, GameEvent::SessionReady { session: ready, .. } if *ready == session),
+    );
+    runtime.send(session, b"ready").expect("ready send");
+}
+
+#[test]
 fn heartbeat_quality_uses_protected_controls_even_when_business_data_is_plaintext() {
     for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
         let server_key = Keypair::generate().expect("server key");
@@ -452,14 +507,61 @@ fn exercise_game_session(transport: Transport) {
         assert_eq!(loss, None, "TCP and KCP must not claim UDP loss");
     }
 
+    runtime
+        .send_latest(client_session, 7, b"stale-snapshot")
+        .expect("stage old state");
+    runtime
+        .send_latest_with_tick(client_session, 7, b"fresh-snapshot", Some(99))
+        .expect("replace same key");
+    runtime
+        .send_latest(client_session, 8, b"other-key")
+        .expect("stage independent key");
+    assert_eq!(runtime.realtime_queue_snapshot().queued_messages, 2);
+    assert_eq!(runtime.realtime_queue_snapshot().replaced, 1);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut delivered = Vec::new();
+    while delivered.len() < 2 && Instant::now() < deadline {
+        for event in runtime.poll(32, Duration::from_millis(10)) {
+            if let GameEvent::Message(message) = event {
+                if message.session == server_session {
+                    delivered.push((message.payload.to_vec(), message.tick));
+                }
+            }
+        }
+    }
+    assert_eq!(
+        delivered,
+        vec![
+            (b"fresh-snapshot".to_vec(), Some(99)),
+            (b"other-key".to_vec(), None),
+        ],
+        "only the newest value of each key is forwarded, in fair key order"
+    );
+    assert_eq!(runtime.realtime_queue_snapshot().forwarded, 2);
+    assert!(runtime
+        .prometheus_snapshot()
+        .contains("rnet_game_realtime_replaced_total 1"));
+
     let metrics = runtime.metrics_snapshot();
     assert!(metrics.frames_sent >= 5);
     assert!(runtime
         .prometheus_snapshot()
         .contains("rnet_frames_sent_total"));
     runtime
+        .send_latest(client_session, 9, b"discard-on-close")
+        .expect("stage final state");
+    runtime
         .close_session(client_session)
         .expect("close game session");
+    assert_eq!(runtime.realtime_queue_snapshot().queued_messages, 0);
+    assert_eq!(runtime.realtime_queue_snapshot().closed_dropped, 1);
+    assert_eq!(
+        runtime
+            .send_latest(client_session, 9, b"closed")
+            .expect_err("stale session cannot stage state")
+            .code(),
+        rnet_core::ErrorCode::InvalidHandle
+    );
     runtime.stop(Duration::ZERO).expect("stop game runtime");
 }
 

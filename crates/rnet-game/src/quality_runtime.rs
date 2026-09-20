@@ -82,6 +82,7 @@ impl GameRuntime {
         payload: &[u8],
         options: GameSendOptions,
     ) -> Result<()> {
+        self.ensure_game_ready(session)?;
         let udp = self
             .udp_sessions
             .lock()

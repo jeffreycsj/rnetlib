@@ -28,6 +28,7 @@ mod kcp;
 mod kcp_preflight;
 mod lifecycle;
 mod metrics;
+mod record_reader;
 mod runtime;
 mod runtime_adaptive;
 mod runtime_connect;

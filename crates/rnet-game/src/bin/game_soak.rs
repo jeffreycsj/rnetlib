@@ -1,5 +1,9 @@
 //! Local game-facade soak probe; completion alone does not certify deployment SLOs.
 
+#[path = "game_soak/receiver.rs"]
+mod receiver;
+
+use receiver::ProbeReceiver;
 use rnet_core::{ErrorCode, Transport};
 use rnet_game::{
     GameClientConfig, GameEvent, GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig,
@@ -137,6 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut next_send = vec![Instant::now(); config.clients];
     let mut sequences = vec![0_u64; config.clients];
     let mut payload = vec![0x5a_u8; config.payload_bytes];
+    let mut receiver = ProbeReceiver::new(config.transport, config.clients, config.payload_bytes);
     let mut counters = SoakCounters {
         sent: 0,
         received: 0,
@@ -171,35 +176,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             next_send[index] = now + tick;
         }
-        counters.received = counters
-            .received
-            .saturating_add(poll_messages(&runtime, listener)?);
+        poll_messages(&runtime, listener, &mut receiver, &sequences)?;
+        counters.received = receiver.received;
         if now >= next_report {
-            report(&config, &runtime, &counters, "running")?;
+            report(&config, &runtime, &counters, &receiver, "running")?;
             next_report = now + Duration::from_secs(60);
         }
         std::thread::sleep(Duration::from_millis(1));
     }
     let drain_deadline = Instant::now() + Duration::from_millis(200);
     while Instant::now() < drain_deadline {
-        counters.received = counters
-            .received
-            .saturating_add(poll_messages(&runtime, listener)?);
+        poll_messages(&runtime, listener, &mut receiver, &sequences)?;
+        counters.received = receiver.received;
     }
-    report(&config, &runtime, &counters, "completed")?;
+    report(&config, &runtime, &counters, &receiver, "completed")?;
     runtime.stop(Duration::ZERO)?;
     Ok(())
 }
 
-fn poll_messages(runtime: &GameRuntime, listener: u64) -> Result<u64, Box<dyn std::error::Error>> {
-    let mut received = 0_u64;
+fn poll_messages(
+    runtime: &GameRuntime,
+    listener: u64,
+    receiver: &mut ProbeReceiver,
+    sent_counts: &[u64],
+) -> Result<(), Box<dyn std::error::Error>> {
     for event in runtime.poll(4096, Duration::ZERO) {
         match event {
             GameEvent::Message(message) if message.endpoint == listener => {
-                if message.payload.len() < 12 {
-                    return Err("truncated probe message".into());
-                }
-                received = received.saturating_add(1);
+                receiver.observe(&message.payload, sent_counts)?;
             }
             GameEvent::SessionClosed { .. }
             | GameEvent::ProtocolViolation { .. }
@@ -209,13 +213,14 @@ fn poll_messages(runtime: &GameRuntime, listener: u64) -> Result<u64, Box<dyn st
             _ => {}
         }
     }
-    Ok(received)
+    Ok(())
 }
 
 fn report(
     config: &Config,
     runtime: &GameRuntime,
     counters: &SoakCounters,
+    receiver: &ProbeReceiver,
     status: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let metrics = runtime.metrics_snapshot();
@@ -242,8 +247,9 @@ fn report(
         })
         .unwrap_or(0.0);
     println!(
-        "status={status} transport={transport} elapsed_seconds={:.3} clients={} payload_bytes={} rate_per_client={} sent={} received={} would_block={} rtt_samples={} rtt_p95_us={} rtt_p99_us={} heartbeat_timeouts={} event_drops={} protocol_errors={} cpu_percent={cpu_percent:.1} rss_kib={}",
+        "status={status} transport={transport} elapsed_seconds={:.3} clients={} payload_bytes={} rate_per_client={} sent={} received={} duplicates={} reordered={} too_old={} would_block={} rtt_samples={} rtt_p95_us={} rtt_p99_us={} heartbeat_timeouts={} event_drops={} protocol_errors={} cpu_percent={cpu_percent:.1} rss_kib={}",
         counters.started.elapsed().as_secs_f64(), config.clients, config.payload_bytes, config.rate, counters.sent, counters.received,
+        receiver.duplicates, receiver.reordered, receiver.too_old,
         counters.would_block, heartbeat.rtt.sample_count, heartbeat.rtt.p95_us, heartbeat.rtt.p99_us,
         heartbeat.timeouts, metrics.events_dropped, metrics.protocol_errors, rss_kib().unwrap_or(0),
     );
@@ -293,4 +299,77 @@ fn guard_available_memory() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("soak stopped: MemAvailable {available} KiB is below 15 GiB").into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod receiver_tests {
+    use super::receiver::ProbeDisposition;
+    use super::*;
+
+    fn packet(client: u32, sequence: u64) -> Vec<u8> {
+        let mut bytes = vec![0x5a; 32];
+        bytes[..4].copy_from_slice(&client.to_be_bytes());
+        bytes[4..12].copy_from_slice(&sequence.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn reliable_probe_rejects_missing_duplicate_corrupt_and_unsent_sequences() {
+        let mut tracker = ProbeReceiver::new(Transport::Kcp, 2, 32);
+        assert_eq!(
+            tracker.observe(&packet(0, 0), &[1, 0]).unwrap(),
+            ProbeDisposition::New
+        );
+        assert!(tracker.observe(&packet(0, 0), &[1, 0]).is_err());
+        assert!(tracker.observe(&packet(0, 2), &[3, 0]).is_err());
+        assert!(tracker.observe(&packet(0, 1), &[1, 0]).is_err());
+        assert!(tracker.observe(&packet(2, 0), &[1, 0]).is_err());
+        let mut corrupt = packet(1, 0);
+        corrupt[20] = 0;
+        assert!(tracker.observe(&corrupt, &[1, 1]).is_err());
+    }
+
+    #[test]
+    fn udp_probe_counts_reorder_once_and_ignores_duplicates() {
+        let mut tracker = ProbeReceiver::new(Transport::Udp, 1, 32);
+        assert_eq!(
+            tracker.observe(&packet(0, 0), &[4]).unwrap(),
+            ProbeDisposition::New
+        );
+        assert_eq!(
+            tracker.observe(&packet(0, 2), &[4]).unwrap(),
+            ProbeDisposition::New
+        );
+        assert_eq!(
+            tracker.observe(&packet(0, 1), &[4]).unwrap(),
+            ProbeDisposition::Reordered
+        );
+        assert_eq!(
+            tracker.observe(&packet(0, 1), &[4]).unwrap(),
+            ProbeDisposition::Duplicate
+        );
+        assert_eq!(tracker.received, 3);
+        assert_eq!(tracker.duplicates, 1);
+        assert_eq!(tracker.reordered, 1);
+    }
+
+    #[test]
+    fn udp_probe_bounds_reorder_history_and_validates_exact_length() {
+        let mut tracker = ProbeReceiver::new(Transport::Udp, 1, 32);
+        assert!(tracker.observe(&packet(0, 0)[..31], &[100]).is_err());
+        assert_eq!(
+            tracker.observe(&packet(0, 0), &[100]).unwrap(),
+            ProbeDisposition::New
+        );
+        assert_eq!(
+            tracker.observe(&packet(0, 80), &[100]).unwrap(),
+            ProbeDisposition::New
+        );
+        assert_eq!(
+            tracker.observe(&packet(0, 0), &[100]).unwrap(),
+            ProbeDisposition::TooOld
+        );
+        assert_eq!(tracker.received, 2);
+        assert_eq!(tracker.too_old, 1);
+    }
 }

@@ -32,6 +32,11 @@ report="${report_dir}/${transport}-${timestamp}.log"
   echo "started_utc=${timestamp}"
   echo "transport=${transport} duration_seconds=${duration_seconds} clients=${clients} payload_bytes=${payload_bytes} rate_per_client=${rate_per_client}"
   echo "revision=$(git -C "${project_dir}" rev-parse HEAD)"
+  if [[ -n "$(git -C "${project_dir}" status --porcelain)" ]]; then
+    echo "worktree_dirty=true"
+  else
+    echo "worktree_dirty=false"
+  fi
   uname -a
   rustc --version
   cargo --version

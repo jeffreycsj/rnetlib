@@ -18,6 +18,7 @@ CI additionally runs RustSec, cargo-deny, six libFuzzer smoke campaigns, and an 
 - Start new C/C++/Go deployments with config v5; Rust starts with `RuntimeConfig::production()`. Set explicit runtime-wide endpoint and pending-handshake limits instead of relying only on per-listener capacity.
 - Keep plaintext business data and legacy unauthenticated endpoints disabled unless a reviewed compatibility exception requires them.
 - Continuously poll every game runtime. Heartbeat scheduling and authenticated reply handling are poll-driven; a stalled game event loop cannot make progress on liveness or per-session quality.
+- `send_latest` is a best-effort pre-transport coalescing path for replaceable snapshots. Poll continuously or explicitly call `flush_realtime`; monitor admission rejection, replacement, close/backpressure drops, send failures, and queued bytes. Keep commands that require reliable delivery on ordinary `send`.
 - Persist private keys in an external keystore, pin or verify the server public key, and rotate identities according to the application's incident policy. Never log key, cookie, ticket, or payload bytes.
 - Size event and send byte budgets from a process RSS limit. Alert before gauges remain above 80% of their configured limits.
 - Size KCP unacknowledged-data budgets for the loss envelope. Application queue bytes and KCP retransmission bytes are independently bounded layers, so include both when deriving the process RSS limit; reserved control capacity prevents data saturation from blocking protocol progress.
@@ -58,7 +59,9 @@ timeouts, protocol/event errors, process CPU, and RSS every 60 seconds. It keeps
 endpoints in one process on loopback, so it is a reproducible facade regression and local soak,
 not a substitute for a distributed target-environment capacity test. An exit status of zero means
 the probe completed without an unexpected session failure; apply deployment-specific SLOs to the
-report before accepting a release. The script refuses to start below 15 GiB `MemAvailable`.
+report before accepting a release. Reports mark whether the source tree was dirty; a commit ID from
+a dirty run does not identify the exact tested source. The script refuses to start below 15 GiB
+`MemAvailable`.
 
 Repeat with production-sized connection counts and the application consumer. Add a `tc netem` matrix covering expected and failure-envelope RTT, jitter, loss, duplication, and reordering. A release passes only if its documented SLO is met, RSS reaches a stable plateau, queues recover after bursts, no close reason is unexplained, and no peer starves another. Archive the raw report with kernel, CPU, memory, toolchain, commit/package hash, and configuration.
 

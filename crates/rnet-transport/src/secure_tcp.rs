@@ -1,6 +1,7 @@
 use crate::admission::AdmissionController;
 use crate::metrics::AdmissionRejectReason;
 use crate::metrics::LatencyKind;
+use crate::record_reader::RecordReader;
 use crate::state::fail_secure_session;
 use crate::state::insert_session_route;
 use crate::state::map_security_error;
@@ -267,33 +268,60 @@ async fn run_secure_tcp_session(
     mut receiver: mpsc::Receiver<Outbound>,
     mut transport: SecureTransport,
 ) {
+    let mut records =
+        RecordReader::new(shared.config.max_body_len + rnet_protocol::HEADER_LEN + 16);
     loop {
-        tokio::select! {
-            inbound = read_record(&mut stream, shared.config.max_body_len + rnet_protocol::HEADER_LEN + 16) => {
-                let ciphertext = match inbound {
-                    Ok(value) => value,
-                    Err(_) => break,
-                };
+        match records.take() {
+            Ok(Some(ciphertext)) => {
                 let plaintext = match transport.decrypt(&ciphertext) {
                     Ok(value) => value,
                     Err(_) => {
-                        shared.metrics.protocol_errors.fetch_add(1, Ordering::Relaxed);
+                        shared
+                            .metrics
+                            .protocol_errors
+                            .fetch_add(1, Ordering::Relaxed);
                         break;
                     }
                 };
                 let frame = match decode_datagram(&plaintext, shared.config.max_body_len) {
                     Ok(frame) => frame,
                     Err(_) => {
-                        shared.metrics.protocol_errors.fetch_add(1, Ordering::Relaxed);
+                        shared
+                            .metrics
+                            .protocol_errors
+                            .fetch_add(1, Ordering::Relaxed);
                         break;
                     }
                 };
                 if !session_active(&shared, session) {
                     break;
                 }
-                shared.metrics.frames_received.fetch_add(1, Ordering::Relaxed);
-                shared.metrics.bytes_received.fetch_add(frame.body.len() as u64, Ordering::Relaxed);
+                shared
+                    .metrics
+                    .frames_received
+                    .fetch_add(1, Ordering::Relaxed);
+                shared
+                    .metrics
+                    .bytes_received
+                    .fetch_add(frame.body.len() as u64, Ordering::Relaxed);
                 push_tcp_event(&shared, message_event(endpoint, session, frame)).await;
+                continue;
+            }
+            Ok(None) => {}
+            Err(_) => {
+                shared
+                    .metrics
+                    .protocol_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                break;
+            }
+        }
+        tokio::select! {
+            inbound = stream.read_buf(records.buffer_mut()) => {
+                match inbound {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
             }
             outbound = receiver.recv() => {
                 let Some(outbound) = outbound else { break; };
