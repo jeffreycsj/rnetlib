@@ -332,6 +332,7 @@ pub(crate) async fn handle_secure_udp_packet(
                     established: false,
                     auth_decision: Some(decision_sender),
                     security_commands: None,
+                    allows_game_controls: false,
                     queued_bytes: ByteBudget::new(shared.config.max_session_queued_bytes),
                 },
             )?;

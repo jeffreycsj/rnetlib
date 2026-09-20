@@ -4,6 +4,7 @@ use rnet_core::Transport;
 use rnet_security::Keypair;
 use rnet_transport::RuntimeConfig;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 /// Exact application protocol identity selected by one client connection.
 ///
@@ -38,6 +39,10 @@ impl GameProtocol {
 pub struct GameRuntimeConfig {
     /// Low-level capacity, timeout, socket, and security policy.
     pub network: RuntimeConfig,
+    /// Interval between authenticated probes after a successful acknowledgement.
+    pub heartbeat_interval: Duration,
+    /// Maximum time to wait for a matching probe acknowledgement.
+    pub heartbeat_timeout: Duration,
 }
 
 impl GameRuntimeConfig {
@@ -45,7 +50,16 @@ impl GameRuntimeConfig {
     pub fn production() -> Self {
         Self {
             network: RuntimeConfig::production(),
+            heartbeat_interval: Duration::from_secs(5),
+            heartbeat_timeout: Duration::from_secs(15),
         }
+    }
+
+    /// Tunes automatic heartbeat cadence without changing the normal send API.
+    pub fn with_heartbeat(mut self, interval: Duration, timeout: Duration) -> Self {
+        self.heartbeat_interval = interval;
+        self.heartbeat_timeout = timeout;
+        self
     }
 
     /// Explicitly permits a server to switch business records to plaintext.
@@ -62,6 +76,8 @@ impl GameRuntimeConfig {
     pub fn compatibility() -> Self {
         Self {
             network: RuntimeConfig::default(),
+            heartbeat_interval: Duration::from_secs(5),
+            heartbeat_timeout: Duration::from_secs(15),
         }
     }
 }

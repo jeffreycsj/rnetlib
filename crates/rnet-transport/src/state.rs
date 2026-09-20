@@ -69,14 +69,23 @@ pub(crate) struct SessionRoute {
     pub(crate) established: bool,
     pub(crate) auth_decision: Option<oneshot::Sender<bool>>,
     pub(crate) security_commands: Option<mpsc::Sender<SecurityCommand>>,
+    /// Only adaptive Noise sessions may carry game controls outside the business-data mode.
+    pub(crate) allows_game_controls: bool,
     pub(crate) queued_bytes: Arc<ByteBudget>,
 }
 
 pub(crate) struct Outbound {
     pub(crate) bytes: Bytes,
+    pub(crate) kind: OutboundKind,
     pub(crate) queued_at: Instant,
     /// Dropping an outbound message releases its runtime and session reservations together.
     _reservations: Vec<ByteReservation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OutboundKind {
+    Data,
+    GameControl,
 }
 
 #[derive(Debug)]
@@ -103,6 +112,7 @@ impl Outbound {
     pub(crate) fn new(bytes: Bytes) -> Self {
         Self {
             bytes,
+            kind: OutboundKind::Data,
             queued_at: Instant::now(),
             _reservations: Vec::new(),
         }
@@ -113,12 +123,30 @@ impl Outbound {
         runtime: &Arc<ByteBudget>,
         session: &Arc<ByteBudget>,
     ) -> Result<Self> {
+        Self::with_kind(bytes, OutboundKind::Data, runtime, session)
+    }
+
+    pub(crate) fn with_game_control(
+        bytes: Bytes,
+        runtime: &Arc<ByteBudget>,
+        session: &Arc<ByteBudget>,
+    ) -> Result<Self> {
+        Self::with_kind(bytes, OutboundKind::GameControl, runtime, session)
+    }
+
+    fn with_kind(
+        bytes: Bytes,
+        kind: OutboundKind,
+        runtime: &Arc<ByteBudget>,
+        session: &Arc<ByteBudget>,
+    ) -> Result<Self> {
         let size = bytes.len();
         // The first reservation is automatically rolled back if the second one fails.
         let runtime_reservation = runtime.reserve(size)?;
         let session_reservation = session.reserve(size)?;
         Ok(Self {
             bytes,
+            kind,
             queued_at: Instant::now(),
             _reservations: vec![runtime_reservation, session_reservation],
         })
@@ -401,8 +429,10 @@ pub(crate) fn try_push_session_event(shared: &Arc<Shared>, event: Event) -> Resu
 
 pub(crate) async fn push_tcp_event(shared: &Arc<Shared>, event: Event) {
     loop {
-        if matches!(event.event_type, EventType::Message | EventType::Writable)
-            && !session_active(shared, event.session)
+        if matches!(
+            event.event_type,
+            EventType::Message | EventType::Writable | EventType::GameControl
+        ) && !session_active(shared, event.session)
         {
             return;
         }
@@ -443,6 +473,12 @@ pub(crate) fn message_event(
         data: frame.body.to_vec(),
         queued_at: Instant::now(),
     }
+}
+
+pub(crate) fn game_control_event(endpoint: Handle, session: Handle, data: Vec<u8>) -> Event {
+    let mut event = session_event(EventType::GameControl, endpoint, session);
+    event.data = data;
+    event
 }
 
 pub(crate) fn push_endpoint_error(

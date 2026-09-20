@@ -3,7 +3,9 @@
 use crate::adaptive_codec::{apply, decrypt, protected_record, protocol};
 use crate::adaptive_wire::DatagramWire;
 use crate::event::{completed_operation, security_changed_event};
-use crate::state::{message_event, session_active, try_push_session_event, Shared};
+use crate::state::{
+    game_control_event, message_event, session_active, try_push_session_event, Shared,
+};
 use rnet_core::{Handle, Result};
 use rnet_protocol::control::{
     decode_control, encode_control, ControlKind, ProtectedKind, ProtectedMessage, Record,
@@ -56,6 +58,16 @@ pub(crate) async fn handle_established(
                 .fetch_add(frame.body.len() as u64, Ordering::Relaxed);
             try_push_session_event(shared, message_event(endpoint, session, frame))?;
         }
+        ProtectedKind::GameControl if record.kind == RecordKind::Protected => {
+            if message.payload.len() > shared.config.max_body_len {
+                return protocol("game control exceeds the configured body limit");
+            }
+            try_push_session_event(
+                shared,
+                game_control_event(endpoint, session, message.payload),
+            )?;
+        }
+        ProtectedKind::GameControl => return protocol("game controls must be authenticated"),
         ProtectedKind::Control => {
             let control = decode_control(&message.payload)?;
             let operation = completed_operation(control.kind);

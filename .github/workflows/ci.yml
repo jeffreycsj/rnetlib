@@ -52,6 +52,7 @@ jobs:
       - run: cargo fuzz run control_parser -- -max_total_time=10 -max_len=131072
       - run: cargo fuzz run datagram_preflight -- -max_total_time=10 -max_len=2048
       - run: cargo fuzz run kcp_engine -- -max_total_time=10 -max_len=65535
+      - run: cargo fuzz run game_wire -- -max_total_time=10 -max_len=65535
       - run: cargo fuzz run ffi_config -- -max_total_time=10 -max_len=64
 
   miri:

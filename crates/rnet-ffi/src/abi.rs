@@ -406,6 +406,7 @@ pub enum RnetEventType {
     AuthRequest = EventType::AuthRequest as u32,
     JoinFailed = EventType::JoinFailed as u32,
     SecurityChanged = EventType::SecurityChanged as u32,
+    GameControl = EventType::GameControl as u32,
 }
 
 #[repr(C)]

@@ -59,6 +59,7 @@ impl NetworkRuntime {
                 established: true,
                 auth_decision: None,
                 security_commands: None,
+                allows_game_controls: false,
                 queued_bytes: ByteBudget::new(self.shared.config.max_session_queued_bytes),
             })
     }
@@ -68,6 +69,7 @@ impl NetworkRuntime {
         endpoint: Handle,
         target: SessionTarget,
         auth_decision: Option<oneshot::Sender<bool>>,
+        allows_game_controls: bool,
     ) -> Result<Handle> {
         crate::state::insert_session_route(
             &self.shared,
@@ -77,6 +79,7 @@ impl NetworkRuntime {
                 established: false,
                 auth_decision,
                 security_commands: None,
+                allows_game_controls,
                 queued_bytes: ByteBudget::new(self.shared.config.max_session_queued_bytes),
             },
         )

@@ -10,6 +10,7 @@ fuzzing = []
 
 [dependencies]
 bytes.workspace = true
+ring.workspace = true
 rnet-core = { version = "0.1.0", path = "../rnet-core" }
 rnet-protocol = { version = "0.1.0", path = "../rnet-protocol" }
 rnet-security = { version = "0.1.0", path = "../rnet-security" }

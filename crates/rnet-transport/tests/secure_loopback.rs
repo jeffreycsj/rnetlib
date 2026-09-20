@@ -66,6 +66,13 @@ fn secure_tcp_requires_server_auth_before_opening_and_exchanging_frames() {
     let client_open = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::SessionOpened && event.endpoint == client
     });
+    assert_eq!(
+        runtime
+            .send_game_control(client_open.session, b"reserved")
+            .expect_err("legacy secure sessions cannot send game controls")
+            .code(),
+        ErrorCode::NotSupported
+    );
     runtime
         .send_legacy(client_open.session, 7, 1, 99, b"encrypted-frame")
         .expect("send encrypted frame");

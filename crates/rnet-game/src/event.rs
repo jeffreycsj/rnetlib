@@ -3,6 +3,16 @@
 use bytes::Bytes;
 use rnet_core::{ErrorCode, Handle};
 use rnet_transport::SecurityOperation;
+use std::time::Duration;
+
+/// Last authenticated heartbeat sample for one established game session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NetworkQuality {
+    pub last_rtt: Duration,
+    pub smoothed_rtt: Duration,
+    pub jitter: Duration,
+    pub samples: u64,
+}
 
 /// Opaque business bytes received from an established game session.
 #[derive(Clone, Debug, Eq, PartialEq)]

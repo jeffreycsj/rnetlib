@@ -5,6 +5,7 @@ use crate::config::{
 };
 use crate::envelope::{decode, encode_application, DecodedEnvelope};
 use crate::event::{GameEvent, GameMessage};
+use crate::heartbeat::HeartbeatTracker;
 use crate::join;
 use rnet_core::{ErrorCode, Event, EventType, Handle, Result, RnetError, Transport};
 use rnet_protocol::control::SecurityMode;
@@ -15,7 +16,7 @@ use rnet_transport::{
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Optional network metadata. Business message typing remains inside `payload`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -27,8 +28,12 @@ pub struct GameSendOptions {
 /// High-level runtime whose normal send/receive path uses only session handles and payload bytes.
 pub struct GameRuntime {
     pub(crate) network: NetworkRuntime,
-    maximum_envelope_len: usize,
+    pub(crate) maximum_envelope_len: usize,
     server_protocols: Mutex<HashMap<Handle, GameProtocol>>,
+    pub(crate) heartbeat_interval: Duration,
+    pub(crate) heartbeat_timeout: Duration,
+    pub(crate) heartbeat_trackers: Mutex<HashMap<Handle, HeartbeatTracker>>,
+    poll_guard: Mutex<()>,
 }
 
 impl GameRuntime {
@@ -52,12 +57,21 @@ impl GameRuntime {
                 "maximum body length cannot contain the game join header",
             ));
         }
+        HeartbeatTracker::new(
+            config.heartbeat_interval,
+            config.heartbeat_timeout,
+            Instant::now(),
+        )?;
         let maximum_envelope_len = config.network.max_body_len;
         let network = NetworkRuntime::new_with_client_security(config.network, client_security)?;
         Ok(Self {
             network,
             maximum_envelope_len,
             server_protocols: Mutex::new(HashMap::new()),
+            heartbeat_interval: config.heartbeat_interval,
+            heartbeat_timeout: config.heartbeat_timeout,
+            heartbeat_trackers: Mutex::new(HashMap::new()),
+            poll_guard: Mutex::new(()),
         })
     }
 
@@ -193,7 +207,60 @@ impl GameRuntime {
 
     /// Polls typed game events. Unsupported internal controls fail closed until implemented.
     pub fn poll(&self, capacity: usize, timeout: Duration) -> Vec<GameEvent> {
-        let events = self.network.poll_events(capacity, timeout);
+        if capacity == 0 {
+            return Vec::new();
+        }
+        // Game controls are handled by the same event queue as lifecycle changes. Serializing
+        // polls preserves their order and keeps challenge state single-writer.
+        let _guard = self.poll_guard.lock().expect("game poll lock poisoned");
+        let deadline = Instant::now().checked_add(timeout);
+        let mut internal_events = 0usize;
+        loop {
+            // Authenticated replies already queued by I/O workers take precedence over timeout.
+            // Drain even when a batch contains only internal controls, so a small public capacity
+            // cannot leave a timely acknowledgement stranded behind other control events.
+            let buffered = self.network.poll_events(capacity, Duration::ZERO);
+            if !buffered.is_empty() {
+                internal_events = internal_events.saturating_add(buffered.len());
+                let output = self.convert_events(buffered);
+                if !output.is_empty() {
+                    return output;
+                }
+                // A malicious authenticated peer cannot keep one poll call trapped forever by
+                // continuously filling the queue with controls that are hidden from game code.
+                if internal_events >= 1024 {
+                    return Vec::new();
+                }
+                continue;
+            }
+            self.drive_heartbeats();
+            let remaining = deadline
+                .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+                .unwrap_or(timeout);
+            let wait = if self
+                .heartbeat_trackers
+                .lock()
+                .expect("heartbeat table poisoned")
+                .is_empty()
+            {
+                remaining
+            } else {
+                remaining.min(Duration::from_millis(50))
+            };
+            let events = self.network.poll_events(capacity, wait);
+            internal_events = internal_events.saturating_add(events.len());
+            let output = self.convert_events(events);
+            if !output.is_empty()
+                || timeout.is_zero()
+                || deadline.is_some_and(|deadline| Instant::now() >= deadline)
+                || internal_events >= 1024
+            {
+                return output;
+            }
+        }
+    }
+
+    fn convert_events(&self, events: Vec<Event>) -> Vec<GameEvent> {
         let mut output = Vec::with_capacity(events.len());
         for event in events {
             let endpoint = event.endpoint;
@@ -259,15 +326,22 @@ impl GameRuntime {
                     }
                 }
             }
-            EventType::SessionOpened => GameEvent::SessionReady {
-                endpoint: event.endpoint,
-                session: event.session,
-            },
-            EventType::SessionClosed => GameEvent::SessionClosed {
-                endpoint: event.endpoint,
-                session: event.session,
-                reason: event.status,
-            },
+            EventType::SessionOpened => {
+                self.track_session(event.session);
+                GameEvent::SessionReady {
+                    endpoint: event.endpoint,
+                    session: event.session,
+                }
+            }
+            EventType::SessionClosed => {
+                self.forget_session(event.session);
+                GameEvent::SessionClosed {
+                    endpoint: event.endpoint,
+                    session: event.session,
+                    reason: event.status,
+                }
+            }
+            EventType::GameControl => return self.handle_heartbeat_event(&event),
             EventType::Message => {
                 // Values other than zero indicate a legacy or non-game peer. Accepting them would
                 // reintroduce application routing fields that the game contract intentionally owns
@@ -338,7 +412,31 @@ mod tests {
     use rnet_security::Keypair;
 
     #[test]
-    fn unimplemented_internal_controls_are_not_silently_accepted() {
+    fn heartbeat_ticks_do_not_shorten_the_requested_poll_timeout() {
+        let runtime = GameRuntime::new(
+            GameRuntimeConfig::production()
+                .with_heartbeat(Duration::from_secs(1), Duration::from_secs(3)),
+        )
+        .expect("runtime");
+        runtime.poll(1, Duration::ZERO); // Consume RuntimeStarted before measuring an empty poll.
+        runtime.track_session(u64::MAX);
+        let started = Instant::now();
+        assert!(runtime.poll(1, Duration::from_millis(130)).is_empty());
+        assert!(started.elapsed() >= Duration::from_millis(110));
+    }
+
+    #[test]
+    fn runtime_rejects_invalid_heartbeat_policy_before_starting_threads() {
+        let error = GameRuntime::new(
+            GameRuntimeConfig::production().with_heartbeat(Duration::ZERO, Duration::from_secs(1)),
+        )
+        .err()
+        .expect("zero heartbeat interval must be rejected");
+        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn plaintext_game_controls_cannot_impersonate_authenticated_controls() {
         let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
         let mut event = Event::simple(EventType::Message);
         event.session = 1;
@@ -350,6 +448,28 @@ mod tests {
             .convert_event(event)
             .expect_err("unhandled control must fail closed");
         assert_eq!(error.code(), ErrorCode::ProtocolError);
+    }
+
+    #[test]
+    fn queued_authenticated_control_after_local_close_is_not_a_protocol_violation() {
+        let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
+        let mut event = Event::simple(EventType::GameControl);
+        event.session = 42;
+        event.data = crate::heartbeat::encode_heartbeat(
+            crate::heartbeat::HeartbeatPacket {
+                kind: crate::heartbeat::HeartbeatKind::Probe,
+                challenge: 7,
+            },
+            1024,
+        )
+        .expect("heartbeat")
+        .to_vec();
+        assert_eq!(
+            runtime
+                .convert_event(event)
+                .expect("stale control is ignored"),
+            None
+        );
     }
 
     #[test]

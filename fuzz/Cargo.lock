@@ -471,6 +471,7 @@ name = "rnet-game"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "ring",
  "rnet-core",
  "rnet-protocol",
  "rnet-security",

@@ -19,6 +19,227 @@ fn game_api_sends_opaque_payload_and_follows_server_encryption_changes() {
     }
 }
 
+#[test]
+fn heartbeat_quality_uses_protected_controls_even_when_business_data_is_plaintext() {
+    for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+        let server_key = Keypair::generate().expect("server key");
+        let client_key = Keypair::generate().expect("client key");
+        let security = ClientSecurity::pinned(client_key, server_key.public.clone());
+        let runtime = GameRuntime::new_with_client_security(
+            GameRuntimeConfig::production()
+                .allow_plaintext_business_data(true)
+                .with_heartbeat(Duration::from_millis(20), Duration::from_millis(500)),
+            security,
+        )
+        .expect("game runtime");
+        let listener = runtime
+            .listen(GameServerConfig {
+                transport,
+                bind_addr: localhost(0),
+                local_key: server_key,
+                initial_encryption: false,
+                protocol: GameProtocol::new(10, 1),
+            })
+            .expect("listener");
+        let client = runtime
+            .connect(GameClientConfig {
+                transport,
+                bind_addr: None,
+                remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
+                join_ticket: b"ticket".to_vec(),
+                protocol: GameProtocol::new(10, 1),
+            })
+            .expect("client");
+        let auth = poll_until(&runtime, |event| {
+            matches!(event, GameEvent::AuthRequest { .. })
+        });
+        let GameEvent::AuthRequest { session, .. } = auth else {
+            unreachable!();
+        };
+        runtime.auth_decide(session, true).expect("authorize");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut server_session = None;
+        let mut client_session = None;
+        while Instant::now() < deadline && (server_session.is_none() || client_session.is_none()) {
+            for event in runtime.poll(32, Duration::from_millis(10)) {
+                if let GameEvent::SessionReady { endpoint, session } = event {
+                    if endpoint == listener {
+                        server_session = Some(session);
+                    } else if endpoint == client {
+                        client_session = Some(session);
+                    }
+                }
+            }
+        }
+        let server_session = server_session.expect("server ready");
+        let client_session = client_session.expect("client ready");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let quality = loop {
+            let events = runtime.poll(32, Duration::from_millis(10));
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, GameEvent::Message(_))),
+                "internal heartbeat leaked as a business message"
+            );
+            if let Some(quality) = runtime
+                .network_quality(server_session)
+                .expect("server quality")
+            {
+                break quality;
+            }
+            assert!(Instant::now() < deadline, "heartbeat sample timed out");
+        };
+        assert!(quality.samples >= 1);
+        assert!(quality.last_rtt < Duration::from_millis(500));
+        assert!(runtime.network_quality(client_session).is_ok());
+        runtime
+            .set_encryption(server_session, true)
+            .expect("enable business encryption while heartbeats continue");
+        await_security_change(
+            &runtime,
+            server_session,
+            client_session,
+            SecurityOperation::ModeSwitch,
+            true,
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while runtime
+            .network_quality(server_session)
+            .expect("quality after mode change")
+            .is_none_or(|sample| sample.samples <= quality.samples)
+        {
+            runtime.poll(32, Duration::from_millis(10));
+            assert!(
+                Instant::now() < deadline,
+                "heartbeats stalled after mode change"
+            );
+        }
+        runtime.stop(Duration::ZERO).expect("stop runtime");
+    }
+}
+
+#[test]
+fn absent_heartbeat_ack_closes_only_the_unresponsive_session() {
+    let server_key = Keypair::generate().expect("server key");
+    let client_key = Keypair::generate().expect("client key");
+    let security = ClientSecurity::pinned(client_key, server_key.public.clone());
+    let policy = GameRuntimeConfig::production()
+        .with_heartbeat(Duration::from_millis(20), Duration::from_millis(100));
+    let server = GameRuntime::new(policy.clone()).expect("server runtime");
+    let client = GameRuntime::new_with_client_security(policy, security).expect("client runtime");
+    let listener = server
+        .listen(GameServerConfig {
+            transport: Transport::Tcp,
+            bind_addr: localhost(0),
+            local_key: server_key,
+            initial_encryption: true,
+            protocol: GameProtocol::new(11, 1),
+        })
+        .expect("listener");
+    client
+        .connect(GameClientConfig {
+            transport: Transport::Tcp,
+            bind_addr: None,
+            remote_addr: server.endpoint_local_addr(listener).expect("address"),
+            join_ticket: b"ticket".to_vec(),
+            protocol: GameProtocol::new(11, 1),
+        })
+        .expect("client connect");
+    let auth = poll_until(&server, |event| {
+        matches!(event, GameEvent::AuthRequest { .. })
+    });
+    let GameEvent::AuthRequest { session, .. } = auth else {
+        unreachable!();
+    };
+    server.auth_decide(session, true).expect("authorize");
+    poll_until(
+        &server,
+        |event| matches!(event, GameEvent::SessionReady { session: ready, .. } if *ready == session),
+    );
+    // The client transport remains connected, but its game loop deliberately never polls the
+    // authenticated probe or sends an acknowledgement.
+    let closed = poll_until(
+        &server,
+        |event| matches!(event, GameEvent::SessionClosed { session: closed, reason: rnet_core::ErrorCode::Timeout, .. } if *closed == session),
+    );
+    assert!(matches!(closed, GameEvent::SessionClosed { .. }));
+    assert_eq!(
+        server
+            .network_quality(session)
+            .expect_err("closed session has no quality")
+            .code(),
+        rnet_core::ErrorCode::InvalidHandle
+    );
+    server.stop(Duration::ZERO).expect("stop server");
+    client.stop(Duration::ZERO).expect("stop client");
+}
+
+#[test]
+fn timely_ack_queued_before_a_late_poll_prevents_false_timeout() {
+    let server_key = Keypair::generate().expect("server key");
+    let client_key = Keypair::generate().expect("client key");
+    let security = ClientSecurity::pinned(client_key, server_key.public.clone());
+    let policy = GameRuntimeConfig::production()
+        .with_heartbeat(Duration::from_millis(20), Duration::from_millis(200));
+    let server = GameRuntime::new(policy.clone()).expect("server runtime");
+    let client = GameRuntime::new_with_client_security(policy, security).expect("client runtime");
+    let listener = server
+        .listen(GameServerConfig {
+            transport: Transport::Tcp,
+            bind_addr: localhost(0),
+            local_key: server_key,
+            initial_encryption: true,
+            protocol: GameProtocol::new(12, 1),
+        })
+        .expect("listener");
+    let client_endpoint = client
+        .connect(GameClientConfig {
+            transport: Transport::Tcp,
+            bind_addr: None,
+            remote_addr: server.endpoint_local_addr(listener).expect("address"),
+            join_ticket: b"ticket".to_vec(),
+            protocol: GameProtocol::new(12, 1),
+        })
+        .expect("client connect");
+    let auth = poll_until(&server, |event| {
+        matches!(event, GameEvent::AuthRequest { .. })
+    });
+    let GameEvent::AuthRequest { session, .. } = auth else {
+        unreachable!();
+    };
+    server.auth_decide(session, true).expect("authorize");
+    poll_until(
+        &server,
+        |event| matches!(event, GameEvent::SessionReady { session: ready, .. } if *ready == session),
+    );
+    poll_until(
+        &client,
+        |event| matches!(event, GameEvent::SessionReady { endpoint, .. } if *endpoint == client_endpoint),
+    );
+    std::thread::sleep(Duration::from_millis(25));
+    server.poll(32, Duration::ZERO); // Enqueue one authenticated probe.
+    let client_deadline = Instant::now() + Duration::from_millis(100);
+    while Instant::now() < client_deadline {
+        client.poll(32, Duration::from_millis(5)); // Process probe and enqueue ack.
+    }
+    std::thread::sleep(Duration::from_millis(220));
+    let events = server.poll(32, Duration::ZERO);
+    assert!(
+        !events.iter().any(|event| matches!(event, GameEvent::SessionClosed { session: closed, reason: rnet_core::ErrorCode::Timeout, .. } if *closed == session)),
+        "an on-time queued ack must be processed before timeout"
+    );
+    assert!(
+        server
+            .network_quality(session)
+            .expect("session remains ready")
+            .is_some(),
+        "the queued ack must update quality"
+    );
+    server.stop(Duration::ZERO).expect("stop server");
+    client.stop(Duration::ZERO).expect("stop client");
+}
+
 fn exercise_game_session(transport: Transport) {
     let server_key = Keypair::generate().expect("server key");
     let client_key = Keypair::generate().expect("client key");

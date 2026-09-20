@@ -2,6 +2,7 @@
 /dist/
 /fuzz/artifacts/
 /fuzz/corpus/
+/fuzz/target/
 /lib/
 
 # Local build, test, coverage, and profiling artifacts.

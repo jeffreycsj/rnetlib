@@ -60,7 +60,7 @@ impl NetworkRuntime {
                     cleanup: Some(cleanup_sender.clone()),
                 },
             };
-            match self.insert_pending_session(endpoint, target, None) {
+            match self.insert_pending_session(endpoint, target, None, true) {
                 Ok(session) => Some(session),
                 Err(error) => {
                     self.discard_endpoint(endpoint);
@@ -179,14 +179,14 @@ impl NetworkRuntime {
             .record(LatencyKind::Connect, connect_started.elapsed());
         let endpoint = self.insert_endpoint(stream.local_addr()?, config.transport)?;
         let (sender, receiver) = mpsc::channel(self.shared.config.write_queue_capacity);
-        let session = match self.insert_pending_session(endpoint, SessionTarget::Tcp(sender), None)
-        {
-            Ok(session) => session,
-            Err(error) => {
-                self.discard_endpoint(endpoint);
-                return Err(error);
-            }
-        };
+        let session =
+            match self.insert_pending_session(endpoint, SessionTarget::Tcp(sender), None, true) {
+                Ok(session) => session,
+                Err(error) => {
+                    self.discard_endpoint(endpoint);
+                    return Err(error);
+                }
+            };
         if let Err(error) = self.push_endpoint_opened(endpoint) {
             self.discard_session(session);
             self.discard_endpoint(endpoint);

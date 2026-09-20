@@ -100,6 +100,7 @@ pub(crate) async fn run_udp_endpoint(
                             established: true,
                             auth_decision: None,
                             security_commands: None,
+                            allows_game_controls: false,
                             queued_bytes: ByteBudget::new(shared.config.max_session_queued_bytes),
                         });
                         if shared.events.try_push(session_event(EventType::SessionOpened, endpoint, session)).is_err() {

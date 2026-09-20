@@ -69,7 +69,9 @@ enum {
   RNET_EVENT_RUNTIME_STOPPED = 8,
   RNET_EVENT_AUTH_REQUEST = 9,
   RNET_EVENT_JOIN_FAILED = 10,
-  RNET_EVENT_SECURITY_CHANGED = 11
+  RNET_EVENT_SECURITY_CHANGED = 11,
+  /* Reserved for authenticated game-library controls; not application data. */
+  RNET_EVENT_GAME_CONTROL = 12
 };
 
 enum {

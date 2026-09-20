@@ -5,8 +5,9 @@ use crate::auto_rekey::AutoRekey;
 use crate::event::{completed_operation, security_changed_event, SecurityOperation};
 use crate::metrics::LatencyKind;
 use crate::state::{
-    message_event, push_tcp_event, receive_security_command, remove_session_with_reason,
-    session_active, wait_for_deadline, Outbound, SecurityCommand, Shared,
+    game_control_event, message_event, push_tcp_event, receive_security_command,
+    remove_session_with_reason, session_active, wait_for_deadline, Outbound, OutboundKind,
+    SecurityCommand, Shared,
 };
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
 use rnet_protocol::control::{
@@ -77,12 +78,16 @@ pub(crate) async fn run_adaptive_session(
             outbound = receiver.recv(), if !controller.is_transitioning() => {
                 let Some(outbound) = outbound else { break ErrorCode::Cancelled };
                 shared.latencies.record(LatencyKind::SendQueue, outbound.queued_at.elapsed());
-                let result = match controller.mode() {
-                    SecurityMode::Encrypted => write_protected(
+                let result = match outbound.kind {
+                    OutboundKind::GameControl => write_protected(
+                        &mut stream, &mut transport, controller.epoch(), ProtectedKind::GameControl,
+                        &outbound.bytes, max_payload,
+                    ).await,
+                    OutboundKind::Data if controller.mode() == SecurityMode::Encrypted => write_protected(
                         &mut stream, &mut transport, controller.epoch(), ProtectedKind::Data,
                         &outbound.bytes, max_payload,
                     ).await,
-                    SecurityMode::Plaintext => write_wire(
+                    OutboundKind::Data => write_wire(
                         &mut stream,
                         &Record::new(RecordKind::PlainData, controller.epoch(), &outbound.bytes),
                         max_payload,
@@ -90,7 +95,7 @@ pub(crate) async fn run_adaptive_session(
                 };
                 if let Err(error) = result { break error.code(); }
                 shared.metrics.bytes_sent.fetch_add(outbound.bytes.len() as u64, Ordering::Relaxed);
-                if controller.mode() == SecurityMode::Encrypted {
+                if controller.mode() == SecurityMode::Encrypted || outbound.kind == OutboundKind::GameControl {
                     automatic_rekey.record_encrypted_bytes(outbound.bytes.len());
                 }
             }
@@ -177,6 +182,25 @@ async fn process_inbound(
                 .bytes_received
                 .fetch_add(frame.body.len() as u64, Ordering::Relaxed);
             push_tcp_event(shared, message_event(endpoint, session, frame)).await;
+        }
+        ProtectedKind::GameControl if record.kind == RecordKind::Protected => {
+            if message.payload.len() > shared.config.max_body_len {
+                return Err(RnetError::new(
+                    ErrorCode::MessageTooLarge,
+                    "game control exceeds the configured body limit",
+                ));
+            }
+            push_tcp_event(
+                shared,
+                game_control_event(endpoint, session, message.payload),
+            )
+            .await;
+        }
+        ProtectedKind::GameControl => {
+            return Err(RnetError::new(
+                ErrorCode::ProtocolError,
+                "game controls must be authenticated",
+            ));
         }
         ProtectedKind::Control => {
             let control = decode_control(&message.payload)?;

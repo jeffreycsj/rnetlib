@@ -70,6 +70,7 @@ pub(crate) async fn run_tcp_listener(shared: Arc<Shared>, endpoint: Handle, list
                         established: true,
                         auth_decision: None,
                         security_commands: None,
+                        allows_game_controls: false,
                         queued_bytes: ByteBudget::new(shared.config.max_session_queued_bytes),
                     });
                 push_tcp_event(

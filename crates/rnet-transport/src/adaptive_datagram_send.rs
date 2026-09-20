@@ -1,10 +1,11 @@
 //! Deferred adaptive datagram sends released after security barriers complete.
 
-use crate::adaptive_codec::data_record;
+use crate::adaptive_codec::{data_record, protected_record};
 use crate::adaptive_peer::Peer;
 use crate::adaptive_wire::DatagramWire;
 use crate::auto_rekey::AutoRekey;
-use crate::state::{remove_session_with_reason, session_active, Outbound, Shared};
+use crate::state::{remove_session_with_reason, session_active, Outbound, OutboundKind, Shared};
+use rnet_protocol::control::ProtectedKind;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
@@ -43,12 +44,22 @@ pub(crate) async fn flush_deferred(
             continue;
         };
         *deferred_count = deferred_count.saturating_sub(1);
-        let result = match data_record(
-            transport,
-            controller,
-            &outbound.bytes,
-            shared.config.max_body_len,
-        ) {
+        let record = match outbound.kind {
+            OutboundKind::Data => data_record(
+                transport,
+                controller,
+                &outbound.bytes,
+                shared.config.max_body_len,
+            ),
+            OutboundKind::GameControl => protected_record(
+                transport,
+                controller.epoch(),
+                ProtectedKind::GameControl,
+                &outbound.bytes,
+                shared.config.max_body_len,
+            ),
+        };
+        let result = match record {
             Ok(record) => {
                 wire.send(socket, peer, &record, shared.config.max_datagram_size)
                     .await
@@ -65,7 +76,9 @@ pub(crate) async fn flush_deferred(
                     .metrics
                     .bytes_sent
                     .fetch_add(outbound.bytes.len() as u64, Ordering::Relaxed);
-                if controller.mode() == rnet_protocol::control::SecurityMode::Encrypted {
+                if controller.mode() == rnet_protocol::control::SecurityMode::Encrypted
+                    || outbound.kind == OutboundKind::GameControl
+                {
                     if let Some(rekey) = automatic_rekeys.get_mut(&peer) {
                         rekey.record_encrypted_bytes(outbound.bytes.len());
                     }

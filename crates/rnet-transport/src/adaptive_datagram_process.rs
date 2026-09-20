@@ -238,6 +238,7 @@ pub(crate) async fn process(
                     established: false,
                     auth_decision: Some(auth_tx),
                     security_commands: Some(cmd_tx),
+                    allows_game_controls: true,
                     queued_bytes: ByteBudget::new(shared.config.max_session_queued_bytes),
                 },
             )?;

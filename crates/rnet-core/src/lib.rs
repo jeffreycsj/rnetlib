@@ -130,6 +130,8 @@ pub enum EventType {
     JoinFailed = 10,
     /// A server-directed security mode switch or rekey completed.
     SecurityChanged = 11,
+    /// An authenticated game-library control, never a business message.
+    GameControl = 12,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -244,7 +246,10 @@ impl EventQueue {
                 .is_none_or(|total| total > self.0.byte_capacity)
         {
             let position = queue.iter().position(|queued| {
-                matches!(queued.event_type, EventType::Message | EventType::Writable)
+                matches!(
+                    queued.event_type,
+                    EventType::Message | EventType::Writable | EventType::GameControl
+                )
             });
             if let Some(position) = position {
                 if let Some(removed) = queue.remove(position) {

@@ -94,6 +94,8 @@ pub enum ProtectedKind {
     Control = 3,
     /// Confirms receipt of a datagram authentication decision.
     AuthAck = 4,
+    /// Carries a game-library control independently of the business-data security mode.
+    GameControl = 5,
 }
 
 impl TryFrom<u8> for ProtectedKind {
@@ -105,6 +107,7 @@ impl TryFrom<u8> for ProtectedKind {
             2 => Ok(Self::Data),
             3 => Ok(Self::Control),
             4 => Ok(Self::AuthAck),
+            5 => Ok(Self::GameControl),
             _ => protocol_error("unknown protected message kind"),
         }
     }

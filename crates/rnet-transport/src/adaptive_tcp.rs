@@ -84,6 +84,7 @@ pub(crate) async fn run_adaptive_tcp_listener(
                         established: false,
                         auth_decision: Some(auth_sender),
                         security_commands: Some(security_sender),
+                        allows_game_controls: true,
                         queued_bytes: ByteBudget::new(shared.config.max_session_queued_bytes),
                     },
                 ) {

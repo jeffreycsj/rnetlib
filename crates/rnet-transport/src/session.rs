@@ -1,7 +1,9 @@
 use crate::runtime::NetworkRuntime;
 use crate::state::Outbound;
+use crate::state::OutboundKind;
 use crate::state::SecurityCommand;
 use crate::state::SessionTarget;
+use bytes::Bytes;
 use rnet_core::ErrorCode;
 use rnet_core::Handle;
 use rnet_core::Lifecycle;
@@ -146,6 +148,39 @@ impl NetworkRuntime {
             payload,
             self.shared.config.max_body_len,
         )?;
+        self.enqueue_encoded(session, frame, OutboundKind::Data)
+    }
+
+    /// Sends a game-library control through Noise even when business data is plaintext.
+    /// The game facade owns the control envelope; ordinary applications should use `send_payload`.
+    #[doc(hidden)]
+    pub fn send_game_control(&self, session: Handle, payload: &[u8]) -> Result<()> {
+        if self.shared.state.load() != Lifecycle::Running {
+            return Err(RnetError::new(
+                ErrorCode::InvalidState,
+                "runtime is not accepting sends",
+            ));
+        }
+        if payload.len() > self.shared.config.max_body_len {
+            return Err(RnetError::new(
+                ErrorCode::MessageTooLarge,
+                "game control exceeds the configured body limit",
+            ));
+        }
+        self.enqueue_encoded(
+            session,
+            Bytes::copy_from_slice(payload),
+            OutboundKind::GameControl,
+        )
+    }
+
+    fn enqueue_encoded(&self, session: Handle, frame: Bytes, kind: OutboundKind) -> Result<()> {
+        if self.shared.state.load() != Lifecycle::Running {
+            return Err(RnetError::new(
+                ErrorCode::InvalidState,
+                "runtime is not accepting sends",
+            ));
+        }
         let (target, session_budget) = {
             let sessions = self.shared.sessions.lock().expect("session table poisoned");
             let route = sessions
@@ -155,6 +190,12 @@ impl NetworkRuntime {
                 return Err(RnetError::new(
                     ErrorCode::HandshakeRequired,
                     "session handshake has not completed",
+                ));
+            }
+            if kind == OutboundKind::GameControl && !route.allows_game_controls {
+                return Err(RnetError::new(
+                    ErrorCode::NotSupported,
+                    "game controls require an adaptive Noise session",
                 ));
             }
             (route.target.clone(), route.queued_bytes.clone())
@@ -167,13 +208,20 @@ impl NetworkRuntime {
                 ));
             }
         }
-        let outbound = Outbound::with_budgets(frame, &self.shared.send_budget, &session_budget)
-            .inspect_err(|_| {
-                self.shared
-                    .metrics
-                    .send_would_block
-                    .fetch_add(1, Ordering::Relaxed);
-            })?;
+        let outbound = match kind {
+            OutboundKind::Data => {
+                Outbound::with_budgets(frame, &self.shared.send_budget, &session_budget)
+            }
+            OutboundKind::GameControl => {
+                Outbound::with_game_control(frame, &self.shared.send_budget, &session_budget)
+            }
+        }
+        .inspect_err(|_| {
+            self.shared
+                .metrics
+                .send_would_block
+                .fetch_add(1, Ordering::Relaxed);
+        })?;
         let result = match target {
             SessionTarget::Tcp(sender) => sender.try_send(outbound),
             SessionTarget::Udp { sender, peer, .. } => {

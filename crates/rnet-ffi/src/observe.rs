@@ -404,7 +404,7 @@ pub(crate) fn log_event(entry: &RuntimeEntry, runtime: u64, event: &Event) {
         EventType::AuthRequest => ("auth_requested", LogLevel::Info),
         EventType::JoinFailed => ("join_failed", LogLevel::Error),
         EventType::SecurityChanged => ("security_changed", LogLevel::Info),
-        EventType::Message | EventType::Writable => return,
+        EventType::Message | EventType::Writable | EventType::GameControl => return,
     };
     let transport = if event.endpoint == 0 {
         0

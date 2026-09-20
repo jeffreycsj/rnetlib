@@ -11,12 +11,13 @@ make check
 cargo check --locked --manifest-path fuzz/Cargo.toml --bins
 ```
 
-CI additionally runs RustSec, cargo-deny, five libFuzzer smoke campaigns, and an optional Miri job. Do not waive an advisory, license, yanked crate, or unknown source without a dated owner and expiry recorded in `deny.toml` or the security review.
+CI additionally runs RustSec, cargo-deny, six libFuzzer smoke campaigns, and an optional Miri job. Do not waive an advisory, license, yanked crate, or unknown source without a dated owner and expiry recorded in `deny.toml` or the security review.
 
 ## Runtime policy
 
 - Start new C/C++/Go deployments with config v5; Rust starts with `RuntimeConfig::production()`. Set explicit runtime-wide endpoint and pending-handshake limits instead of relying only on per-listener capacity.
 - Keep plaintext business data and legacy unauthenticated endpoints disabled unless a reviewed compatibility exception requires them.
+- Continuously poll every game runtime. Heartbeat scheduling and authenticated reply handling are poll-driven; a stalled game event loop cannot make progress on liveness or per-session quality.
 - Persist private keys in an external keystore, pin or verify the server public key, and rotate identities according to the application's incident policy. Never log key, cookie, ticket, or payload bytes.
 - Size event and send byte budgets from a process RSS limit. Alert before gauges remain above 80% of their configured limits.
 - Size KCP unacknowledged-data budgets for the loss envelope. Application queue bytes and KCP retransmission bytes are independently bounded layers, so include both when deriving the process RSS limit; reserved control capacity prevents data saturation from blocking protocol progress.

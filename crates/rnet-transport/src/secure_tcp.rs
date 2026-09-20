@@ -89,6 +89,7 @@ pub(crate) async fn run_secure_tcp_listener(
                         established: false,
                         auth_decision: Some(auth_sender),
                         security_commands: None,
+                        allows_game_controls: false,
                         queued_bytes: ByteBudget::new(shared.config.max_session_queued_bytes),
                     },
                 ) {

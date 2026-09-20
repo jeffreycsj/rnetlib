@@ -4,7 +4,7 @@
 //! complete. Durable peer/KCP state and application sessions are therefore allocated only after
 //! preflight, and a slow peer's deferred queue is bounded by the endpoint write capacity.
 
-use crate::adaptive_codec::data_record;
+use crate::adaptive_codec::{data_record, protected_record};
 use crate::adaptive_datagram_maintenance::{cleanup_peer, drive_server};
 use crate::adaptive_datagram_process::process;
 use crate::adaptive_datagram_send::flush_deferred;
@@ -19,10 +19,10 @@ use crate::kcp_preflight::encode_hello;
 use crate::state::{
     fail_secure_session, push_endpoint_error, remove_session_with_reason,
     retarget_datagram_endpoint, retarget_datagram_session, session_active, DatagramCleanup,
-    Outbound, Shared,
+    Outbound, OutboundKind, Shared,
 };
 use rnet_core::{ErrorCode, Handle, Result, RnetError, Transport};
-use rnet_protocol::control::{decode_record, Record, RecordKind, SecurityMode};
+use rnet_protocol::control::{decode_record, ProtectedKind, Record, RecordKind, SecurityMode};
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
@@ -220,12 +220,16 @@ pub(crate) async fn run_adaptive_datagram(
                     ..
                 } = &mut state {
                     if session_active(&shared, *session) && !controller.is_transitioning() {
-                        let record = match data_record(
-                            transport,
-                            controller,
-                            &outbound.bytes,
-                            shared.config.max_body_len,
-                        ) {
+                        let record = match outbound.kind {
+                            OutboundKind::Data => data_record(
+                                transport, controller, &outbound.bytes, shared.config.max_body_len,
+                            ),
+                            OutboundKind::GameControl => protected_record(
+                                transport, controller.epoch(), ProtectedKind::GameControl,
+                                &outbound.bytes, shared.config.max_body_len,
+                            ),
+                        };
+                        let record = match record {
                             Ok(record) => record,
                             Err(error) => {
                                 shared.metrics.protocol_errors.fetch_add(1, Ordering::Relaxed);
@@ -268,7 +272,7 @@ pub(crate) async fn run_adaptive_datagram(
                             outbound.bytes.len() as u64,
                             Ordering::Relaxed,
                         );
-                        if controller.mode() == SecurityMode::Encrypted {
+                        if controller.mode() == SecurityMode::Encrypted || outbound.kind == OutboundKind::GameControl {
                             if let Some(rekey) = automatic_rekeys.get_mut(&peer) {
                                 rekey.record_encrypted_bytes(outbound.bytes.len());
                             }
