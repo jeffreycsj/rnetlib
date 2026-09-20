@@ -1,6 +1,7 @@
 //! Game-oriented session and messaging facade over RNet's transport runtime.
 
 mod config;
+mod diagnostics;
 mod envelope;
 mod event;
 #[cfg(feature = "fuzzing")]
@@ -21,6 +22,7 @@ mod runtime;
 pub use config::{
     GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
 };
+pub use diagnostics::GameLoggerSnapshot;
 pub use event::{
     GameEvent, GameMessage, NetworkQuality, QualityBasis, QualityGrade, ResumeTicket,
     SensitiveBytes,
@@ -28,6 +30,7 @@ pub use event::{
 pub use observe::{HeartbeatMetricsSnapshot, ResumeMetricsSnapshot};
 pub use quality::{QualityPolicy, UdpLossSnapshot};
 pub use realtime::{RealtimeQueueConfig, RealtimeQueueSnapshot};
+pub use rnet_observe::{BoundedLogger, LogLevel, LogRecord, LoggerConfig};
 pub use rnet_transport::KcpRetransmissionSnapshot;
 pub use runtime::{GameRuntime, GameSendOptions};
 

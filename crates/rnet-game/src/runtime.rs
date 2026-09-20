@@ -3,6 +3,7 @@
 use crate::config::{
     GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
 };
+use crate::diagnostics::GameDiagnostics;
 use crate::envelope::{decode, DecodedEnvelope};
 use crate::event::{GameEvent, GameMessage};
 use crate::heartbeat::HeartbeatTracker;
@@ -48,6 +49,7 @@ pub struct GameRuntime {
     pub(crate) realtime: Mutex<LatestQueue>,
     pub(crate) resume: Mutex<ResumeRuntimeState>,
     pub(crate) realtime_flush_batch: usize,
+    pub(crate) diagnostics: GameDiagnostics,
     poll_guard: Mutex<()>,
 }
 
@@ -105,6 +107,7 @@ impl GameRuntime {
             realtime: Mutex::new(realtime),
             resume: Mutex::new(resume),
             realtime_flush_batch,
+            diagnostics: GameDiagnostics::new(),
             poll_guard: Mutex::new(()),
         })
     }
@@ -438,7 +441,10 @@ impl GameRuntime {
             let endpoint = event.endpoint;
             let session = event.session;
             match self.convert_event(event) {
-                Ok(Some(event)) => output.push(event),
+                Ok(Some(event)) => {
+                    self.log_game_event(&event);
+                    output.push(event);
+                }
                 Ok(None) => {}
                 Err(_) => {
                     if session != 0 {
@@ -446,7 +452,9 @@ impl GameRuntime {
                             .network
                             .close_session(session, ErrorCode::ProtocolError);
                     }
-                    output.push(GameEvent::ProtocolViolation { endpoint, session });
+                    let violation = GameEvent::ProtocolViolation { endpoint, session };
+                    self.log_game_event(&violation);
+                    output.push(violation);
                 }
             }
         }

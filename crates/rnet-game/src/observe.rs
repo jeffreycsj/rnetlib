@@ -240,6 +240,19 @@ impl GameRuntime {
             "# TYPE rnet_game_resume_outstanding_tickets gauge\nrnet_game_resume_outstanding_tickets {}",
             resume.outstanding_tickets
         );
+        let logger = self.game_logger_snapshot();
+        let _ = writeln!(
+            output,
+            "# TYPE rnet_game_logger_enabled gauge\nrnet_game_logger_enabled {}",
+            u8::from(logger.is_some())
+        );
+        let logger = logger.unwrap_or_default();
+        for (name, value) in [
+            ("rnet_game_logger_dropped_total", logger.dropped),
+            ("rnet_game_logger_sink_panics_total", logger.sink_panics),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
+        }
         output
     }
 

@@ -1,7 +1,7 @@
 use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::time::{Duration, Instant};
 
-use rnet_core::{ErrorCode, Event, EventType};
+use rnet_core::{ErrorCode, Event, EventType, Handle};
 use rnet_security::{InitiatorHandshake, Keypair};
 use rnet_transport::{EndpointConfig, LatencyKind, NetworkRuntime, RuntimeConfig};
 
@@ -19,6 +19,40 @@ fn poll_until(
         }
     }
     panic!("event did not arrive before timeout");
+}
+
+fn poll_open_pair(
+    runtime: &NetworkRuntime,
+    timeout: Duration,
+    listener: Handle,
+    client: Handle,
+) -> (Handle, Handle) {
+    let deadline = Instant::now() + timeout;
+    let mut server_open = None;
+    let mut client_open = None;
+    while Instant::now() < deadline {
+        for event in runtime.poll_events(16, Duration::from_millis(20)) {
+            if event.event_type == EventType::SessionOpened && event.endpoint == listener {
+                server_open = Some(event.session);
+            } else if event.event_type == EventType::SessionOpened && event.endpoint == client {
+                client_open = Some(event.session);
+            } else if matches!(
+                event.event_type,
+                EventType::JoinFailed | EventType::SessionClosed
+            ) {
+                panic!("session failed before both sides opened: {event:?}");
+            }
+        }
+        if let (Some(server), Some(client)) = (server_open, client_open) {
+            return (server, client);
+        }
+    }
+    panic!(
+        "both open events did not arrive: server={}, client={}, metrics={:?}",
+        server_open.is_some(),
+        client_open.is_some(),
+        runtime.metrics_snapshot()
+    );
 }
 
 #[test]
@@ -60,24 +94,23 @@ fn secure_tcp_requires_server_auth_before_opening_and_exchanging_frames() {
         .auth_decide(auth.session, true)
         .expect("accept auth");
 
-    let server_open = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == listener
-    });
-    let client_open = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == client
-    });
+    // Give both sides time to enqueue before polling, exposing lost-event bugs in batch consumers.
+    std::thread::sleep(Duration::from_millis(100));
+
+    let (server_session, client_session) =
+        poll_open_pair(&runtime, Duration::from_secs(2), listener, client);
     assert_eq!(
         runtime
-            .send_game_control(client_open.session, b"reserved")
+            .send_game_control(client_session, b"reserved")
             .expect_err("legacy secure sessions cannot send game controls")
             .code(),
         ErrorCode::NotSupported
     );
     runtime
-        .send_legacy(client_open.session, 7, 1, 99, b"encrypted-frame")
+        .send_legacy(client_session, 7, 1, 99, b"encrypted-frame")
         .expect("send encrypted frame");
     let message = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.session == server_open.session
+        event.event_type == EventType::Message && event.session == server_session
     });
     assert_eq!(message.data, b"encrypted-frame");
     runtime.stop(Duration::ZERO).expect("stop");
@@ -134,22 +167,18 @@ fn secure_udp_establishes_a_logical_session_before_delivering_datagrams() {
         event.event_type == EventType::AuthRequest && event.endpoint == listener
     });
     runtime.auth_decide(auth.session, true).expect("accept UDP");
-    let server_open = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == listener
-    });
-    let client_open = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == client
-    });
+    let (server_session, client_session) =
+        poll_open_pair(&runtime, Duration::from_secs(2), listener, client);
     runtime
         .send_with_options(
-            client_open.session,
+            client_session,
             5,
             b"secure-datagram",
             rnet_transport::SendOptions { correlation_id: 1 },
         )
         .expect("send UDP");
     let message = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.session == server_open.session
+        event.event_type == EventType::Message && event.session == server_session
     });
     assert_eq!(message.data, b"secure-datagram");
     runtime.stop(Duration::ZERO).expect("stop");
@@ -179,23 +208,19 @@ fn secure_kcp_establishes_and_exchanges_a_reliable_message() {
         event.event_type == EventType::AuthRequest && event.endpoint == listener
     });
     runtime.auth_decide(auth.session, true).expect("accept KCP");
-    let server_open = poll_until(&runtime, Duration::from_secs(3), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == listener
-    });
-    let client_open = poll_until(&runtime, Duration::from_secs(3), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == client
-    });
+    let (server_session, client_session) =
+        poll_open_pair(&runtime, Duration::from_secs(3), listener, client);
     let payload = vec![91_u8; 4096];
     runtime
         .send_with_options(
-            client_open.session,
+            client_session,
             8,
             &payload,
             rnet_transport::SendOptions { correlation_id: 2 },
         )
         .expect("send KCP");
     let message = poll_until(&runtime, Duration::from_secs(3), |event| {
-        event.event_type == EventType::Message && event.session == server_open.session
+        event.event_type == EventType::Message && event.session == server_session
     });
     assert_eq!(message.data, payload);
     let latencies = runtime.latency_snapshot();
