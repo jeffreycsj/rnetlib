@@ -26,6 +26,7 @@ check_max_lines() {
 
 transport_modules=(config cookie kcp lifecycle metrics runtime secure_datagram secure_kcp secure_tcp session state tcp udp)
 ffi_modules=(abi endpoint events observe registry runtime session)
+game_modules=(range_api range_runtime range_state realtime_runtime runtime runtime_tests)
 go_modules=(config endpoint event keypair native observe runtime session types)
 
 for module in "${transport_modules[@]}"; do
@@ -33,6 +34,9 @@ for module in "${transport_modules[@]}"; do
 done
 for module in "${ffi_modules[@]}"; do
   require_file "crates/rnet-ffi/src/${module}.rs"
+done
+for module in "${game_modules[@]}"; do
+  require_file "crates/rnet-game/src/${module}.rs"
 done
 for module in "${go_modules[@]}"; do
   require_file "go/rnet/${module}.go"
@@ -47,6 +51,7 @@ check_max_lines 30 cpp/rnet.hpp
 check_max_lines 600 \
   crates/rnet-transport/src/*.rs crates/rnet-ffi/src/*.rs \
   cpp/rnet/*.hpp go/rnet/*.go go/rnet/native.h
+check_max_lines 800 crates/rnet-game/src/*.rs
 
 for forbidden in common helpers misc utils; do
   if find "${project_dir}/crates/rnet-transport/src" \
