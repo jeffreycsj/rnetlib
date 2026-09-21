@@ -1,7 +1,7 @@
 use rnet_core::{ErrorCode, Transport};
 use rnet_game::{
-    BoundedLogger, GameClientConfig, GameEvent, GameLoggerSnapshot, GameProtocol, GameRuntime,
-    GameRuntimeConfig, GameServerConfig, LoggerConfig,
+    BoundedLogger, GameClientConfig, GameEvent, GameProtocol, GameRuntime, GameRuntimeConfig,
+    GameServerConfig, LoggerConfig,
 };
 use rnet_security::Keypair;
 use rnet_transport::ClientSecurity;
@@ -81,10 +81,10 @@ fn optional_game_logger_records_auth_and_denial_without_credentials() {
     }
     assert!(names.iter().any(|name| name == "game_auth_requested"));
     assert!(names.iter().any(|name| name == "game_join_failed"));
-    assert_eq!(
-        runtime.game_logger_snapshot(),
-        Some(GameLoggerSnapshot::default())
-    );
+    let logger = runtime.game_logger_snapshot().expect("logger configured");
+    assert_eq!(logger.dropped, 0);
+    assert_eq!(logger.sink_panics, 0);
+    assert!(runtime.game_logger_callback_latency().unwrap().sample_count >= 2);
     let prometheus = runtime.prometheus_snapshot();
     assert!(prometheus.contains("rnet_game_logger_enabled 1"));
     assert!(prometheus.contains("rnet_game_logger_dropped_total 0"));

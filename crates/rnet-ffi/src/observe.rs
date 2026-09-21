@@ -25,7 +25,9 @@ use rnet_transport::LATENCY_KIND_COUNT;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::str;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -315,6 +317,22 @@ pub(crate) unsafe fn build_logger(logger: *const RnetLogger) -> Result<Option<Bo
 }
 
 pub(crate) unsafe fn build_logger_v2(logger: *const RnetLoggerV2) -> Result<Option<BoundedLogger>> {
+    unsafe { build_logger_v2_inner(logger, None) }
+}
+
+/// Game callbacks use the same layout as transport callbacks, but their runtime field must be
+/// the public game ABI handle rather than the Rust facade's process-local diagnostic ID.
+pub(crate) unsafe fn build_game_logger_v2(
+    logger: *const RnetLoggerV2,
+    ffi_runtime: Arc<AtomicU64>,
+) -> Result<Option<BoundedLogger>> {
+    unsafe { build_logger_v2_inner(logger, Some(ffi_runtime)) }
+}
+
+unsafe fn build_logger_v2_inner(
+    logger: *const RnetLoggerV2,
+    ffi_runtime: Option<Arc<AtomicU64>>,
+) -> Result<Option<BoundedLogger>> {
     if logger.is_null() {
         return Ok(None);
     }
@@ -342,7 +360,9 @@ pub(crate) unsafe fn build_logger_v2(logger: *const RnetLoggerV2) -> Result<Opti
                 record.level as u32,
                 record.event_name.as_ptr(),
                 record.event_name.len(),
-                record.runtime,
+                ffi_runtime
+                    .as_ref()
+                    .map_or(record.runtime, |handle| handle.load(Ordering::Acquire)),
                 record.endpoint,
                 record.session,
                 record.transport,

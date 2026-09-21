@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"runtime/cgo"
 	"sync"
 	"time"
 	"unsafe"
@@ -28,6 +29,10 @@ type GameConfig struct {
 	AllowPlaintextBusinessData bool
 	// Network optionally overrides production transport limits; start from DefaultConfig.
 	Network *Config
+	// Logger receives bounded, asynchronous game lifecycle/security/quality records.
+	// It must return quickly and never call Stop or Close on its own runtime.
+	Logger      func(LogRecord)
+	MinLogLevel LogLevel
 }
 
 type GameServerConfig struct {
@@ -140,19 +145,6 @@ type GameClockSync struct {
 	Samples           uint64
 }
 
-// GameRealtimeQueue reports runtime-wide LatestOnly staging; Forwarded means
-// admitted to the transport queue, not delivered to the peer.
-type GameRealtimeQueue struct {
-	QueuedMessages      uint64
-	QueuedBytes         uint64
-	AdmissionRejected   uint64
-	Replaced            uint64
-	ClosedDropped       uint64
-	BackpressureDropped uint64
-	SendFailed          uint64
-	Forwarded           uint64
-}
-
 func (event GameEvent) String() string {
 	return fmt.Sprintf("GameEvent{Type:%d Endpoint:%d Session:%d RelatedSession:%d Status:%d DataLen:%d AuxDataLen:%d}",
 		event.Type, event.Endpoint, event.Session, event.RelatedSession, event.Status,
@@ -162,9 +154,11 @@ func (event GameEvent) String() string {
 func (event GameEvent) GoString() string { return event.String() }
 
 type GameRuntime struct {
-	mu      sync.RWMutex
-	handle  C.rnet_runtime_t
-	stopped bool
+	mu         sync.RWMutex
+	handle     C.rnet_runtime_t
+	stopped    bool
+	logger     cgo.Handle
+	loggerSink *gameLoggerSink
 }
 
 // NewGameRuntime creates a production-default game runtime. Pass nil for a
@@ -209,12 +203,26 @@ func NewGameRuntime(security *ClientSecurity, configs ...GameConfig) (*GameRunti
 		serverKey = bytePointer(security.ExpectedServerPublicKey)
 	}
 	var handle C.rnet_runtime_t
-	status := C.rnet_go_game_runtime_create(&native, networkPtr, privateKey, serverKey, &handle)
+	var loggerHandle cgo.Handle
+	var loggerSink *gameLoggerSink
+	if len(configs) == 1 && configs[0].Logger != nil {
+		loggerSink = &gameLoggerSink{callback: configs[0].Logger}
+		loggerHandle = cgo.NewHandle(loggerSink)
+	}
+	var minLogLevel LogLevel
+	if len(configs) == 1 {
+		minLogLevel = configs[0].MinLogLevel
+	}
+	status := C.rnet_go_game_runtime_create(&native, networkPtr, privateKey, serverKey,
+		C.uintptr_t(loggerHandle), C.uint32_t(minLogLevel), &handle)
 	runtime.KeepAlive(security)
 	if err := statusError(status); err != nil {
+		if loggerHandle != 0 {
+			loggerHandle.Delete()
+		}
 		return nil, err
 	}
-	return &GameRuntime{handle: handle}, nil
+	return &GameRuntime{handle: handle, logger: loggerHandle, loggerSink: loggerSink}, nil
 }
 
 func (r *GameRuntime) handleValue() (C.rnet_runtime_t, error) {
@@ -436,23 +444,6 @@ func (r *GameRuntime) ClockSyncSnapshot(session Session) (GameClockSync, error) 
 	}, nil
 }
 
-func (r *GameRuntime) RealtimeQueueSnapshot() (GameRealtimeQueue, error) {
-	handle, err := r.handleValue()
-	if err != nil {
-		return GameRealtimeQueue{}, err
-	}
-	var raw C.rnet_game_realtime_queue_t
-	if err := statusError(C.rnet_game_realtime_queue_snapshot(handle, &raw)); err != nil {
-		return GameRealtimeQueue{}, err
-	}
-	return GameRealtimeQueue{
-		QueuedMessages: uint64(raw.queued_messages), QueuedBytes: uint64(raw.queued_bytes),
-		AdmissionRejected: uint64(raw.admission_rejected), Replaced: uint64(raw.replaced),
-		ClosedDropped: uint64(raw.closed_dropped), BackpressureDropped: uint64(raw.backpressure_dropped),
-		SendFailed: uint64(raw.send_failed), Forwarded: uint64(raw.forwarded),
-	}, nil
-}
-
 // PrometheusSnapshot returns an owned text copy without per-player labels.
 func (r *GameRuntime) PrometheusSnapshot() (string, error) {
 	handle, err := r.handleValue()
@@ -470,7 +461,11 @@ func (r *GameRuntime) PrometheusSnapshot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return string(bytes), nil
+	result := string(bytes)
+	if r.loggerSink != nil {
+		result += fmt.Sprintf("# TYPE rnet_game_go_logger_panics_total counter\nrnet_game_go_logger_panics_total %d\n", r.loggerSink.panics.Load())
+	}
+	return result, nil
 }
 
 func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEvent, err error) {
@@ -586,5 +581,9 @@ func (r *GameRuntime) Close() error {
 		return err
 	}
 	r.handle = 0
+	if r.logger != 0 {
+		r.logger.Delete()
+		r.logger = 0
+	}
 	return nil
 }

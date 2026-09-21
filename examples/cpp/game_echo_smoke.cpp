@@ -3,6 +3,10 @@
 #include <chrono>
 #include <string>
 
+extern "C" void game_log_smoke(void *, uint64_t, uint32_t, const uint8_t *,
+                                size_t, uint64_t, uint64_t, uint64_t, uint32_t,
+                                int32_t, uint64_t, const uint8_t *, size_t) {}
+
 int main() {
   rnet::GameServerOptions server;
   server.transport = rnet::Transport::Tcp;
@@ -18,7 +22,14 @@ int main() {
   rnet_game_config_t game_config{};
   rnet::check(rnet_game_config_init(&game_config));
   game_config.network_config = &network_config;
-  rnet::GameRuntime runtime(game_config, client_key, server_public_key);
+  rnet_logger_v2_t logger{};
+  logger.struct_size = sizeof(logger);
+  logger.abi_version = RNET_ABI_VERSION;
+  logger.log = game_log_smoke;
+  logger.min_level = RNET_LOG_INFO;
+  rnet::GameRuntime runtime(game_config, client_key, server_public_key, logger);
+  if (runtime.metrics_snapshot().logger_available != 1)
+    return 9;
   const rnet_endpoint_t listener = runtime.listen(server);
   rnet::GameClientOptions client;
   client.transport = rnet::Transport::Tcp;

@@ -1,14 +1,16 @@
 //! Additive C entry points for the high-level game session API.
 
-use crate::abi::{RnetClientSecurity, RnetSlice};
+use crate::abi::{RnetClientSecurity, RnetLoggerV2, RnetSlice};
 use crate::game_abi::{
     RnetGameBuffer, RnetGameClientConfig, RnetGameClockSync, RnetGameConfig, RnetGameEvent,
-    RnetGameQuality, RnetGameRealtimeQueue, RnetGameServerConfig,
+    RnetGameMetrics, RnetGameQuality, RnetGameRealtimeQueue, RnetGameServerConfig,
 };
 use crate::game_events;
 use crate::game_registry;
+use crate::observe::build_game_logger_v2;
 use crate::registry::{
-    copy_key, ffi_status, invalid_argument, parse_address, validate_struct, with_borrowed_slice,
+    copy_key, ffi_status, invalid_argument, invalid_state, parse_address, validate_struct,
+    with_borrowed_slice, IN_LOG_CALLBACK,
 };
 use crate::runtime::runtime_config_v5;
 use rnet_core::{ErrorCode, Result, RnetError, Transport};
@@ -17,8 +19,9 @@ use rnet_game::{
 };
 use rnet_security::Keypair;
 use rnet_transport::ClientSecurity;
+use std::cell::Cell;
 use std::mem::size_of;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use zeroize::Zeroizing;
@@ -45,6 +48,35 @@ pub unsafe extern "C" fn rnet_game_config_init(out: *mut RnetGameConfig) -> i32 
 pub unsafe extern "C" fn rnet_game_runtime_create(
     config: *const RnetGameConfig,
     client: *const RnetClientSecurity,
+    out: *mut u64,
+) -> i32 {
+    unsafe { create_game_runtime(config, client, std::ptr::null(), out) }
+}
+
+#[no_mangle]
+/// Adds an asynchronous, bounded game-event logger at creation. `logger` is copied; its
+/// callback user data must remain valid until destroy returns. The callback may query metrics
+/// but must not stop or destroy the runtime from its dispatch thread.
+///
+/// # Safety
+/// All pointers must be valid for this call; callback user data must remain thread-safe and
+/// valid until the runtime is destroyed.
+pub unsafe extern "C" fn rnet_game_runtime_create_logged(
+    config: *const RnetGameConfig,
+    client: *const RnetClientSecurity,
+    logger: *const RnetLoggerV2,
+    out: *mut u64,
+) -> i32 {
+    if logger.is_null() {
+        return ffi_status(|| invalid_argument("game logger must be non-null"));
+    }
+    unsafe { create_game_runtime(config, client, logger, out) }
+}
+
+unsafe fn create_game_runtime(
+    config: *const RnetGameConfig,
+    client: *const RnetClientSecurity,
+    logger: *const RnetLoggerV2,
     out: *mut u64,
 ) -> i32 {
     ffi_status(|| {
@@ -87,13 +119,22 @@ pub unsafe extern "C" fn rnet_game_runtime_create(
                 Duration::from_millis(u64::from(config.heartbeat_timeout_ms)),
             );
         }
+        let ffi_identity = Arc::new(AtomicU64::new(0));
+        let game_logger = unsafe { build_game_logger_v2(logger, Arc::clone(&ffi_identity)) }?;
         let runtime = if client.is_null() {
             GameRuntime::new(settings)?
         } else {
             let security = unsafe { client_security(*client) }?;
             GameRuntime::new_with_client_security(settings, security)?
         };
-        unsafe { out.write(game_registry::register(runtime)) };
+        let runtime = if let Some(logger) = game_logger {
+            runtime.with_logger(logger)
+        } else {
+            runtime
+        };
+        let handle = game_registry::register(runtime);
+        ffi_identity.store(handle, Ordering::Release);
+        unsafe { out.write(handle) };
         Ok(())
     })
 }
@@ -419,6 +460,25 @@ pub unsafe extern "C" fn rnet_game_clock_sync_snapshot(
 }
 
 #[no_mangle]
+/// Returns cumulative, low-cardinality game counters. Snapshots of concurrent counters are
+/// not globally atomic; `logger_available` distinguishes absent logging from zero drops.
+/// # Safety
+/// `out` must point to writable storage for one `RnetGameMetrics`.
+pub unsafe extern "C" fn rnet_game_metrics_snapshot(
+    runtime: u64,
+    out: *mut RnetGameMetrics,
+) -> i32 {
+    ffi_status(|| {
+        if out.is_null() {
+            return invalid_argument("game metrics output is null");
+        }
+        let entry = game_registry::lease(runtime)?;
+        unsafe { out.write(RnetGameMetrics::from_runtime(&entry.runtime)) };
+        Ok(())
+    })
+}
+
+#[no_mangle]
 /// Returns runtime-wide `LatestOnly` staging gauges and cumulative loss counters.
 ///
 /// # Safety
@@ -508,6 +568,9 @@ pub extern "C" fn rnet_game_buffer_release(runtime: u64, token: u64) -> i32 {
 #[no_mangle]
 pub extern "C" fn rnet_game_runtime_stop(runtime: u64, drain_timeout_ms: u32) -> i32 {
     ffi_status(|| {
+        if IN_LOG_CALLBACK.with(Cell::get) {
+            return invalid_state("cannot stop a game runtime from a logger callback");
+        }
         let entry = game_registry::lease(runtime)?;
         entry
             .runtime
@@ -519,5 +582,10 @@ pub extern "C" fn rnet_game_runtime_stop(runtime: u64, drain_timeout_ms: u32) ->
 
 #[no_mangle]
 pub extern "C" fn rnet_game_runtime_destroy(runtime: u64) -> i32 {
-    ffi_status(|| game_registry::destroy(runtime))
+    ffi_status(|| {
+        if IN_LOG_CALLBACK.with(Cell::get) {
+            return invalid_state("cannot destroy a game runtime from a logger callback");
+        }
+        game_registry::destroy(runtime)
+    })
 }

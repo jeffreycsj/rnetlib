@@ -4,14 +4,32 @@
 #include "rnet.h"
 #include <string.h>
 
+static inline void rnet_go_log_v2_shim(
+    void *user_data, uint64_t timestamp_unix_ms, uint32_t level,
+    const uint8_t *event_name, size_t event_name_len, rnet_runtime_t runtime,
+    rnet_endpoint_t endpoint, rnet_session_t session, uint32_t transport,
+    int32_t error_code, uint64_t correlation_id, const uint8_t *message,
+    size_t message_len);
+
 static inline int32_t rnet_go_game_runtime_create(
     const rnet_game_config_t *config, const rnet_config_v5_t *network_config,
     const uint8_t *client_private_key,
-    const uint8_t *server_public_key, rnet_runtime_t *out) {
+    const uint8_t *server_public_key, uintptr_t logger_handle,
+    uint32_t min_log_level, rnet_runtime_t *out) {
   rnet_game_config_t configured = *config;
   configured.network_config = network_config;
+  rnet_logger_v2_t logger = {0};
+  if (logger_handle != 0) {
+    logger.struct_size = sizeof(logger);
+    logger.abi_version = RNET_ABI_VERSION;
+    logger.log = rnet_go_log_v2_shim;
+    logger.user_data = (void *)logger_handle;
+    logger.min_level = min_log_level;
+  }
   if (client_private_key == NULL || server_public_key == NULL) {
-    return rnet_game_runtime_create(&configured, NULL, out);
+    return logger_handle == 0
+               ? rnet_game_runtime_create(&configured, NULL, out)
+               : rnet_game_runtime_create_logged(&configured, NULL, &logger, out);
   }
   rnet_client_security_t security = {0};
   security.struct_size = sizeof(security);
@@ -20,7 +38,9 @@ static inline int32_t rnet_go_game_runtime_create(
   security.local_private_key.len = 32;
   security.expected_server_public_key.ptr = server_public_key;
   security.expected_server_public_key.len = 32;
-  return rnet_game_runtime_create(&configured, &security, out);
+  return logger_handle == 0
+             ? rnet_game_runtime_create(&configured, &security, out)
+             : rnet_game_runtime_create_logged(&configured, &security, &logger, out);
 }
 
 static inline int32_t rnet_go_game_server_listen(

@@ -3,7 +3,7 @@
 use crate::event::GameEvent;
 use crate::runtime::GameRuntime;
 use rnet_core::{ErrorCode, Handle};
-use rnet_observe::{BoundedLogger, LogLevel, LogRecord};
+use rnet_observe::{BoundedLogger, LatencySnapshot, LogLevel, LogRecord};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -73,6 +73,15 @@ impl GameRuntime {
                 dropped: logger.dropped(),
                 sink_panics: logger.sink_panics(),
             })
+    }
+
+    /// Asynchronous sink callback time. This separate query preserves the original public
+    /// `GameLoggerSnapshot` shape for Rust callers constructing it directly.
+    pub fn game_logger_callback_latency(&self) -> Option<LatencySnapshot> {
+        self.diagnostics
+            .logger
+            .as_ref()
+            .map(BoundedLogger::callback_latency)
     }
 
     pub(crate) fn log_game_event(&self, event: &GameEvent) {

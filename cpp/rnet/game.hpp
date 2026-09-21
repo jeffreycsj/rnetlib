@@ -80,6 +80,10 @@ struct GameClockSync {
   uint64_t samples = 0;
 };
 
+// Cumulative game telemetry. `logger_available` distinguishes a disabled
+// logger from one that has emitted no drops or callback errors.
+using GameMetrics = rnet_game_metrics_t;
+
 // Runtime-wide pre-transport snapshot queue; forwarded is not delivery.
 struct GameRealtimeQueue {
   uint64_t queued_messages = 0;
@@ -104,6 +108,11 @@ class GameRuntime {
     check(rnet_game_runtime_create(&config, nullptr, &handle_));
   }
 
+  GameRuntime(const rnet_game_config_t &config,
+              const rnet_logger_v2_t &logger) {
+    check(rnet_game_runtime_create_logged(&config, nullptr, &logger, &handle_));
+  }
+
   GameRuntime(const rnet_game_config_t &config, const Keypair &client_key,
               const std::array<uint8_t, 32> &expected_server_key) {
     rnet_client_security_t security{};
@@ -112,6 +121,17 @@ class GameRuntime {
     security.local_private_key = {client_key.private_key(), 32};
     security.expected_server_public_key = {expected_server_key.data(), 32};
     check(rnet_game_runtime_create(&config, &security, &handle_));
+  }
+
+  GameRuntime(const rnet_game_config_t &config, const Keypair &client_key,
+              const std::array<uint8_t, 32> &expected_server_key,
+              const rnet_logger_v2_t &logger) {
+    rnet_client_security_t security{};
+    security.struct_size = sizeof(security);
+    security.abi_version = RNET_ABI_VERSION;
+    security.local_private_key = {client_key.private_key(), 32};
+    security.expected_server_public_key = {expected_server_key.data(), 32};
+    check(rnet_game_runtime_create_logged(&config, &security, &logger, &handle_));
   }
 
   GameRuntime(const Keypair &client_key,
@@ -265,6 +285,12 @@ class GameRuntime {
     value.server_minus_client_us = raw.server_minus_client_us;
     value.rtt_us = raw.rtt_us;
     value.samples = raw.samples;
+    return value;
+  }
+
+  GameMetrics metrics_snapshot() const {
+    GameMetrics value{};
+    check(rnet_game_metrics_snapshot(handle_, &value));
     return value;
   }
 

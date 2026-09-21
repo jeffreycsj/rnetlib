@@ -26,9 +26,21 @@ func rnet_go_log_v2_bridge(
 	message *C.uint8_t,
 	messageLen C.size_t,
 ) {
-	defer func() { _ = recover() }()
-	logger, ok := cgo.Handle(uintptr(userData)).Value().(func(LogRecord))
-	if !ok {
+	var gameSink *gameLoggerSink
+	defer func() {
+		if recover() != nil && gameSink != nil {
+			gameSink.panics.Add(1)
+		}
+	}()
+	value := cgo.Handle(uintptr(userData)).Value()
+	var logger func(LogRecord)
+	switch sink := value.(type) {
+	case func(LogRecord):
+		logger = sink
+	case *gameLoggerSink:
+		gameSink = sink
+		logger = sink.callback
+	default:
 		return
 	}
 	logger(LogRecord{

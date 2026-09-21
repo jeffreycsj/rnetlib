@@ -647,6 +647,48 @@ typedef struct rnet_game_clock_sync {
   uint64_t samples;
 } rnet_game_clock_sync_t;
 
+/* Cumulative, low-cardinality game telemetry. RTT values are cumulative
+ * histogram estimates. logger_available distinguishes disabled logging from
+ * a logger with zero drops; callback timing is recorded on the dispatch thread. */
+typedef struct rnet_game_metrics {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t logger_available;
+  uint32_t reserved;
+  uint64_t heartbeat_probes_sent;
+  uint64_t heartbeat_probe_send_failures;
+  uint64_t heartbeat_replies_sent;
+  uint64_t heartbeat_reply_send_failures;
+  uint64_t heartbeat_replies_matched;
+  uint64_t heartbeat_replies_rejected;
+  uint64_t heartbeat_probes_rate_limited;
+  uint64_t heartbeat_timeouts;
+  uint64_t heartbeat_rtt_samples;
+  uint64_t heartbeat_rtt_p50_us;
+  uint64_t heartbeat_rtt_p90_us;
+  uint64_t heartbeat_rtt_p95_us;
+  uint64_t heartbeat_rtt_p99_us;
+  uint64_t heartbeat_rtt_p999_us;
+  uint64_t heartbeat_rtt_max_us;
+  uint64_t resume_tickets_issued;
+  uint64_t resume_requests_received;
+  uint64_t resume_tickets_rejected;
+  uint64_t resume_authorization_denied;
+  uint64_t resume_pending_revoked;
+  uint64_t resume_sessions_resumed;
+  uint64_t resume_outstanding_tickets;
+  uint64_t clock_probes_sent;
+  uint64_t clock_replies_sent;
+  uint64_t clock_samples;
+  uint64_t clock_rejected;
+  uint64_t clock_send_failures;
+  uint64_t logger_dropped;
+  uint64_t logger_sink_panics;
+  uint64_t logger_callback_samples;
+  uint64_t logger_callback_p99_us;
+  uint64_t logger_callback_max_us;
+} rnet_game_metrics_t;
+
 /* Runtime-wide LatestOnly staging metrics. Gauges describe the current
  * pre-transport queue; forwarded counts transport admission, not delivery. */
 typedef struct rnet_game_realtime_queue {
@@ -674,6 +716,14 @@ int32_t rnet_game_config_init(rnet_game_config_t *out);
 int32_t rnet_game_runtime_create(const rnet_game_config_t *config,
                                  const rnet_client_security_t *client_security,
                                  rnet_runtime_t *out);
+/* Game records are delivered asynchronously without payloads, credentials or
+ * tickets. The callback runtime field is the public game ABI runtime handle.
+ * Logger user_data must stay valid until destroy returns. The callback may
+ * query metrics but must not call runtime_stop/runtime_destroy. */
+int32_t rnet_game_runtime_create_logged(
+    const rnet_game_config_t *config,
+    const rnet_client_security_t *client_security,
+    const rnet_logger_v2_t *logger, rnet_runtime_t *out);
 int32_t rnet_game_server_listen(rnet_runtime_t runtime,
                                 const rnet_game_server_config_t *config,
                                 rnet_endpoint_t *out);
@@ -712,6 +762,8 @@ int32_t rnet_game_clock_micros(rnet_runtime_t runtime, uint64_t *out);
 int32_t rnet_game_clock_sync_snapshot(rnet_runtime_t runtime,
                                       rnet_session_t session,
                                       rnet_game_clock_sync_t *out);
+int32_t rnet_game_metrics_snapshot(rnet_runtime_t runtime,
+                                   rnet_game_metrics_t *out);
 int32_t rnet_game_realtime_queue_snapshot(
     rnet_runtime_t runtime, rnet_game_realtime_queue_t *out);
 /* Prometheus text has no per-player labels; release its nonzero token. */

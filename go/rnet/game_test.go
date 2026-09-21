@@ -186,6 +186,10 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 			if !clock.Available || clock.Samples == 0 {
 				t.Fatalf("clock sync unavailable: %+v", clock)
 			}
+			gameMetrics, err := runtime.MetricsSnapshot()
+			if err != nil || gameMetrics.Heartbeat.RTTSamples == 0 || gameMetrics.Clock.Samples == 0 || gameMetrics.LoggerAvailable {
+				t.Fatalf("invalid game metrics: %+v, %v", gameMetrics, err)
+			}
 			metrics, err := runtime.PrometheusSnapshot()
 			if err != nil || !strings.Contains(metrics, "rnet_game_heartbeat_") {
 				t.Fatalf("missing game metrics: %v", err)
@@ -248,6 +252,60 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGameLoggerAndMetricsAreAvailableWithoutTransportRuntime(t *testing.T) {
+	records := make(chan LogRecord, 8)
+	runtime, err := NewGameRuntime(nil, GameConfig{Logger: func(record LogRecord) { records <- record }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	metrics, err := runtime.MetricsSnapshot()
+	if err != nil || !metrics.LoggerAvailable {
+		t.Fatalf("logger metrics unavailable: %+v, %v", metrics, err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := runtime.Poll(4, 5*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case record := <-records:
+			if record.EventName != "game_runtime_started" {
+				t.Fatalf("unexpected record: %+v", record)
+			}
+			return
+		default:
+		}
+	}
+	t.Fatal("game logger callback not invoked")
+}
+
+func TestGameLoggerPanicIsCountedWithoutKillingRuntime(t *testing.T) {
+	runtime, err := NewGameRuntime(nil, GameConfig{Logger: func(LogRecord) { panic("sink failure") }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := runtime.Poll(4, 5*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+		metrics, err := runtime.MetricsSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if metrics.Logger.SinkPanics >= 1 {
+			prometheus, err := runtime.PrometheusSnapshot()
+			if err != nil || !strings.Contains(prometheus, "rnet_game_go_logger_panics_total 1") {
+				t.Fatalf("Go logger panic metric unavailable: %v, %v", prometheus, err)
+			}
+			return
+		}
+	}
+	t.Fatal("game logger panic was not counted")
 }
 
 func TestGamePlaintextRequiresExplicitServerAndRuntimeOptIn(t *testing.T) {
