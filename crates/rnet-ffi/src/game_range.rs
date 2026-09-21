@@ -4,6 +4,7 @@ use crate::abi::RnetSlice;
 use crate::game_abi::{
     RnetGameRangeClientConfig, RnetGameRangeServerConfig, RnetGameTransportLatest,
 };
+use crate::game_range_abi::RnetGameRangeBuffer;
 use crate::game_registry;
 use crate::registry::{
     copy_key, ffi_status, invalid_argument, parse_address, validate_struct, with_borrowed_slice,
@@ -198,6 +199,27 @@ pub unsafe extern "C" fn rnet_game_transport_latest_snapshot(
         let snapshot = game_registry::lease(runtime)?
             .runtime
             .transport_latest_snapshot();
+        unsafe { out.write(snapshot.into()) };
+        Ok(())
+    })
+}
+
+#[no_mangle]
+/// Returns runtime-wide wire-v4 early-data gauges, limits, peaks, and rejection counters.
+///
+/// # Safety
+/// `out` must point to writable storage for one `RnetGameRangeBuffer`.
+pub unsafe extern "C" fn rnet_game_range_buffer_snapshot(
+    runtime: u64,
+    out: *mut RnetGameRangeBuffer,
+) -> i32 {
+    ffi_status(|| {
+        if out.is_null() {
+            return invalid_argument("game range buffer output is null");
+        }
+        let snapshot = game_registry::lease(runtime)?
+            .runtime
+            .range_buffer_snapshot();
         unsafe { out.write(snapshot.into()) };
         Ok(())
     })

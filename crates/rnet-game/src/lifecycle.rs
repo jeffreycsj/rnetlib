@@ -20,7 +20,7 @@ impl GameRuntime {
     pub fn stop(&self, drain_timeout: Duration) -> Result<()> {
         let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
         self.network.stop(drain_timeout)?;
-        *self.range.lock().expect("range state poisoned") = Default::default();
+        self.range.lock().expect("range state poisoned").clear();
         self.heartbeat_trackers
             .lock()
             .expect("heartbeat table poisoned")

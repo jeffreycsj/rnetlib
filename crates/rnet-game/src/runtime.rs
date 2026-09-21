@@ -97,6 +97,8 @@ impl GameRuntime {
         let maximum_envelope_len = config.network.max_body_len;
         let realtime = LatestQueue::from_config(config.realtime_queue)?;
         let realtime_flush_batch = config.realtime_queue.flush_batch;
+        let range_buffer_messages = config.network.event_queue_capacity;
+        let range_buffer_bytes = config.network.max_event_bytes;
         let allow_plaintext_business_data =
             config.network.security_policy.allow_plaintext_business_data;
         let resume = ResumeRuntimeState::new(config.resume_ticket_ttl, config.max_resume_tickets)?;
@@ -122,7 +124,10 @@ impl GameRuntime {
             quality_policy: config.quality_policy,
             realtime: Mutex::new(realtime),
             resume: Mutex::new(resume),
-            range: Mutex::new(RangeRuntimeState::default()),
+            range: Mutex::new(RangeRuntimeState::with_buffer_limits(
+                range_buffer_messages,
+                range_buffer_bytes,
+            )),
             realtime_flush_batch,
             allow_plaintext_business_data,
             diagnostics: GameDiagnostics::new(),

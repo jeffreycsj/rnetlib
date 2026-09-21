@@ -37,6 +37,7 @@ pub use event::{
 };
 pub use observe::{HeartbeatMetricsSnapshot, ResumeMetricsSnapshot};
 pub use quality::{QualityPolicy, UdpLossSnapshot};
+pub use range_state::RangeBufferSnapshot;
 pub use realtime::{RealtimeQueueConfig, RealtimeQueueSnapshot};
 pub use rnet_observe::{BoundedLogger, LogLevel, LogRecord, LoggerConfig};
 pub use rnet_transport::{KcpRetransmissionSnapshot, LatestTransportSnapshot};

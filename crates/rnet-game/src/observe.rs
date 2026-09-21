@@ -1,6 +1,7 @@
 //! Game-facing transport and authenticated-heartbeat telemetry.
 
 use crate::runtime::GameRuntime;
+use crate::RangeBufferSnapshot;
 use rnet_observe::{LatencyHistogram, LatencySnapshot};
 use rnet_transport::{LatencyMetricSnapshot, MetricsSnapshot, LATENCY_KIND_COUNT};
 use std::fmt::Write;
@@ -119,6 +120,11 @@ impl GameRuntime {
     /// Returns cumulative counters and current resource gauges.
     pub fn metrics_snapshot(&self) -> MetricsSnapshot {
         self.network.metrics_snapshot()
+    }
+
+    /// Returns current/peak wire-v4 early-data usage and cumulative admission failures.
+    pub fn range_buffer_snapshot(&self) -> RangeBufferSnapshot {
+        self.range.lock().expect("range state poisoned").snapshot()
     }
 
     /// Returns transport and game-heartbeat Prometheus metrics without per-session labels.
@@ -254,6 +260,44 @@ impl GameRuntime {
                 realtime.queued_messages,
             ),
             ("rnet_game_realtime_queued_bytes", realtime.queued_bytes),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
+        }
+        let range = self.range_buffer_snapshot();
+        for (name, value) in [
+            (
+                "rnet_game_range_early_session_admission_rejected_total",
+                range.session_admission_rejected,
+            ),
+            (
+                "rnet_game_range_early_runtime_admission_rejected_total",
+                range.runtime_admission_rejected,
+            ),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
+        }
+        for (name, value) in [
+            (
+                "rnet_game_range_early_buffered_messages",
+                range.buffered_messages,
+            ),
+            ("rnet_game_range_early_buffered_bytes", range.buffered_bytes),
+            (
+                "rnet_game_range_early_peak_buffered_messages",
+                range.peak_buffered_messages,
+            ),
+            (
+                "rnet_game_range_early_peak_buffered_bytes",
+                range.peak_buffered_bytes,
+            ),
+            (
+                "rnet_game_range_early_max_buffered_messages",
+                range.max_buffered_messages,
+            ),
+            (
+                "rnet_game_range_early_max_buffered_bytes",
+                range.max_buffered_bytes,
+            ),
         ] {
             let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
         }

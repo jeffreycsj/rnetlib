@@ -20,6 +20,18 @@ type GameRealtimeQueue struct {
 	Forwarded           uint64
 }
 
+// GameRangeBuffer reports runtime-wide wire-v4 early-data usage and rejection totals.
+type GameRangeBuffer struct {
+	BufferedMessages         uint64
+	BufferedBytes            uint64
+	PeakBufferedMessages     uint64
+	PeakBufferedBytes        uint64
+	MaxBufferedMessages      uint64
+	MaxBufferedBytes         uint64
+	SessionAdmissionRejected uint64
+	RuntimeAdmissionRejected uint64
+}
+
 // GameMetrics is cumulative, process-local telemetry without player labels.
 // LoggerAvailable distinguishes disabled logging from zero dropped records.
 type GameMetrics struct {
@@ -111,5 +123,23 @@ func (r *GameRuntime) RealtimeQueueSnapshot() (GameRealtimeQueue, error) {
 		AdmissionRejected: uint64(raw.admission_rejected), Replaced: uint64(raw.replaced),
 		ClosedDropped: uint64(raw.closed_dropped), BackpressureDropped: uint64(raw.backpressure_dropped),
 		SendFailed: uint64(raw.send_failed), Forwarded: uint64(raw.forwarded),
+	}, nil
+}
+
+// RangeBufferSnapshot returns low-cardinality wire-v4 early-data capacity telemetry.
+func (r *GameRuntime) RangeBufferSnapshot() (GameRangeBuffer, error) {
+	handle, err := r.handleValue()
+	if err != nil {
+		return GameRangeBuffer{}, err
+	}
+	var raw C.rnet_game_range_buffer_t
+	if err := statusError(C.rnet_game_range_buffer_snapshot(handle, &raw)); err != nil {
+		return GameRangeBuffer{}, err
+	}
+	return GameRangeBuffer{
+		BufferedMessages: uint64(raw.buffered_messages), BufferedBytes: uint64(raw.buffered_bytes),
+		PeakBufferedMessages: uint64(raw.peak_buffered_messages), PeakBufferedBytes: uint64(raw.peak_buffered_bytes),
+		MaxBufferedMessages: uint64(raw.max_buffered_messages), MaxBufferedBytes: uint64(raw.max_buffered_bytes),
+		SessionAdmissionRejected: uint64(raw.session_admission_rejected), RuntimeAdmissionRejected: uint64(raw.runtime_admission_rejected),
 	}, nil
 }

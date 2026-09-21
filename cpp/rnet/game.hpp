@@ -122,6 +122,17 @@ struct GameRealtimeQueue {
   uint64_t forwarded = 0;
 };
 
+struct GameRangeBuffer {
+  uint64_t buffered_messages = 0;
+  uint64_t buffered_bytes = 0;
+  uint64_t peak_buffered_messages = 0;
+  uint64_t peak_buffered_bytes = 0;
+  uint64_t max_buffered_messages = 0;
+  uint64_t max_buffered_bytes = 0;
+  uint64_t session_admission_rejected = 0;
+  uint64_t runtime_admission_rejected = 0;
+};
+
 struct GameTransportLatest {
   uint64_t pending_replaced = 0;
   uint64_t worker_pickups = 0;
@@ -406,6 +417,21 @@ class GameRuntime {
     value.backpressure_dropped = raw.backpressure_dropped;
     value.send_failed = raw.send_failed;
     value.forwarded = raw.forwarded;
+    return value;
+  }
+
+  GameRangeBuffer range_buffer_snapshot() const {
+    rnet_game_range_buffer_t raw{};
+    check(rnet_game_range_buffer_snapshot(handle_, &raw));
+    GameRangeBuffer value;
+    value.buffered_messages = raw.buffered_messages;
+    value.buffered_bytes = raw.buffered_bytes;
+    value.peak_buffered_messages = raw.peak_buffered_messages;
+    value.peak_buffered_bytes = raw.peak_buffered_bytes;
+    value.max_buffered_messages = raw.max_buffered_messages;
+    value.max_buffered_bytes = raw.max_buffered_bytes;
+    value.session_admission_rejected = raw.session_admission_rejected;
+    value.runtime_admission_rejected = raw.runtime_admission_rejected;
     return value;
   }
 

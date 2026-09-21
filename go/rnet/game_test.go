@@ -271,6 +271,10 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 			if err != nil || gameMetrics.Heartbeat.RTTSamples == 0 || gameMetrics.Clock.Samples == 0 || gameMetrics.LoggerAvailable {
 				t.Fatalf("invalid game metrics: %+v, %v", gameMetrics, err)
 			}
+			rangeBuffer, err := runtime.RangeBufferSnapshot()
+			if err != nil || rangeBuffer.MaxBufferedMessages == 0 || rangeBuffer.MaxBufferedBytes == 0 {
+				t.Fatalf("invalid range buffer metrics: %+v, %v", rangeBuffer, err)
+			}
 			metrics, err := runtime.PrometheusSnapshot()
 			if err != nil || !strings.Contains(metrics, "rnet_game_heartbeat_") {
 				t.Fatalf("missing game metrics: %v", err)

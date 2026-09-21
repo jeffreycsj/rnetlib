@@ -25,6 +25,7 @@ rnet_game_metrics_snapshot
 rnet_game_network_quality
 rnet_game_poll_events
 rnet_game_prometheus_snapshot
+rnet_game_range_buffer_snapshot
 rnet_game_realtime_queue_snapshot
 rnet_game_rekey
 rnet_game_runtime_create

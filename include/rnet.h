@@ -736,6 +736,21 @@ typedef struct rnet_game_realtime_queue {
   uint64_t forwarded;
 } rnet_game_realtime_queue_t;
 
+/* Runtime-wide wire-v4 business data retained until readiness is observable.
+ * Rejection fields are cumulative; all other usage fields are gauges. */
+typedef struct rnet_game_range_buffer {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint64_t buffered_messages;
+  uint64_t buffered_bytes;
+  uint64_t peak_buffered_messages;
+  uint64_t peak_buffered_bytes;
+  uint64_t max_buffered_messages;
+  uint64_t max_buffered_bytes;
+  uint64_t session_admission_rejected;
+  uint64_t runtime_admission_rejected;
+} rnet_game_range_buffer_t;
+
 /* Cumulative LatestOnly telemetry after the game staging queue. A worker
  * pickup is the boundary after which TCP/KCP data can no longer be recalled. */
 typedef struct rnet_game_transport_latest {
@@ -827,6 +842,8 @@ int32_t rnet_game_metrics_snapshot(rnet_runtime_t runtime,
                                    rnet_game_metrics_t *out);
 int32_t rnet_game_realtime_queue_snapshot(
     rnet_runtime_t runtime, rnet_game_realtime_queue_t *out);
+int32_t rnet_game_range_buffer_snapshot(rnet_runtime_t runtime,
+                                        rnet_game_range_buffer_t *out);
 /* TCP/KCP snapshots replaced after game staging but before I/O worker pickup. */
 int32_t rnet_game_transport_latest_replacements(rnet_runtime_t runtime,
                                                  uint64_t *out);

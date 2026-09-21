@@ -5,6 +5,10 @@ use bytes::Bytes;
 use rnet_core::EventType;
 use std::time::Duration;
 
+fn range_state() -> RangeRuntimeState {
+    RangeRuntimeState::with_buffer_limits(4_096, 64 * 1024 * 1024)
+}
+
 #[test]
 fn late_duplicate_select_does_not_disconnect_a_ready_udp_client() {
     let runtime = GameRuntime::new(GameRuntimeConfig::production()).unwrap();
@@ -36,9 +40,9 @@ fn late_duplicate_select_does_not_disconnect_a_ready_udp_client() {
 
 #[test]
 fn completed_early_messages_respect_public_poll_capacity() {
-    let mut state = RangeRuntimeState::default();
+    let mut state = range_state();
     for byte in [1, 2] {
-        state.completed.push_back(GameEvent::Message(GameMessage {
+        state.push_completed_for_test(GameEvent::Message(GameMessage {
             endpoint: 1,
             session: 2,
             sequence: None,
@@ -56,8 +60,8 @@ fn completed_early_messages_respect_public_poll_capacity() {
 
 #[test]
 fn resumed_mapping_precedes_buffered_business_data() {
-    let mut state = RangeRuntimeState::default();
-    state.completed.push_back(GameEvent::Message(GameMessage {
+    let mut state = range_state();
+    state.push_completed_for_test(GameEvent::Message(GameMessage {
         endpoint: 1,
         session: 3,
         sequence: None,
@@ -85,12 +89,12 @@ fn resumed_mapping_precedes_buffered_business_data() {
 
 #[test]
 fn closing_range_session_discards_deferred_ready_and_message_events() {
-    let mut state = RangeRuntimeState::default();
-    state.completed.push_back(GameEvent::SessionReady {
+    let mut state = range_state();
+    state.push_completed_for_test(GameEvent::SessionReady {
         endpoint: 1,
         session: 9,
     });
-    state.completed.push_back(GameEvent::Message(GameMessage {
+    state.push_completed_for_test(GameEvent::Message(GameMessage {
         endpoint: 1,
         session: 9,
         sequence: None,

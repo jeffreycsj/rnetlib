@@ -5,8 +5,7 @@ use crate::envelope::{encode_control, ControlKind};
 use crate::event::{GameEvent, GameMessage};
 use crate::join;
 use crate::range_state::{
-    Phase, RangeSession, ACK, CONTROL_LEN, MAX_BUFFERED_BYTES, MAX_BUFFERED_MESSAGES,
-    NEGOTIATION_TIMEOUT, READY, RETRY_INTERVAL, SELECT,
+    Phase, RangeSession, ACK, CONTROL_LEN, NEGOTIATION_TIMEOUT, READY, RETRY_INTERVAL, SELECT,
 };
 use crate::resume_runtime::ServerSessionMeta;
 use crate::runtime::GameRuntime;
@@ -293,10 +292,7 @@ impl GameRuntime {
                 state.phase = Phase::ServerReady;
                 let old_session = state.old_session;
                 let server_resume = state.server_resume;
-                let buffered = std::mem::take(&mut state.buffered);
-                range
-                    .completed
-                    .extend(buffered.into_iter().map(GameEvent::Message));
+                range.complete_buffered(event.session);
                 drop(range);
                 self.publish_range_ready(event.endpoint, event.session, old_session, server_resume)
             }
@@ -308,10 +304,7 @@ impl GameRuntime {
                 }
                 state.phase = Phase::ClientReady;
                 let old_session = state.old_session;
-                let buffered = std::mem::take(&mut state.buffered);
-                range
-                    .completed
-                    .extend(buffered.into_iter().map(GameEvent::Message));
+                range.complete_buffered(event.session);
                 drop(range);
                 self.publish_range_ready(event.endpoint, event.session, old_session, false)
             }
@@ -381,23 +374,10 @@ impl GameRuntime {
     }
 
     pub(crate) fn buffer_range_message(&self, message: GameMessage) -> Result<Option<GameEvent>> {
-        let mut range = self.range.lock().expect("range state poisoned");
-        let Some(state) = range.sessions.get_mut(&message.session) else {
-            return Ok(Some(GameEvent::Message(message)));
-        };
-        if matches!(state.phase, Phase::ServerReady | Phase::ClientReady) {
-            return Ok(Some(GameEvent::Message(message)));
-        }
-        let next = state
-            .buffered_bytes
-            .checked_add(message.payload.len())
-            .ok_or_else(|| protocol_error("v4 pending message budget overflow"))?;
-        if state.buffered.len() >= MAX_BUFFERED_MESSAGES || next > MAX_BUFFERED_BYTES {
-            return Err(protocol_error("v4 pending message budget exhausted"));
-        }
-        state.buffered_bytes = next;
-        state.buffered.push_back(message);
-        Ok(None)
+        self.range
+            .lock()
+            .expect("range state poisoned")
+            .buffer_message(message)
     }
 
     /// Retry controls independently of user-visible events so hidden controls cannot starve it.

@@ -79,6 +79,24 @@ fn runtime_rejects_invalid_realtime_queue_limits() {
 }
 
 #[test]
+fn range_early_data_budget_is_visible_without_session_labels() {
+    let mut config = GameRuntimeConfig::production();
+    config.network.event_queue_capacity = 17;
+    config.network.max_event_bytes = 4_321;
+    let runtime = GameRuntime::new(config).expect("runtime");
+
+    let snapshot = runtime.range_buffer_snapshot();
+    assert_eq!(snapshot.max_buffered_messages, 17);
+    assert_eq!(snapshot.max_buffered_bytes, 4_321);
+    assert_eq!(snapshot.buffered_messages, 0);
+    assert_eq!(snapshot.buffered_bytes, 0);
+    let prometheus = runtime.prometheus_snapshot();
+    assert!(prometheus.contains("rnet_game_range_early_max_buffered_messages 17"));
+    assert!(prometheus.contains("rnet_game_range_early_max_buffered_bytes 4321"));
+    assert!(!prometheus.contains("session="));
+}
+
+#[test]
 fn udp_sequence_extension_is_required_only_on_udp_game_sessions() {
     let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
     runtime.track_session(41);

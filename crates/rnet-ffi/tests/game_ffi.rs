@@ -3,15 +3,16 @@ use rnet::{
     rnet_game_client_resume_connect, rnet_game_clock_micros, rnet_game_clock_sync_snapshot,
     rnet_game_config_init, rnet_game_endpoint_local_port, rnet_game_issue_resume_ticket,
     rnet_game_metrics_snapshot, rnet_game_network_quality, rnet_game_poll_events,
-    rnet_game_prometheus_snapshot, rnet_game_realtime_queue_snapshot, rnet_game_runtime_create,
-    rnet_game_runtime_create_logged, rnet_game_runtime_destroy, rnet_game_runtime_stop,
-    rnet_game_send, rnet_game_send_latest, rnet_game_server_listen, rnet_game_session_close,
-    rnet_runtime_create_v5, rnet_runtime_destroy, rnet_runtime_stop, RnetClientSecurity,
-    RnetConfigV5, RnetGameBuffer, RnetGameClientConfig, RnetGameClockSync, RnetGameConfig,
-    RnetGameEvent, RnetGameMetrics, RnetGameQuality, RnetGameRealtimeQueue, RnetGameServerConfig,
-    RnetLoggerV2, RnetSlice, RNET_ABI_VERSION, RNET_E_HANDSHAKE_REQUIRED, RNET_E_INVALID_ARGUMENT,
-    RNET_E_INVALID_HANDLE, RNET_E_INVALID_STATE, RNET_E_WOULD_BLOCK, RNET_GAME_AUTH_REQUEST,
-    RNET_GAME_MESSAGE, RNET_GAME_RESUME_REQUEST, RNET_GAME_RESUME_TICKET, RNET_GAME_SESSION_READY,
+    rnet_game_prometheus_snapshot, rnet_game_range_buffer_snapshot,
+    rnet_game_realtime_queue_snapshot, rnet_game_runtime_create, rnet_game_runtime_create_logged,
+    rnet_game_runtime_destroy, rnet_game_runtime_stop, rnet_game_send, rnet_game_send_latest,
+    rnet_game_server_listen, rnet_game_session_close, rnet_runtime_create_v5, rnet_runtime_destroy,
+    rnet_runtime_stop, RnetClientSecurity, RnetConfigV5, RnetGameBuffer, RnetGameClientConfig,
+    RnetGameClockSync, RnetGameConfig, RnetGameEvent, RnetGameMetrics, RnetGameQuality,
+    RnetGameRangeBuffer, RnetGameRealtimeQueue, RnetGameServerConfig, RnetLoggerV2, RnetSlice,
+    RNET_ABI_VERSION, RNET_E_HANDSHAKE_REQUIRED, RNET_E_INVALID_ARGUMENT, RNET_E_INVALID_HANDLE,
+    RNET_E_INVALID_STATE, RNET_E_WOULD_BLOCK, RNET_GAME_AUTH_REQUEST, RNET_GAME_MESSAGE,
+    RNET_GAME_RESUME_REQUEST, RNET_GAME_RESUME_TICKET, RNET_GAME_SESSION_READY,
     RNET_GAME_SESSION_RESUMED, RNET_LOG_INFO, RNET_OK, RNET_TRANSPORT_TCP,
 };
 use rnet_security::Keypair;
@@ -512,6 +513,18 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
     );
     assert_eq!(realtime.queued_messages, 0);
     assert_eq!(realtime.replaced, 0);
+    let mut range = RnetGameRangeBuffer::default();
+    assert_eq!(
+        unsafe { rnet_game_range_buffer_snapshot(runtime, &mut range) },
+        RNET_OK
+    );
+    assert_eq!(range.struct_size as usize, size_of::<RnetGameRangeBuffer>());
+    assert!(range.max_buffered_messages > 0);
+    assert!(range.max_buffered_bytes > 0);
+    assert_eq!(
+        unsafe { rnet_game_range_buffer_snapshot(runtime, std::ptr::null_mut()) },
+        RNET_E_INVALID_ARGUMENT
+    );
     assert_eq!(
         unsafe { rnet_game_realtime_queue_snapshot(runtime, std::ptr::null_mut()) },
         RNET_E_INVALID_ARGUMENT
