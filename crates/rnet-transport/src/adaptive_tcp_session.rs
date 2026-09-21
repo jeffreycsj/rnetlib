@@ -105,6 +105,8 @@ pub(crate) async fn run_adaptive_session(
             }
             outbound = receiver.recv(), if !controller.is_transitioning() => {
                 let Some(outbound) = outbound else { break ErrorCode::Cancelled };
+                let Some(outbound) = outbound.resolve_latest() else { continue };
+                if !session_active(&shared, session) { break ErrorCode::Cancelled; }
                 shared.latencies.record(LatencyKind::SendQueue, outbound.queued_at.elapsed());
                 let result = match outbound.kind {
                     OutboundKind::GameControl => write_protected(

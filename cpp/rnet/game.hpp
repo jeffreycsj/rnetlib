@@ -12,6 +12,15 @@ struct GameProtocol {
   uint64_t capabilities = 0;
 };
 
+// Wire-v4 negotiation is opt-in; ordinary GameProtocol remains exact-version wire v3.
+struct GameProtocolRange {
+  uint64_t id = 0;
+  uint32_t min_version = 0;
+  uint32_t max_version = 0;
+  uint64_t build_id = 0;
+  uint64_t capabilities = 0;
+};
+
 struct GameServerOptions {
   Transport transport = Transport::Kcp;
   std::string host = "127.0.0.1";
@@ -27,6 +36,23 @@ struct GameClientOptions {
   uint16_t port = 0;
   std::vector<uint8_t> join_ticket;
   GameProtocol protocol;
+};
+
+struct GameRangeServerOptions {
+  Transport transport = Transport::Kcp;
+  std::string host = "127.0.0.1";
+  uint16_t port = 0;
+  Keypair keypair;
+  bool initial_encryption = true;
+  GameProtocolRange protocol;
+};
+
+struct GameRangeClientOptions {
+  Transport transport = Transport::Kcp;
+  std::string host = "127.0.0.1";
+  uint16_t port = 0;
+  std::vector<uint8_t> join_ticket;
+  GameProtocolRange protocol;
 };
 
 struct GameEvent {
@@ -94,6 +120,18 @@ struct GameRealtimeQueue {
   uint64_t backpressure_dropped = 0;
   uint64_t send_failed = 0;
   uint64_t forwarded = 0;
+};
+
+struct GameTransportLatest {
+  uint64_t pending_replaced = 0;
+  uint64_t worker_pickups = 0;
+  uint64_t admission_would_block = 0;
+  uint64_t admission_invalid_handle = 0;
+  uint64_t admission_invalid_state = 0;
+  uint64_t admission_handshake_required = 0;
+  uint64_t admission_not_supported = 0;
+  uint64_t admission_message_too_large = 0;
+  uint64_t admission_other_failures = 0;
 };
 
 class GameRuntime {
@@ -187,6 +225,68 @@ class GameRuntime {
     rnet_endpoint_t endpoint = 0;
     check(rnet_game_client_connect(handle_, &config, &endpoint));
     return endpoint;
+  }
+
+  rnet_endpoint_t listen_range(const GameRangeServerOptions &options) const {
+    rnet_game_range_server_config_t config{};
+    config.struct_size = sizeof(config);
+    config.abi_version = RNET_ABI_VERSION;
+    config.transport = static_cast<uint32_t>(options.transport);
+    config.initial_encryption = options.initial_encryption ? 1U : 0U;
+    config.bind_host = bytes(options.host);
+    config.bind_port = options.port;
+    config.local_private_key = {options.keypair.private_key(), 32};
+    config.protocol_id = options.protocol.id;
+    config.min_version = options.protocol.min_version;
+    config.max_version = options.protocol.max_version;
+    rnet_endpoint_t endpoint = 0;
+    check(rnet_game_server_listen_range(handle_, &config, &endpoint));
+    return endpoint;
+  }
+
+  rnet_endpoint_t connect_range(const GameRangeClientOptions &options) const {
+    const rnet_game_range_client_config_t config = range_client_config(options);
+    rnet_endpoint_t endpoint = 0;
+    check(rnet_game_client_connect_range(handle_, &config, &endpoint));
+    return endpoint;
+  }
+
+  rnet_endpoint_t connect_range_resume(const GameRangeClientOptions &options,
+                                       rnet_session_t old_session,
+                                       const std::vector<uint8_t> &ticket) const {
+    const rnet_game_range_client_config_t config = range_client_config(options);
+    rnet_endpoint_t endpoint = 0;
+    check(rnet_game_client_resume_connect_range(handle_, &config, old_session,
+                                                bytes(ticket), &endpoint));
+    return endpoint;
+  }
+
+  uint32_t selected_protocol_version(rnet_session_t session) const {
+    uint32_t version = 0;
+    check(rnet_game_selected_protocol_version(handle_, session, &version));
+    return version;
+  }
+
+  uint64_t transport_latest_replacements() const {
+    uint64_t replaced = 0;
+    check(rnet_game_transport_latest_replacements(handle_, &replaced));
+    return replaced;
+  }
+
+  GameTransportLatest transport_latest_snapshot() const {
+    rnet_game_transport_latest_t raw{};
+    check(rnet_game_transport_latest_snapshot(handle_, &raw));
+    GameTransportLatest value;
+    value.pending_replaced = raw.pending_replaced;
+    value.worker_pickups = raw.worker_pickups;
+    value.admission_would_block = raw.admission_would_block;
+    value.admission_invalid_handle = raw.admission_invalid_handle;
+    value.admission_invalid_state = raw.admission_invalid_state;
+    value.admission_handshake_required = raw.admission_handshake_required;
+    value.admission_not_supported = raw.admission_not_supported;
+    value.admission_message_too_large = raw.admission_message_too_large;
+    value.admission_other_failures = raw.admission_other_failures;
+    return value;
   }
 
   rnet_endpoint_t connect_resume(const GameClientOptions &options,
@@ -393,6 +493,23 @@ class GameRuntime {
   }
 
  private:
+  static rnet_game_range_client_config_t range_client_config(
+      const GameRangeClientOptions &options) {
+    rnet_game_range_client_config_t config{};
+    config.struct_size = sizeof(config);
+    config.abi_version = RNET_ABI_VERSION;
+    config.transport = static_cast<uint32_t>(options.transport);
+    config.remote_host = bytes(options.host);
+    config.remote_port = options.port;
+    config.join_ticket = bytes(options.join_ticket);
+    config.protocol_id = options.protocol.id;
+    config.min_version = options.protocol.min_version;
+    config.max_version = options.protocol.max_version;
+    config.build_id = options.protocol.build_id;
+    config.capabilities = options.protocol.capabilities;
+    return config;
+  }
+
   static rnet_game_client_config_t client_config(
       const GameClientOptions &options) {
     rnet_game_client_config_t config{};

@@ -64,6 +64,7 @@ impl NetworkRuntime {
             latencies: Latencies::default(),
             kcp_telemetry: Arc::new(crate::kcp::KcpTelemetryRegistry::default()),
             send_budget,
+            latest: crate::latest::LatestRegistry::default(),
             stopped_event_emitted: Mutex::new(false),
         });
         let _ = shared

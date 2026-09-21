@@ -2,7 +2,7 @@
 
 RNet is a bounded, event-driven networking foundation for client/server games. The new Rust `rnet-game` facade selects TCP, UDP, or KCP once at listener/connect time, then sends opaque business bytes with `send(session, payload)`; protobuf or another application schema owns its own message type. The server owns the encryption policy and can change it for a live session without changing the client API.
 
-The game facade is under active development, **not yet production-certified**. It currently provides authenticated wire-v3 joins with exact protocol ID/version gating, a no-`msg_type` send/receive API, numeric-IP and hostname connections, server-led plaintext/encrypted transitions, authenticated heartbeats with per-session RTT/jitter samples and aggregate heartbeat percentiles/counters, UDP sequence-gap estimates, KCP retransmission estimates, protected four-timestamp client clock-offset samples, configurable quality grades and suppressed quality-change events, bounded `LatestOnly` staging, single-runtime one-use reconnect tickets, lifecycle controls, and transport metrics on TCP, UDP, and KCP. Game-level C/C++11/Go facades cover joining, authorization, sending, polling, lifecycle, resume, quality, clock snapshots, cumulative game metrics, bounded structured game logging, and Prometheus text. Cross-instance/rolling-restart recovery, transport-queue cancellation after staging, and full advanced-feature parity across languages remain pending.
+The game facade is under active development, **not yet production-certified**. It provides authenticated wire-v3 exact-version joins and opt-in wire-v4 server-selected version-range joins, a no-`msg_type` send/receive API, numeric-IP and hostname connections, server-led encryption changes, authenticated heartbeat/quality/clock measurements, bounded `LatestOnly` staging with TCP/KCP transport-pending replacement, and single-runtime one-use reconnect tickets. Game-level C/C++11/Go facades cover joining, authorization, sending, polling, lifecycle, resume, quality, clock snapshots, cumulative metrics, bounded structured logging, and Prometheus text. Cross-instance/rolling-restart recovery is intentionally out of scope; target-environment long-soak certification and some advanced telemetry remain pending.
 
 See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, and Go entry points and their security boundaries.
 
@@ -44,7 +44,45 @@ let listener = runtime.listen(GameServerConfig {
 
 Create the client runtime with `GameRuntime::new_with_client_security` and a pinned server public key, then call `connect` with a numeric address or `connect_host` with a hostname. The server receives `GameEvent::AuthRequest` and calls `auth_decide` after validating the join ticket. Both peers receive `GameEvent::SessionReady` before they use `send(session, payload)` and `poll(...)`. No business message type, stream ID, or transport argument is required on send. The server alone can call `set_encryption` or `rekey`; clients follow the authenticated change using the same session handle.
 
-For replaceable state snapshots, use `send_latest(session, key, payload)`. Repeated sends with the same `(session, key)` are coalesced in a bounded game queue before forwarding on `poll(...)` or explicit `flush_realtime(capacity)`. TCP/KCP continue to preserve their ordinary reliable FIFO sends; an already forwarded message cannot be recalled from their transport queues.
+Sending and receiving use the same event loop on servers and clients. Keep polling for the lifetime of the runtime; internal handshake, heartbeat, clock-sync and security controls also advance through `poll`:
+
+```rust
+for event in runtime.poll(64, std::time::Duration::from_millis(10)) {
+    match event {
+        // Server only: validate the opaque login ticket before accepting this session.
+        GameEvent::AuthRequest { session, join_ticket, .. } => {
+            runtime.auth_decide(session, validate_login(join_ticket.as_bytes()))?;
+        }
+        // A session handle becomes sendable only after SessionReady.
+        GameEvent::SessionReady { session, .. } => {
+            runtime.send(session, protobuf_message.encode_to_vec().as_slice())?;
+        }
+        // The payload is exactly the opaque byte slice supplied by the peer.
+        GameEvent::Message(message) => {
+            let request = MyMessage::decode(message.payload.as_ref())?;
+            runtime.send(message.session, build_reply(request).encode_to_vec().as_slice())?;
+        }
+        GameEvent::Writable { session, .. } => retry_backpressured_send(session),
+        GameEvent::SessionClosed { session, reason, .. } => on_disconnect(session, reason),
+        _ => {}
+    }
+}
+```
+
+`send` is nonblocking and bounded. If it returns `WouldBlock`, retain the business message and retry after `Writable`; a successful return means locally queued, not delivered. Never send before `SessionReady`. A complete executable server/client echo is in [`game_quickstart.rs`](crates/rnet-game/examples/game_quickstart.rs) and can be run with `cargo run -p rnet-game --example game_quickstart`.
+
+| Language | Send | Receive and lifecycle |
+| --- | --- | --- |
+| Rust | `runtime.send(session, payload)` | `runtime.poll(...)` → `GameEvent::Message` |
+| C | `rnet_game_send(...)` | `rnet_game_poll_events(...)` → `RNET_GAME_MESSAGE` |
+| C++11 | `runtime.send(session, payload)` | `runtime.poll(...)` → `RNET_GAME_MESSAGE` |
+| Go | `runtime.Send(session, payload)` | `runtime.Poll(...)` → `GameMessage` |
+
+The [game networking guide](docs/game-networking.md#sending-and-receiving) contains complete event-loop snippets for all four languages, including C buffer-token release.
+
+For replaceable state snapshots, use `send_latest(session, key, payload)`. Repeated sends with the same `(session, key)` coalesce in a bounded game queue before `poll(...)` or `flush_realtime(capacity)` forwards them. TCP/KCP can also replace a keyed snapshot while it remains in the transport-pending slot; once the I/O worker takes the slot, socket writes and KCP-owned data cannot be recalled. `transport_latest_snapshot()` exposes pending replacements, irreversible worker pickups and admission failures by stable reason. Ordinary reliable sends retain FIFO semantics.
+
+For an opt-in version range, use `GameProtocolRange::new(id, min_version, max_version)` with `listen_range` / `connect_range` (or `connect_host_range`). The server chooses the highest common version under authenticated control, and `selected_protocol_version(session)` exposes it during authorization. Existing `listen` / `connect` continue to use exact-version wire v3. Equivalent additive entry points are `rnet_game_*_range` in C, `rnet::GameRuntime::{listen_range,connect_range}` in C++11, and `GameRuntime.ListenRange` / `ConnectRange` in Go. See the [range integration test](crates/rnet-game/tests/game_range.rs) and [C++11 example](examples/cpp/game_range_smoke.cpp).
 
 See the [game networking guide](docs/game-networking.md), the [TCP/UDP/KCP integration test](crates/rnet-game/tests/game_runtime.rs), the [C++11 example](examples/cpp/game_echo_smoke.cpp), and the [Go tests](go/rnet/game_test.go) for client setup, event handling, and security transitions. Raw UDP does not guarantee delivery; choose KCP or TCP if your game requires reliable messages.
 

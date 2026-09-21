@@ -44,6 +44,12 @@ pub(crate) async fn flush_deferred(
             continue;
         };
         *deferred_count = deferred_count.saturating_sub(1);
+        let Some(outbound) = outbound.resolve_latest() else {
+            if deferred.get(&peer).is_some_and(VecDeque::is_empty) {
+                deferred.remove(&peer);
+            }
+            continue;
+        };
         let record = match outbound.kind {
             OutboundKind::Data => data_record(
                 transport,

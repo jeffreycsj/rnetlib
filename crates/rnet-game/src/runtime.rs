@@ -12,6 +12,7 @@ use crate::heartbeat::HeartbeatTracker;
 use crate::join;
 use crate::observe::{HeartbeatMetrics, ResumeMetrics};
 use crate::quality::{QualityPolicy, UdpSessionQuality};
+use crate::range_runtime::RangeRuntimeState;
 use crate::realtime::LatestQueue;
 use crate::resume_runtime::ResumeRuntimeState;
 use rnet_core::{ErrorCode, Event, EventType, Handle, Result, RnetError, Transport};
@@ -54,10 +55,11 @@ pub struct GameRuntime {
     pub(crate) quality_policy: QualityPolicy,
     pub(crate) realtime: Mutex<LatestQueue>,
     pub(crate) resume: Mutex<ResumeRuntimeState>,
+    pub(crate) range: Mutex<RangeRuntimeState>,
     pub(crate) realtime_flush_batch: usize,
     pub(crate) allow_plaintext_business_data: bool,
     pub(crate) diagnostics: GameDiagnostics,
-    poll_guard: Mutex<()>,
+    pub(crate) poll_guard: Mutex<()>,
 }
 
 impl GameRuntime {
@@ -120,6 +122,7 @@ impl GameRuntime {
             quality_policy: config.quality_policy,
             realtime: Mutex::new(realtime),
             resume: Mutex::new(resume),
+            range: Mutex::new(RangeRuntimeState::default()),
             realtime_flush_batch,
             allow_plaintext_business_data,
             diagnostics: GameDiagnostics::new(),
@@ -253,6 +256,7 @@ impl GameRuntime {
 
     /// Closes an endpoint and releases its game protocol policy.
     pub fn close_endpoint(&self, endpoint: Handle) -> Result<()> {
+        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
         // Keep listener policy and transport registration locked in the same order as listen.
         // SessionOpened conversion holds the transport lock through game-ready registration, so
         // an in-flight poll cannot recreate game state after this cleanup has taken its snapshot.
@@ -290,6 +294,10 @@ impl GameRuntime {
             .remove(&endpoint);
         protocols.remove(&endpoint);
         transports.remove(&endpoint);
+        self.range
+            .lock()
+            .expect("range state poisoned")
+            .forget_endpoint(endpoint);
         Ok(())
     }
 
@@ -312,6 +320,10 @@ impl GameRuntime {
                     .fetch_add(1, Ordering::Relaxed);
             }
             self.forget_resume_session(session);
+            self.range
+                .lock()
+                .expect("range state poisoned")
+                .forget_session(session);
         }
         Ok(())
     }
@@ -357,6 +369,10 @@ impl GameRuntime {
             .expect("realtime queue poisoned")
             .forget_session(session);
         self.forget_resume_session(session);
+        self.range
+            .lock()
+            .expect("range state poisoned")
+            .forget_session(session);
     }
 
     /// Sends opaque business bytes. Message typing belongs to the serialized payload.
@@ -404,6 +420,17 @@ impl GameRuntime {
         // polls preserves their order and keeps challenge state single-writer.
         let _guard = self.poll_guard.lock().expect("game poll lock poisoned");
         self.flush_realtime(self.realtime_flush_batch);
+        let mut carried = Vec::new();
+        self.range
+            .lock()
+            .expect("range state poisoned")
+            .drain_completed(&mut carried, capacity);
+        if !carried.is_empty() {
+            self.drive_heartbeats();
+            self.drive_clock_sync();
+            self.drive_range_negotiation();
+            return carried;
+        }
         let deadline = Instant::now().checked_add(timeout);
         let mut internal_events = 0usize;
         loop {
@@ -413,11 +440,12 @@ impl GameRuntime {
             let buffered = self.network.poll_events(capacity, Duration::ZERO);
             if !buffered.is_empty() {
                 internal_events = internal_events.saturating_add(buffered.len());
-                let output = self.convert_events(buffered);
+                let output = self.convert_events(buffered, capacity);
                 // Hidden controls and public events alike must not defer liveness scheduling.
                 // Conversion runs first so already queued authenticated acknowledgements win.
                 self.drive_heartbeats();
                 self.drive_clock_sync();
+                self.drive_range_negotiation();
                 if !output.is_empty() {
                     return output;
                 }
@@ -430,6 +458,7 @@ impl GameRuntime {
             }
             self.drive_heartbeats();
             self.drive_clock_sync();
+            self.drive_range_negotiation();
             let remaining = deadline
                 .map(|deadline| deadline.saturating_duration_since(Instant::now()))
                 .unwrap_or(timeout);
@@ -445,9 +474,10 @@ impl GameRuntime {
             };
             let events = self.network.poll_events(capacity, wait);
             internal_events = internal_events.saturating_add(events.len());
-            let output = self.convert_events(events);
+            let output = self.convert_events(events, capacity);
             self.drive_heartbeats();
             self.drive_clock_sync();
+            self.drive_range_negotiation();
             if !output.is_empty()
                 || timeout.is_zero()
                 || deadline.is_some_and(|deadline| Instant::now() >= deadline)
@@ -458,7 +488,7 @@ impl GameRuntime {
         }
     }
 
-    fn convert_events(&self, events: Vec<Event>) -> Vec<GameEvent> {
+    fn convert_events(&self, events: Vec<Event>, capacity: usize) -> Vec<GameEvent> {
         let mut output = Vec::with_capacity(events.len());
         for event in events {
             let endpoint = event.endpoint;
@@ -468,7 +498,10 @@ impl GameRuntime {
             match self.convert_event(event) {
                 Ok(Some(event)) => {
                     self.log_game_event(&event);
-                    output.push(event);
+                    self.range
+                        .lock()
+                        .expect("range state poisoned")
+                        .queue_public(event, &mut output, capacity);
                 }
                 Ok(None) => {}
                 Err(_) => {
@@ -485,14 +518,21 @@ impl GameRuntime {
                     }
                     let violation = GameEvent::ProtocolViolation { endpoint, session };
                     self.log_game_event(&violation);
-                    output.push(violation);
+                    self.range
+                        .lock()
+                        .expect("range state poisoned")
+                        .queue_public(violation, &mut output, capacity);
                 }
             }
+            self.range
+                .lock()
+                .expect("range state poisoned")
+                .drain_completed(&mut output, capacity);
         }
         output
     }
 
-    fn convert_event(&self, mut event: Event) -> Result<Option<GameEvent>> {
+    pub(crate) fn convert_event(&self, mut event: Event) -> Result<Option<GameEvent>> {
         let converted = match event.event_type {
             EventType::RuntimeStarted => GameEvent::RuntimeStarted,
             EventType::EndpointOpened => GameEvent::EndpointOpened {
@@ -512,7 +552,13 @@ impl GameRuntime {
                     .server_protocols
                     .lock()
                     .expect("game protocol table poisoned")
-                    .contains_key(&event.endpoint);
+                    .contains_key(&event.endpoint)
+                    || self
+                        .range
+                        .lock()
+                        .expect("range state poisoned")
+                        .server_endpoints
+                        .contains_key(&event.endpoint);
                 let transports = self
                     .endpoint_transports
                     .lock()
@@ -553,6 +599,14 @@ impl GameRuntime {
                     .lock()
                     .expect("game session table poisoned")
                     .insert(event.session, event.endpoint);
+                if self.start_range_session(
+                    event.endpoint,
+                    event.session,
+                    old_session,
+                    server_resume,
+                )? {
+                    return Ok(None);
+                }
                 if server_resume {
                     let old = old_session.expect("server resume has an old session");
                     let mut state = self.resume.lock().expect("resume state poisoned");
@@ -631,13 +685,13 @@ impl GameRuntime {
                         payload,
                     } => {
                         self.observe_datagram_sequence(event.session, datagram_sequence)?;
-                        GameEvent::Message(GameMessage {
+                        return self.buffer_range_message(GameMessage {
                             endpoint: event.endpoint,
                             session: event.session,
                             sequence,
                             tick,
                             payload,
-                        })
+                        });
                     }
                     // A future control state machine must explicitly consume each kind. Silently
                     // ignoring a known kind today would let peers believe heartbeat, resume, or
@@ -661,6 +715,10 @@ impl GameRuntime {
                     .expect("resume state poisoned")
                     .client_endpoints
                     .remove(&event.endpoint);
+                self.range
+                    .lock()
+                    .expect("range state poisoned")
+                    .forget_failed_client_endpoint(event.endpoint);
                 GameEvent::JoinFailed {
                     endpoint: event.endpoint,
                     session: event.session,

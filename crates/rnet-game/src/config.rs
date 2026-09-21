@@ -36,6 +36,36 @@ impl GameProtocol {
     }
 }
 
+/// Protocol identity and inclusive version interval for an explicit wire-v4 join.
+///
+/// Build and capability values remain authenticated application metadata. They do not grant
+/// library capabilities. A range is valid only when its ID and both bounds are nonzero and the
+/// lower bound does not exceed the upper bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GameProtocolRange {
+    pub protocol_id: u64,
+    pub min_version: u32,
+    pub max_version: u32,
+    pub build_id: u64,
+    pub capabilities: u64,
+}
+
+impl GameProtocolRange {
+    pub const fn new(protocol_id: u64, min_version: u32, max_version: u32) -> Self {
+        Self {
+            protocol_id,
+            min_version,
+            max_version,
+            build_id: 0,
+            capabilities: 0,
+        }
+    }
+
+    pub(crate) fn is_valid(self) -> bool {
+        self.protocol_id != 0 && self.min_version != 0 && self.min_version <= self.max_version
+    }
+}
+
 /// Runtime limits and policies used by the game facade.
 #[derive(Clone, Debug)]
 pub struct GameRuntimeConfig {
@@ -134,6 +164,16 @@ pub struct GameServerConfig {
     pub protocol: GameProtocol,
 }
 
+/// Explicit wire-v4 listener. Existing `GameServerConfig` remains exact-version wire v3.
+#[derive(Clone, Debug)]
+pub struct GameRangeServerConfig {
+    pub transport: Transport,
+    pub bind_addr: SocketAddr,
+    pub local_key: Keypair,
+    pub initial_encryption: bool,
+    pub protocol: GameProtocolRange,
+}
+
 /// Client join configuration; encryption is intentionally controlled by the server.
 #[derive(Clone)]
 pub struct GameClientConfig {
@@ -143,6 +183,16 @@ pub struct GameClientConfig {
     /// Opaque application ticket delivered only after the cryptographic handshake.
     pub join_ticket: Vec<u8>,
     pub protocol: GameProtocol,
+}
+
+/// Explicit wire-v4 numeric-address client join.
+#[derive(Clone, Debug)]
+pub struct GameRangeClientConfig {
+    pub transport: Transport,
+    pub bind_addr: Option<SocketAddr>,
+    pub remote_addr: SocketAddr,
+    pub join_ticket: Vec<u8>,
+    pub protocol: GameProtocolRange,
 }
 
 impl std::fmt::Debug for GameClientConfig {
@@ -166,6 +216,16 @@ pub struct GameHostClientConfig {
     pub port: u16,
     pub join_ticket: Vec<u8>,
     pub protocol: GameProtocol,
+}
+
+/// Explicit wire-v4 hostname client join.
+#[derive(Clone, Debug)]
+pub struct GameRangeHostClientConfig {
+    pub transport: Transport,
+    pub host: String,
+    pub port: u16,
+    pub join_ticket: Vec<u8>,
+    pub protocol: GameProtocolRange,
 }
 
 impl std::fmt::Debug for GameHostClientConfig {

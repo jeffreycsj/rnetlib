@@ -7,6 +7,9 @@ use std::time::Duration;
 impl GameRuntime {
     /// Closes one game session while leaving its listener and other players active.
     pub fn close_session(&self, session: Handle) -> Result<()> {
+        // Serialize with readiness publication so a racing v4 control cannot resurrect a
+        // locally closed handle after cleanup.
+        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
         self.revoke_resume_session(session);
         self.network.close_session(session, ErrorCode::Cancelled)?;
         self.forget_ready_session(session);
@@ -15,7 +18,9 @@ impl GameRuntime {
 
     /// Stops the runtime after the requested drain period and closes remaining endpoints.
     pub fn stop(&self, drain_timeout: Duration) -> Result<()> {
+        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
         self.network.stop(drain_timeout)?;
+        *self.range.lock().expect("range state poisoned") = Default::default();
         self.heartbeat_trackers
             .lock()
             .expect("heartbeat table poisoned")

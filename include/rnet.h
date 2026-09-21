@@ -579,6 +579,38 @@ typedef struct rnet_game_client_config {
   uint64_t capabilities;
 } rnet_game_client_config_t;
 
+/* Explicit wire-v4 range configs. The existing exact-version structs stay wire v3. */
+typedef struct rnet_game_range_server_config {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t transport;
+  uint32_t initial_encryption;
+  rnet_slice_t bind_host;
+  uint16_t bind_port;
+  uint16_t reserved;
+  rnet_slice_t local_private_key;
+  uint64_t protocol_id;
+  uint32_t min_version;
+  uint32_t max_version;
+} rnet_game_range_server_config_t;
+
+typedef struct rnet_game_range_client_config {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t transport;
+  uint32_t reserved;
+  rnet_slice_t remote_host;
+  uint16_t remote_port;
+  uint16_t reserved2;
+  rnet_slice_t join_ticket;
+  uint64_t protocol_id;
+  uint32_t min_version;
+  uint32_t max_version;
+  uint32_t reserved3;
+  uint64_t build_id;
+  uint64_t capabilities;
+} rnet_game_range_client_config_t;
+
 typedef struct rnet_game_event {
   uint32_t struct_size;
   uint32_t event_type;
@@ -704,6 +736,22 @@ typedef struct rnet_game_realtime_queue {
   uint64_t forwarded;
 } rnet_game_realtime_queue_t;
 
+/* Cumulative LatestOnly telemetry after the game staging queue. A worker
+ * pickup is the boundary after which TCP/KCP data can no longer be recalled. */
+typedef struct rnet_game_transport_latest {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint64_t pending_replaced;
+  uint64_t worker_pickups;
+  uint64_t admission_would_block;
+  uint64_t admission_invalid_handle;
+  uint64_t admission_invalid_state;
+  uint64_t admission_handshake_required;
+  uint64_t admission_not_supported;
+  uint64_t admission_message_too_large;
+  uint64_t admission_other_failures;
+} rnet_game_transport_latest_t;
+
 typedef struct rnet_game_buffer {
   uint32_t struct_size;
   uint32_t abi_version;
@@ -727,15 +775,28 @@ int32_t rnet_game_runtime_create_logged(
 int32_t rnet_game_server_listen(rnet_runtime_t runtime,
                                 const rnet_game_server_config_t *config,
                                 rnet_endpoint_t *out);
+int32_t rnet_game_server_listen_range(rnet_runtime_t runtime,
+                                      const rnet_game_range_server_config_t *config,
+                                      rnet_endpoint_t *out);
 int32_t rnet_game_client_connect(rnet_runtime_t runtime,
                                  const rnet_game_client_config_t *config,
                                  rnet_endpoint_t *out);
+int32_t rnet_game_client_connect_range(rnet_runtime_t runtime,
+                                       const rnet_game_range_client_config_t *config,
+                                       rnet_endpoint_t *out);
 /* Resume always yields new network handles, then requires another AUTH decision.
  * The server emits RESUME_REQUEST and both sides receive SESSION_RESUMED. */
 int32_t rnet_game_client_resume_connect(
     rnet_runtime_t runtime, const rnet_game_client_config_t *config,
     rnet_session_t old_session, rnet_slice_t resume_ticket,
     rnet_endpoint_t *out);
+int32_t rnet_game_client_resume_connect_range(
+    rnet_runtime_t runtime, const rnet_game_range_client_config_t *config,
+    rnet_session_t old_session, rnet_slice_t resume_ticket,
+    rnet_endpoint_t *out);
+/* Query succeeds for a selected wire-v4 session, including pending server auth. */
+int32_t rnet_game_selected_protocol_version(rnet_runtime_t runtime,
+                                             rnet_session_t session, uint32_t *out);
 int32_t rnet_game_issue_resume_ticket(rnet_runtime_t runtime,
                                       rnet_session_t session,
                                       rnet_slice_t identity);
@@ -766,6 +827,11 @@ int32_t rnet_game_metrics_snapshot(rnet_runtime_t runtime,
                                    rnet_game_metrics_t *out);
 int32_t rnet_game_realtime_queue_snapshot(
     rnet_runtime_t runtime, rnet_game_realtime_queue_t *out);
+/* TCP/KCP snapshots replaced after game staging but before I/O worker pickup. */
+int32_t rnet_game_transport_latest_replacements(rnet_runtime_t runtime,
+                                                 uint64_t *out);
+int32_t rnet_game_transport_latest_snapshot(
+    rnet_runtime_t runtime, rnet_game_transport_latest_t *out);
 /* Prometheus text has no per-player labels; release its nonzero token. */
 int32_t rnet_game_prometheus_snapshot(rnet_runtime_t runtime,
                                       rnet_game_buffer_t *out);

@@ -113,6 +113,36 @@ impl GameRuntime {
         self.network.send_payload(session, &envelope)
     }
 
+    /// Coalesced snapshots keep their key until the adaptive transport worker takes the slot.
+    /// UDP retains its datagram sequence path; TCP/KCP may replace still-pending frames.
+    pub(crate) fn send_game_latest_application(
+        &self,
+        session: Handle,
+        key: u64,
+        payload: &[u8],
+        tick: Option<u32>,
+    ) -> Result<()> {
+        if self
+            .udp_sessions
+            .lock()
+            .expect("UDP quality table poisoned")
+            .contains_key(&session)
+        {
+            return self.send_game_application(
+                session,
+                payload,
+                crate::runtime::GameSendOptions {
+                    sequence: None,
+                    tick,
+                },
+            );
+        }
+        self.ensure_game_ready(session)?;
+        let envelope = encode_application(payload, None, tick, self.maximum_envelope_len)?;
+        self.network.send_payload_latest(session, key, &envelope)?;
+        Ok(())
+    }
+
     pub(crate) fn observe_datagram_sequence(
         &self,
         session: Handle,

@@ -342,8 +342,9 @@ func (r *GameRuntime) Send(session Session, payload []byte) error {
 	return statusError(status)
 }
 
-// SendLatest coalesces unsent snapshots by session and key. Messages already
-// admitted to a reliable transport queue cannot be withdrawn.
+// SendLatest coalesces snapshots by session and key. TCP/KCP snapshots can also
+// be replaced while waiting in a transport-pending slot; worker-owned data
+// already handed to a socket or KCP cannot be withdrawn.
 func (r *GameRuntime) SendLatest(session Session, key uint64, payload []byte) error {
 	handle, err := r.handleValue()
 	if err != nil {

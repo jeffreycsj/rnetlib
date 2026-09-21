@@ -44,6 +44,7 @@ impl NetworkRuntime {
             .expect("session table poisoned")
             .remove(session)
             .ok_or_else(|| RnetError::new(ErrorCode::InvalidHandle, "invalid session"))?;
+        self.shared.latest.forget_session(session);
         release_pending_session(&self.shared, &route);
         self.shared.metrics.record_session_closed(reason);
         route.target.request_cleanup(session);
@@ -138,6 +139,7 @@ fn close_endpoint_sessions(shared: &Arc<Shared>, endpoint: Handle) {
     let mut sessions = shared.sessions.lock().expect("session table poisoned");
     for session in handles {
         if let Some(route) = sessions.remove(session) {
+            shared.latest.forget_session(session);
             release_pending_session(shared, &route);
             shared.metrics.record_session_closed(ErrorCode::Ok);
             publish_lifecycle(

@@ -1,6 +1,7 @@
-use crate::config::GameProtocol;
+use crate::config::{GameProtocol, GameRuntimeConfig};
 use crate::event::GameEvent;
 use crate::resume::{ResumeRegistry, ResumeScope};
+use crate::runtime::GameRuntime;
 use rnet_core::ErrorCode;
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
@@ -164,4 +165,18 @@ fn debug_output_does_not_expose_join_credentials() {
     let debug = format!("{resume:?}");
     assert!(!debug.contains(&credential_debug));
     assert!(!debug.contains(&identity_debug));
+}
+
+#[test]
+fn abandoned_resume_mapping_is_removed_when_new_session_closes() {
+    let runtime = GameRuntime::new(GameRuntimeConfig::production()).unwrap();
+    {
+        let mut state = runtime.resume.lock().unwrap();
+        state.inflight_server.insert(10, 20);
+        state.revoked_inflight.insert(10);
+    }
+    runtime.forget_resume_session(20);
+    let state = runtime.resume.lock().unwrap();
+    assert!(state.inflight_server.is_empty());
+    assert!(state.revoked_inflight.is_empty());
 }

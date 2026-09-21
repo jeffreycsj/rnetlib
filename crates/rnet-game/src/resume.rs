@@ -178,6 +178,34 @@ impl ResumeRegistry {
         })
     }
 
+    /// Reads the version pinned by an authenticated, unexpired ticket without consuming it.
+    /// A subsequent `consume` under the same registry lock performs the final one-use claim.
+    pub(crate) fn pinned_version(
+        &mut self,
+        ticket: &[u8],
+        endpoint: Handle,
+        peer_key: [u8; 32],
+        protocol_id: u64,
+        now: Instant,
+    ) -> Result<u32> {
+        self.prune(now);
+        if ticket.len() != TICKET_LEN {
+            return Err(invalid_ticket());
+        }
+        let nonce: [u8; NONCE_LEN] = ticket[..NONCE_LEN].try_into().expect("ticket length");
+        hmac::verify(&self.key, &signing_input(nonce), &ticket[NONCE_LEN..])
+            .map_err(|_| invalid_ticket())?;
+        let entry = self.entries.get(&nonce).ok_or_else(invalid_ticket)?;
+        if entry.endpoint != endpoint
+            || entry.peer_key != peer_key
+            || entry.protocol_id != protocol_id
+            || entry.expires <= now
+        {
+            return Err(invalid_ticket());
+        }
+        Ok(entry.protocol_version)
+    }
+
     /// Explicit kicks revoke recovery. A network disconnect leaves the ticket alive until expiry.
     pub(crate) fn revoke_session(&mut self, session: Handle) {
         if let Some(nonce) = self.by_session.get(&session).copied() {

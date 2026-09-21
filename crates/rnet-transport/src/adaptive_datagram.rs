@@ -221,6 +221,10 @@ pub(crate) async fn run_adaptive_datagram(
                     ..
                 } = &mut state {
                     if session_active(&shared, *session) && !controller.is_transitioning() {
+                        let Some(outbound) = outbound.resolve_latest() else {
+                            peers.insert(peer, state);
+                            continue;
+                        };
                         let record = match outbound.kind {
                             OutboundKind::Data => data_record(
                                 transport, controller, &outbound.bytes, shared.config.max_body_len,

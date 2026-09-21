@@ -25,6 +25,122 @@ static GAME_LOG_CALLBACK_DESTROY: AtomicI32 = AtomicI32::new(i32::MAX);
 static GAME_LOG_CALLBACK_METRICS: AtomicI32 = AtomicI32::new(i32::MAX);
 static GAME_LOG_RECORDS: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn range_game_c_abi_selects_version_without_changing_v3_layout() {
+    use rnet::{
+        rnet_game_client_connect_range, rnet_game_selected_protocol_version,
+        rnet_game_server_listen_range, rnet_game_transport_latest_replacements,
+        rnet_game_transport_latest_snapshot, RnetGameRangeClientConfig, RnetGameRangeServerConfig,
+        RnetGameTransportLatest,
+    };
+    let server_key = Keypair::generate().unwrap();
+    let client_key = Keypair::generate().unwrap();
+    let security =
+        RnetClientSecurity::pinned(slice(&client_key.private), slice(&server_key.public));
+    let mut runtime = 0;
+    assert_eq!(
+        unsafe { rnet_game_runtime_create(&RnetGameConfig::default(), &security, &mut runtime) },
+        RNET_OK
+    );
+    let server = RnetGameRangeServerConfig {
+        struct_size: size_of::<RnetGameRangeServerConfig>() as u32,
+        abi_version: RNET_ABI_VERSION,
+        transport: RNET_TRANSPORT_TCP,
+        initial_encryption: 1,
+        bind_host: slice(b"127.0.0.1"),
+        bind_port: 0,
+        reserved: 0,
+        local_private_key: slice(&server_key.private),
+        protocol_id: 77,
+        min_version: 2,
+        max_version: 9,
+    };
+    let mut listener = 0;
+    assert_eq!(
+        unsafe { rnet_game_server_listen_range(runtime, &server, &mut listener) },
+        RNET_OK
+    );
+    let mut port = 0;
+    assert_eq!(
+        unsafe { rnet_game_endpoint_local_port(runtime, listener, &mut port) },
+        RNET_OK
+    );
+    let client = RnetGameRangeClientConfig {
+        struct_size: size_of::<RnetGameRangeClientConfig>() as u32,
+        abi_version: RNET_ABI_VERSION,
+        transport: RNET_TRANSPORT_TCP,
+        reserved: 0,
+        remote_host: slice(b"localhost"),
+        remote_port: port,
+        reserved2: 0,
+        join_ticket: slice(b"join"),
+        protocol_id: 77,
+        min_version: 4,
+        max_version: 7,
+        reserved3: 0,
+        build_id: 0,
+        capabilities: 0,
+    };
+    let mut client_endpoint = 0;
+    assert_eq!(
+        unsafe { rnet_game_client_connect_range(runtime, &client, &mut client_endpoint) },
+        RNET_OK
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut ready = 0;
+    while ready < 2 && Instant::now() < deadline {
+        let mut events = [RnetGameEvent::default(); 16];
+        let mut count = 0;
+        assert_eq!(
+            unsafe {
+                rnet_game_poll_events(runtime, events.as_mut_ptr(), events.len(), 10, &mut count)
+            },
+            RNET_OK
+        );
+        for event in events.iter().take(count) {
+            if event.event_type == RNET_GAME_AUTH_REQUEST {
+                let mut selected = 0;
+                assert_eq!(
+                    unsafe {
+                        rnet_game_selected_protocol_version(runtime, event.session, &mut selected)
+                    },
+                    RNET_OK
+                );
+                assert_eq!(selected, 7);
+                assert_eq!(rnet_game_auth_decide(runtime, event.session, 1), RNET_OK);
+            } else if event.event_type == RNET_GAME_SESSION_READY {
+                ready += 1;
+            }
+            if event.buffer_token != 0 {
+                assert_eq!(
+                    rnet_game_buffer_release(runtime, event.buffer_token),
+                    RNET_OK
+                );
+            }
+        }
+    }
+    assert_eq!(ready, 2);
+    let mut replaced = u64::MAX;
+    assert_eq!(
+        unsafe { rnet_game_transport_latest_replacements(runtime, &mut replaced) },
+        RNET_OK
+    );
+    assert_eq!(replaced, 0);
+    let mut latest = RnetGameTransportLatest::default();
+    assert_eq!(
+        unsafe { rnet_game_transport_latest_snapshot(runtime, &mut latest) },
+        RNET_OK
+    );
+    assert_eq!(latest.pending_replaced, 0);
+    assert_eq!(latest.worker_pickups, 0);
+    assert_eq!(
+        latest.struct_size as usize,
+        size_of::<RnetGameTransportLatest>()
+    );
+    assert_eq!(rnet_game_runtime_stop(runtime, 0), RNET_OK);
+    assert_eq!(rnet_game_runtime_destroy(runtime), RNET_OK);
+}
+
 unsafe extern "C" fn game_log_callback(
     _user_data: *mut std::ffi::c_void,
     _timestamp: u64,

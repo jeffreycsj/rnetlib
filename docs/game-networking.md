@@ -1,6 +1,6 @@
 # Game networking quick start
 
-`rnet-game` is the current game-facing API. It is a production candidate, not a completed game SDK: authenticated heartbeat, per-session RTT/jitter, UDP sequence-gap and KCP retransmission estimates, protected four-timestamp client clock samples, quality grades, bounded pre-transport real-time snapshot replacement, and single-runtime one-use reconnect tickets are available. The basic game flow, clock snapshot, cumulative game metrics and optional bounded game-event logging are also available through the additive C ABI and C++11/Go facades. Cross-instance recovery, replacement inside already-admitted TCP/KCP transport queues, and full advanced-feature parity across languages remain unfinished. The transport library underneath still exposes its existing C/C++11/Go APIs.
+`rnet-game` is the current game-facing API. It is a production candidate, not a completed game SDK: authenticated heartbeat, per-session RTT/jitter, UDP sequence-gap and KCP retransmission estimates, protected four-timestamp client clock samples, quality grades, bounded real-time snapshot replacement, opt-in wire-v4 version-range negotiation, and single-runtime one-use reconnect tickets are available. The game flow, range joins, clock snapshot, cumulative metrics and optional bounded game-event logging are also available through the additive C ABI and C++11/Go facades. Cross-instance recovery is intentionally out of scope; target-environment long-soak certification and some advanced telemetry remain unfinished. The transport library underneath still exposes its existing C/C++11/Go APIs.
 
 ```rust
 use rnet_core::Transport;
@@ -28,7 +28,124 @@ runtime.send(session, protobuf_bytes)?;
 
 The application defines its packet type in protobuf, FlatBuffers, or another payload schema. The game API has no `msg_type`, `stream_id`, or per-send TCP/UDP/KCP parameter. Optional network-owned sequence and simulation tick metadata use `send_with_options`; they do not determine the business packet type. Raw UDP remains unreliable; use KCP or TCP when the application needs reliable delivery.
 
-`send_latest(session, key, payload)` and `send_latest_with_tick(...)` stage replaceable snapshots in a separate bounded queue. Keys are scoped to one session; replacing a pending key releases its previous budget and preserves fair key order. The queue flushes on `poll`, or the game tick can call `flush_realtime(capacity)` explicitly. If the transport queue is full, the pending key rotates behind others instead of blocking the event loop. `RealtimeQueueConfig` caps total bytes, per-session bytes, keys per session, and each flush batch. `realtime_queue_snapshot()` and Prometheus expose queued bytes/messages, replacements, close/backpressure drops, send failures, and forwarded totals. This is **best-effort coalescing before transport enqueue** across TCP/UDP/KCP; once forwarded, an older TCP write or KCP retransmission cannot be recalled. Use ordinary `send` for messages that must not be dropped or replaced.
+## Sending and receiving
+
+RNet is poll-driven. `listen` and `connect` create endpoints, but they do not invoke application callbacks. The application must keep calling `poll` for the lifetime of each runtime. The same event stream carries authorization, readiness, received messages, writable notifications, security changes and disconnects; authenticated heartbeat, clock-sync and negotiation controls are consumed internally during the same calls.
+
+The normal flow is:
+
+1. The server polls `AuthRequest`, validates the opaque login ticket, then calls `auth_decide`.
+2. Each side stores the session handle from its own `SessionReady` event. Endpoint handles are not valid send targets.
+3. Either side calls `send(session, payload)`. The payload already contains the application's protobuf or other business envelope; no message type or transport is passed separately.
+4. The peer polls `Message` and decodes `message.payload`. Replies use the receiving `message.session`.
+5. `WouldBlock` means the bounded local send queue is full. Retain the business message and retry after `Writable`; success means queued locally, not acknowledged by the peer.
+6. Stop using a handle after `SessionClosed` or after it becomes the old handle in `SessionResumed`.
+
+### Rust
+
+```rust
+loop {
+    for event in runtime.poll(64, std::time::Duration::from_millis(10)) {
+        match event {
+            GameEvent::AuthRequest { session, join_ticket, .. } => {
+                runtime.auth_decide(session, login_service.accept(join_ticket.as_bytes()))?;
+            }
+            GameEvent::SessionReady { session, .. } => {
+                sessions.insert(session);
+            }
+            GameEvent::Message(message) => {
+                let request = MyProto::decode(message.payload.as_ref())?;
+                runtime.send(message.session, make_reply(request).encode_to_vec().as_slice())?;
+            }
+            GameEvent::Writable { session, .. } => retry_pending(session),
+            GameEvent::SessionClosed { session, reason, .. } => disconnect(session, reason),
+            _ => {}
+        }
+    }
+}
+```
+
+[`game_quickstart.rs`](../crates/rnet-game/examples/game_quickstart.rs) is a complete executable client/server echo. Run it with:
+
+```sh
+cargo run -p rnet-game --example game_quickstart
+```
+
+### C++11
+
+`GameRuntime::poll` returns owned event vectors, so payload bytes remain valid after the native poll call:
+
+```cpp
+for (const rnet::GameEvent &event : runtime.poll(64, 10)) {
+  if (event.type == RNET_GAME_AUTH_REQUEST) {
+    runtime.auth_decide(event.session, validate_ticket(event.data));
+  } else if (event.type == RNET_GAME_SESSION_READY) {
+    runtime.send(event.session, encode_login_complete());
+  } else if (event.type == RNET_GAME_MESSAGE) {
+    const Request request = decode_request(event.data);
+    runtime.send(event.session, encode_reply(request));
+  } else if (event.type == RNET_GAME_SESSION_CLOSED) {
+    on_disconnect(event.session, event.status);
+  }
+}
+```
+
+See [`game_echo_smoke.cpp`](../examples/cpp/game_echo_smoke.cpp) for a compiled C++11 example.
+
+### Go
+
+`Poll` copies event payloads into Go-owned byte slices before releasing native buffers:
+
+```go
+events, err := runtime.Poll(64, 10*time.Millisecond)
+if err != nil { return err }
+for _, event := range events {
+    switch event.Type {
+    case GameAuthRequest:
+        if err := runtime.AuthDecide(event.Session, validateTicket(event.Data)); err != nil { return err }
+    case GameSessionReady:
+        sessions[event.Endpoint] = event.Session
+    case GameMessage:
+        request := decodeRequest(event.Data)
+        if err := runtime.Send(event.Session, encodeReply(request)); err != nil { return err }
+    case GameSessionClosed:
+        onDisconnect(event.Session, event.Status)
+    }
+}
+```
+
+See [`game_test.go`](../go/rnet/game_test.go) for TCP, UDP and KCP examples.
+
+### C ABI
+
+The C ABI borrows send bytes only for the duration of `rnet_game_send`. Poll payloads remain owned by the runtime until both nonzero event tokens are released. Process or copy the bytes first:
+
+```c
+rnet_game_event_t events[64];
+size_t count = 0;
+int32_t status = rnet_game_poll_events(runtime, events, 64, 10, &count);
+if (status != RNET_OK) return status;
+
+for (size_t i = 0; i < count; ++i) {
+  rnet_game_event_t *event = &events[i];
+  if (event->event_type == RNET_GAME_AUTH_REQUEST) {
+    rnet_game_auth_decide(runtime, event->session,
+                          validate_ticket(event->data, event->data_len));
+  } else if (event->event_type == RNET_GAME_MESSAGE) {
+    handle_message(event->session, event->data, event->data_len);
+    rnet_slice_t reply = build_reply();
+    rnet_game_send(runtime, event->session, reply);
+  }
+  if (event->buffer_token != 0)
+    rnet_game_buffer_release(runtime, event->buffer_token);
+  if (event->aux_buffer_token != 0)
+    rnet_game_buffer_release(runtime, event->aux_buffer_token);
+}
+```
+
+For C, C++11 and Go, keep exactly one logical poll dispatcher per runtime and route copied events to gameplay workers. Sends may originate from application workers, but business code must define how it queues and retries `WouldBlock` without blocking the poll dispatcher.
+
+`send_latest(session, key, payload)` and `send_latest_with_tick(...)` stage replaceable snapshots in a separate bounded queue. Keys are scoped to one session; replacing a pending key releases its previous budget and preserves fair key order. The queue flushes on `poll`, or the game tick can call `flush_realtime(capacity)` explicitly. If the transport queue is full, the pending key rotates behind others instead of blocking the event loop. `RealtimeQueueConfig` caps total bytes, per-session bytes, keys per session, and each flush batch. `realtime_queue_snapshot()` and Prometheus expose queued bytes/messages, game-stage replacements, close/backpressure drops, send failures, and forwarded totals. For TCP/KCP, a keyed slot can also be replaced after transport admission while it is still waiting for the I/O worker; `transport_latest_snapshot()` reports those replacements, worker pickups and admission failures split by stable reason. Worker pickup is the recall boundary: a partly written TCP record or data already given to KCP cannot be withdrawn, including KCP's own deferred/retransmission queues. A pickup does **not** prove delivery; a later I/O failure is traced through the existing session-close/error metrics. UDP retains game-stage-only replacement. Use ordinary `send` for messages that must not be dropped or replaced. A successful forward means queued locally, **not delivered**.
 
 ## Single-runtime reconnect
 
@@ -54,7 +171,7 @@ let runtime = GameRuntime::new(GameRuntimeConfig::production())?.with_logger(log
 
 The example writes to stderr for clarity; use a nonblocking structured sink in a deployment and alert on logger drops or sink panics.
 
-Game wire v3 joins use `RGV3` and intentionally reject older peers. Raw UDP business messages carry a network-owned sequence extension separate from the optional application sequence. `udp_loss_snapshot(session)` reports receiver-side gaps within a 64-packet reorder window; a failed local send does not consume a sequence. `kcp_retransmission_snapshot(session)` reports per-session PUSH retransmissions independently of heartbeat availability. `network_quality(session)` includes `grade`, `basis`, optional `udp_loss`, and optional `kcp_retransmissions`; `QualityPolicy` can tune grade thresholds. KCP counts PUSH segments sent again before acknowledgement and uses a rolling 128-segment window. `GameEvent::QualityChanged` requires two consecutive non-unknown samples at a changed grade/basis and suppresses repeats. `basis=LatencyOnly` means no transport loss signal was used (including TCP). Neither UDP gaps nor KCP retransmissions are an IP-layer packet capture, and low sample counts do not establish a reliable loss rate. Heartbeat samples remain authenticated even if business records are plaintext, but UDP business-data sequences in that mode are **not integrity-protected** and must be treated as advisory rather than a trusted security or billing signal. Clients automatically exchange protected four-timestamp `ClockSync` controls after game readiness. `clock_sync_snapshot(session)` yields an optional server-minus-client offset and network RTT; `clock_micros()` gives the runtime-local monotonic origin. The offset is neither UTC nor a trusted time authority. Tick-delay metrics remain unimplemented.
+Game wire v3 joins use `RGV3` and intentionally reject older peers; opt-in wire v4 uses a distinct marker. Raw UDP business messages carry a network-owned sequence extension separate from the optional application sequence. `udp_loss_snapshot(session)` reports receiver-side gaps within a 64-packet reorder window; a failed local send does not consume a sequence. `kcp_retransmission_snapshot(session)` reports per-session PUSH retransmissions independently of heartbeat availability. `network_quality(session)` includes `grade`, `basis`, optional `udp_loss`, and optional `kcp_retransmissions`; `QualityPolicy` can tune grade thresholds. KCP counts PUSH segments sent again before acknowledgement and uses a rolling 128-segment window. `GameEvent::QualityChanged` requires two consecutive non-unknown samples at a changed grade/basis and suppresses repeats. `basis=LatencyOnly` means no transport loss signal was used (including TCP). Neither UDP gaps nor KCP retransmissions are an IP-layer packet capture, and low sample counts do not establish a reliable loss rate. Heartbeat samples remain authenticated even if business records are plaintext, but UDP business-data sequences in that mode are **not integrity-protected** and must be treated as advisory rather than a trusted security or billing signal. Clients automatically exchange protected four-timestamp `ClockSync` controls after game readiness. `clock_sync_snapshot(session)` yields an optional server-minus-client offset and network RTT; `clock_micros()` gives the runtime-local monotonic origin. The offset is neither UTC nor a trusted time authority. Tick-delay metrics remain unimplemented.
 
 ```rust
 // On a ready client session, after continuing to poll both endpoints:
@@ -73,19 +190,19 @@ With `GameRuntimeConfig::production()`, business plaintext is disabled. A deploy
 
 The server may call `runtime.rekey(session)` to rotate established session keys without changing whether business data is encrypted. Clients cannot initiate a rekey. `SecurityChanged` reports the completed operation and security epoch; the application continues using the same session handle and `send` API.
 
-The exact-version join gate is not a downgrade negotiation: client and server must configure the same nonzero protocol ID and version. `build_id` and `capabilities` are authenticated metadata for application authorization, not permission to activate network-library features. Future version-range negotiation requires a server-authenticated selected-version response and is not implemented yet.
+The original `listen` / `connect` / `connect_resume` gate remains exact-version wire v3: client and server must configure the same nonzero protocol ID and version. Range mode is explicitly opt-in: `GameProtocolRange::new(id, min, max)` with `listen_range`, `connect_range` / `connect_host_range`, and corresponding `connect_range_resume` methods uses wire v4. The server chooses the highest version in the intersection before business authorization and authenticates its choice with a session-bound nonce, protocol ID, and Noise-protected SELECT/ACK/READY exchange. `selected_protocol_version(session)` is available to the server during `AuthRequest` and to the client after selection. No overlap is rejected before business authorization; v3 and v4 never silently mix. A resumed range session keeps the ticket's original selected version, gets a new handle and requires new business authorization; the new client range must still include that version. `build_id` and `capabilities` remain authenticated metadata for application authorization, not permission to activate network-library features. See [game_range.rs](../crates/rnet-game/tests/game_range.rs) for TCP/UDP/KCP and resume cases.
 
 The complete live-session test in [game_runtime.rs](../crates/rnet-game/tests/game_runtime.rs) covers TCP, UDP, KCP, plaintext-to-encrypted-to-plaintext transitions, rekey, hostname joining, and version rejection.
 
 ## C, C++11, and Go basic game APIs
 
-The additive `rnet_game_*` C functions use separate game runtime handles; do not pass them to the older `rnet_runtime_*` transport functions. `rnet_abi_version()` remains `1`: the game functions add symbols and structs without changing existing layouts. Use `rnet_game_config_init`, then `rnet_game_runtime_create` with optional `rnet_client_security_t` for a pinned client identity. A server uses `rnet_game_server_listen` with transport, protocol ID/version, key, and initial encryption. A client uses `rnet_game_client_connect` with transport, hostname/IP, protocol ID/version, and opaque join ticket; it does not choose encryption. After `RNET_GAME_AUTH_REQUEST`, the server calls `rnet_game_auth_decide`; only `RNET_GAME_SESSION_READY` handles may send using `rnet_game_send(runtime, session, payload)`. Poll with `rnet_game_poll_events`, and release both nonzero event buffer tokens with `rnet_game_buffer_release` before destroying the runtime. Credential buffers are erased by the C layer when released; application-side copies remain the application's responsibility. For same-runtime reconnection, a ready server session calls `rnet_game_issue_resume_ticket`, the client receives `RNET_GAME_RESUME_TICKET`, then calls `rnet_game_client_resume_connect` with its old local handle. The server must authorize `RNET_GAME_RESUME_REQUEST` again; only then does each side receive `RNET_GAME_SESSION_RESUMED` with its own old handle in `related_session`.
+The additive `rnet_game_*` C functions use separate game runtime handles; do not pass them to the older `rnet_runtime_*` transport functions. `rnet_abi_version()` remains `1`: the game functions add symbols and structs without changing existing layouts. Use `rnet_game_config_init`, then `rnet_game_runtime_create` with optional `rnet_client_security_t` for a pinned client identity. A server uses `rnet_game_server_listen` with transport, protocol ID/version, key, and initial encryption. A client uses `rnet_game_client_connect` with transport, hostname/IP, protocol ID/version, and opaque join ticket; it does not choose encryption. For opt-in wire v4, use `rnet_game_range_server_config_t` / `rnet_game_range_client_config_t` with `rnet_game_server_listen_range`, `rnet_game_client_connect_range`, or `rnet_game_client_resume_connect_range`; `rnet_game_selected_protocol_version` returns the server-selected version. After `RNET_GAME_AUTH_REQUEST`, the server calls `rnet_game_auth_decide`; only `RNET_GAME_SESSION_READY` handles may send using `rnet_game_send(runtime, session, payload)`. Poll with `rnet_game_poll_events`, and release both nonzero event buffer tokens with `rnet_game_buffer_release` before destroying the runtime. Credential buffers are erased by the C layer when released; application-side copies remain the application's responsibility. For same-runtime reconnection, a ready server session calls `rnet_game_issue_resume_ticket`, the client receives `RNET_GAME_RESUME_TICKET`, then calls the matching exact- or range-version resume connect with its old local handle. The server must authorize `RNET_GAME_RESUME_REQUEST` again; only then does each side receive `RNET_GAME_SESSION_RESUMED` with its own old handle in `related_session`.
 
-C++11 users can include `rnet.hpp` and construct `rnet::GameRuntime` with a client key and pinned server key, then call `listen`, `connect`, `auth_decide`, `send`, and `poll`. [`game_echo_smoke.cpp`](../examples/cpp/game_echo_smoke.cpp) is a runnable TCP example; the same methods work for UDP and KCP by changing only `GameServerOptions.transport` and `GameClientOptions.transport`. `GameRuntime::poll` copies event bytes into owned vectors and releases native tokens even if a C++ allocation throws.
+C++11 users can include `rnet.hpp` and construct `rnet::GameRuntime` with a client key and pinned server key, then call `listen`, `connect`, `auth_decide`, `send`, and `poll`. [`game_echo_smoke.cpp`](../examples/cpp/game_echo_smoke.cpp) is a runnable TCP example; the same methods work for UDP and KCP by changing only `GameServerOptions.transport` and `GameClientOptions.transport`. Explicit range joins use `GameRangeServerOptions` / `GameRangeClientOptions`, `listen_range`, `connect_range` or `connect_range_resume`, and `selected_protocol_version`; see [`game_range_smoke.cpp`](../examples/cpp/game_range_smoke.cpp). `GameRuntime::poll` copies event bytes into owned vectors and releases native tokens even if a C++ allocation throws.
 
-Go users can call `NewGameRuntime(&ClientSecurity{LocalKey: clientKey, ExpectedServerPublicKey: serverKey.Public[:]})`, then `Listen(GameServerConfig{...})`, `Connect(GameClientConfig{...})`, `AuthDecide`, `Send`, and `Poll`. [`game_test.go`](../go/rnet/game_test.go) shows authorization, opaque-payload exchange, and one-use recovery for TCP, UDP, and KCP. Go `Poll` copies native event data and returns all C tokens before returning. `GameEvent.Data` may contain a join credential or resume ticket; default `%v`/`%#v` formatting of game events and configs redacts those bytes, but do not log the byte slices explicitly and erase your own copies when appropriate. Go's zero-value `GameServerConfig.InitialSecurity` means encrypted; choose `SecurityPlaintext` explicitly and enable `GameConfig.AllowPlaintextBusinessData` only when required.
+Go users can call `NewGameRuntime(&ClientSecurity{LocalKey: clientKey, ExpectedServerPublicKey: serverKey.Public[:]})`, then `Listen(GameServerConfig{...})`, `Connect(GameClientConfig{...})`, `AuthDecide`, `Send`, and `Poll`. [`game_test.go`](../go/rnet/game_test.go) shows authorization, opaque-payload exchange, and one-use recovery for TCP, UDP, and KCP. Explicit range joins use `GameProtocolRange`, `ListenRange`, `ConnectRange` / `ConnectRangeResume`, and `SelectedProtocolVersion`. Go `Poll` copies native event data and returns all C tokens before returning. `GameEvent.Data` may contain a join credential or resume ticket; default `%v`/`%#v` formatting of game events and configs redacts those bytes, but do not log the byte slices explicitly and erase your own copies when appropriate. Go's zero-value `GameServerConfig.InitialSecurity` means encrypted; choose `SecurityPlaintext` explicitly and enable `GameConfig.AllowPlaintextBusinessData` only when required.
 
-This cross-language slice covers the ordinary game flow, server encryption switching, session/endpoint close, rekey, `LatestOnly` staging, single-runtime resume, event metadata, per-session quality snapshots, runtime-wide real-time queue counters, cumulative heartbeat/resume/clock/logger metrics, optional bounded structured game-event logging, and a no-player-label Prometheus snapshot. `rnet_game_network_quality` reports `available=0` before the first authenticated RTT sample; its separate availability flags distinguish TCP's unavailable loss from UDP sequence gaps and KCP retransmission ratios. `rnet_game_realtime_queue_snapshot` (C), `realtime_queue_snapshot()` (C++11), and `RealtimeQueueSnapshot()` (Go) report current staged-message/byte gauges plus cumulative admission-rejected, replaced, closed-dropped, backpressure-dropped, send-failed, and forwarded counts. Forwarded means handed to the transport send queue, **not delivered**. `rnet_game_metrics_snapshot` (C), `metrics_snapshot()` (C++11), and `MetricsSnapshot()` (Go) expose cumulative game counters, RTT percentiles and a `logger_available` flag; callback latency is measured on the asynchronous logger thread. These runtime-wide metrics have no per-player labels and require no buffer release. Go callback panics cannot cross the C boundary; the Go facade recovers them and adds them to `MetricsSnapshot().Logger.SinkPanics` and a separate `rnet_game_go_logger_panics_total` Prometheus counter. Release the Prometheus C buffer token after reading. For capacity tuning, set `rnet_game_config_t.network_config` to a borrowed `rnet_config_v5_t` while creating the C runtime; C++11 has a `GameRuntime(config, ...)` constructor, and Go accepts `GameConfig{Network: &network}` where `network` starts from `DefaultConfig()`. The game-specific plaintext flag remains authoritative; legacy unauthenticated endpoints and transport-level logger callbacks are rejected. Configure a game logger at creation with `rnet_game_runtime_create_logged(..., rnet_logger_v2_t*, ...)`, the C++11 constructor accepting `rnet_logger_v2_t`, or Go `GameConfig{Logger: callback}`. The callback may query metrics but must not stop/destroy its runtime; its user data must stay valid until destroy returns. It must return promptly, because destroy waits for the bounded dispatcher to finish. Do not substitute the old transport API on a game runtime handle.
+This cross-language slice covers the ordinary and range-version game flows, server encryption switching, session/endpoint close, rekey, `LatestOnly` staging, single-runtime resume, event metadata, per-session quality snapshots, runtime-wide real-time queue counters, cumulative heartbeat/resume/clock/logger metrics, optional bounded structured game-event logging, and a no-player-label Prometheus snapshot. `rnet_game_network_quality` reports `available=0` before the first authenticated RTT sample; its separate availability flags distinguish TCP's unavailable loss from UDP sequence gaps and KCP retransmission ratios. `rnet_game_realtime_queue_snapshot` (C), `realtime_queue_snapshot()` (C++11), and `RealtimeQueueSnapshot()` (Go) report current staged-message/byte gauges plus cumulative admission-rejected, replaced, closed-dropped, backpressure-dropped, send-failed, and forwarded counts. `rnet_game_transport_latest_snapshot` (C), `transport_latest_snapshot()` (C++11), and `TransportLatestSnapshot()` (Go) report TCP/KCP pending replacements, irreversible worker pickups, and admission failures split into would-block, invalid-handle/state, handshake-required, unsupported, too-large and other. The older replacement-only queries remain available. Prometheus exports the same cumulative counters. Forwarded and pickup mean local handoff, **not delivery**. `rnet_game_metrics_snapshot` (C), `metrics_snapshot()` (C++11), and `MetricsSnapshot()` (Go) expose cumulative game counters, RTT percentiles and a `logger_available` flag; callback latency is measured on the asynchronous logger thread. These runtime-wide metrics have no per-player labels and require no buffer release. Go callback panics cannot cross the C boundary; the Go facade recovers them and adds them to `MetricsSnapshot().Logger.SinkPanics` and a separate `rnet_game_go_logger_panics_total` Prometheus counter. Release the Prometheus C buffer token after reading. For capacity tuning, set `rnet_game_config_t.network_config` to a borrowed `rnet_config_v5_t` while creating the C runtime; C++11 has a `GameRuntime(config, ...)` constructor, and Go accepts `GameConfig{Network: &network}` where `network` starts from `DefaultConfig()`. The game-specific plaintext flag remains authoritative; legacy unauthenticated endpoints and transport-level logger callbacks are rejected. Configure a game logger at creation with `rnet_game_runtime_create_logged(..., rnet_logger_v2_t*, ...)`, the C++11 constructor accepting `rnet_logger_v2_t`, or Go `GameConfig{Logger: callback}`. The callback may query metrics but must not stop/destroy its runtime; its user data must stay valid until destroy returns. It must return promptly, because destroy waits for the bounded dispatcher to finish. Do not substitute the old transport API on a game runtime handle.
 
 ## Current production limits
 

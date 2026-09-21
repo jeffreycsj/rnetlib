@@ -3,7 +3,8 @@
 use crate::abi::{RnetSlice, RNET_ABI_VERSION};
 use crate::abi_config::RnetConfigV5;
 use rnet_game::{
-    ClockSyncSample, GameRuntime, NetworkQuality, QualityBasis, QualityGrade, RealtimeQueueSnapshot,
+    ClockSyncSample, GameRuntime, LatestTransportSnapshot, NetworkQuality, QualityBasis,
+    QualityGrade, RealtimeQueueSnapshot,
 };
 use std::mem::size_of;
 
@@ -84,6 +85,95 @@ pub struct RnetGameClientConfig {
     pub reserved3: u32,
     pub build_id: u64,
     pub capabilities: u64,
+}
+
+/// Explicit wire-v4 listener. Existing exact-version game config retains wire v3.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RnetGameRangeServerConfig {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub transport: u32,
+    pub initial_encryption: u32,
+    pub bind_host: RnetSlice,
+    pub bind_port: u16,
+    pub reserved: u16,
+    pub local_private_key: RnetSlice,
+    pub protocol_id: u64,
+    pub min_version: u32,
+    pub max_version: u32,
+}
+
+/// Explicit wire-v4 hostname join, including metadata authenticated in the join payload.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RnetGameRangeClientConfig {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub transport: u32,
+    pub reserved: u32,
+    pub remote_host: RnetSlice,
+    pub remote_port: u16,
+    pub reserved2: u16,
+    pub join_ticket: RnetSlice,
+    pub protocol_id: u64,
+    pub min_version: u32,
+    pub max_version: u32,
+    pub reserved3: u32,
+    pub build_id: u64,
+    pub capabilities: u64,
+}
+
+/// Cumulative telemetry for keyed snapshots after game staging.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RnetGameTransportLatest {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub pending_replaced: u64,
+    pub worker_pickups: u64,
+    pub admission_would_block: u64,
+    pub admission_invalid_handle: u64,
+    pub admission_invalid_state: u64,
+    pub admission_handshake_required: u64,
+    pub admission_not_supported: u64,
+    pub admission_message_too_large: u64,
+    pub admission_other_failures: u64,
+}
+
+impl Default for RnetGameTransportLatest {
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: RNET_ABI_VERSION,
+            pending_replaced: 0,
+            worker_pickups: 0,
+            admission_would_block: 0,
+            admission_invalid_handle: 0,
+            admission_invalid_state: 0,
+            admission_handshake_required: 0,
+            admission_not_supported: 0,
+            admission_message_too_large: 0,
+            admission_other_failures: 0,
+        }
+    }
+}
+
+impl From<LatestTransportSnapshot> for RnetGameTransportLatest {
+    fn from(value: LatestTransportSnapshot) -> Self {
+        Self {
+            pending_replaced: value.pending_replaced,
+            worker_pickups: value.worker_pickups,
+            admission_would_block: value.admission_would_block,
+            admission_invalid_handle: value.admission_invalid_handle,
+            admission_invalid_state: value.admission_invalid_state,
+            admission_handshake_required: value.admission_handshake_required,
+            admission_not_supported: value.admission_not_supported,
+            admission_message_too_large: value.admission_message_too_large,
+            admission_other_failures: value.admission_other_failures,
+            ..Self::default()
+        }
+    }
 }
 
 /// Borrowed event data stays valid until the corresponding buffer token is released.

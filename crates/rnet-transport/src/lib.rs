@@ -26,6 +26,7 @@ mod event;
 pub mod fuzz_support;
 mod kcp;
 mod kcp_preflight;
+mod latest;
 mod lifecycle;
 mod metrics;
 mod record_reader;
@@ -49,6 +50,7 @@ pub use config::{
 };
 pub use event::{AuthRequest, SecurityChange, SecurityOperation};
 pub use kcp::{KcpEngine, KcpRetransmissionSnapshot, RustKcpEngine};
+pub use latest::{LatestSendOutcome, LatestTransportSnapshot};
 pub use metrics::{
     AdmissionRejectReason, LatencyKind, LatencyMetricSnapshot, MetricsSnapshot,
     ADMISSION_REJECT_REASON_COUNT, LATENCY_KIND_COUNT,

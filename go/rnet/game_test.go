@@ -11,16 +11,97 @@ import (
 func TestGameDebugFormattingRedactsCredentials(t *testing.T) {
 	server := GameServerConfig{Keypair: Keypair{Private: [32]byte{1, 2, 3}}}
 	client := GameClientConfig{JoinTicket: []byte("private-ticket")}
+	rangeServer := GameRangeServerConfig{Keypair: Keypair{Private: [32]byte{1, 2, 3}}}
+	rangeClient := GameRangeClientConfig{JoinTicket: []byte("private-ticket")}
 	event := GameEvent{Type: GameResumeRequest, Data: []byte("private-identity"), AuxData: []byte("private-ticket")}
 	for _, formatted := range []string{
 		fmt.Sprintf("%+v", server), fmt.Sprintf("%#v", server),
 		fmt.Sprintf("%+v", client), fmt.Sprintf("%#v", client),
+		fmt.Sprintf("%+v", rangeServer), fmt.Sprintf("%#v", rangeServer),
+		fmt.Sprintf("%+v", rangeClient), fmt.Sprintf("%#v", rangeClient),
 		fmt.Sprintf("%+v", event), fmt.Sprintf("%#v", event),
 	} {
 		if strings.Contains(formatted, "Private:") || strings.Contains(formatted, "Data:[") ||
 			strings.Contains(formatted, "JoinTicket:[") || strings.Contains(formatted, "private-") {
 			t.Fatalf("sensitive game debug output: %s", formatted)
 		}
+	}
+}
+
+func TestGameRangeFacadeNegotiatesVersionAndExposesTransportReplacementMetric(t *testing.T) {
+	serverKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewGameRuntime(&ClientSecurity{LocalKey: clientKey, ExpectedServerPublicKey: serverKey.Public[:]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	listener, err := runtime.ListenRange(GameRangeServerConfig{
+		Transport: TransportTCP, Host: "127.0.0.1", Keypair: serverKey,
+		Protocol: GameProtocolRange{ID: 92, MinVersion: 2, MaxVersion: 9},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := runtime.LocalPort(listener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := runtime.ConnectRange(GameRangeClientConfig{
+		Transport: TransportTCP, Host: "localhost", Port: port,
+		Protocol: GameProtocolRange{ID: 92, MinVersion: 4, MaxVersion: 6},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	ready := map[Endpoint]Session{}
+	for len(ready) < 2 && time.Now().Before(deadline) {
+		events, err := runtime.Poll(16, 10*time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range events {
+			switch event.Type {
+			case GameAuthRequest:
+				version, err := runtime.SelectedProtocolVersion(event.Session)
+				if err != nil || version != 6 {
+					t.Fatalf("selected version=%d err=%v", version, err)
+				}
+				if err := runtime.AuthDecide(event.Session, true); err != nil {
+					t.Fatal(err)
+				}
+			case GameSessionReady:
+				ready[event.Endpoint] = event.Session
+			}
+		}
+	}
+	if ready[listener] == 0 || ready[client] == 0 {
+		t.Fatal("range sessions did not become ready")
+	}
+	for _, session := range ready {
+		version, err := runtime.SelectedProtocolVersion(session)
+		if err != nil || version != 6 {
+			t.Fatalf("ready version=%d err=%v", version, err)
+		}
+	}
+	replaced, err := runtime.TransportLatestReplacements()
+	if err != nil || replaced != 0 {
+		t.Fatalf("transport replacements=%d err=%v", replaced, err)
+	}
+	latest, err := runtime.TransportLatestSnapshot()
+	if err != nil || latest.PendingReplaced != 0 || latest.WorkerPickups != 0 {
+		t.Fatalf("transport latest snapshot=%+v err=%v", latest, err)
 	}
 }
 

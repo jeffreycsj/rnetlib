@@ -124,6 +124,47 @@ impl GameRuntime {
     /// Returns transport and game-heartbeat Prometheus metrics without per-session labels.
     pub fn prometheus_snapshot(&self) -> String {
         let mut output = self.network.prometheus_snapshot();
+        let latest = self.transport_latest_snapshot();
+        for (name, value) in [
+            (
+                "rnet_game_transport_latest_replaced_total",
+                latest.pending_replaced,
+            ),
+            (
+                "rnet_game_transport_latest_worker_pickups_total",
+                latest.worker_pickups,
+            ),
+            (
+                "rnet_game_transport_latest_admission_would_block_total",
+                latest.admission_would_block,
+            ),
+            (
+                "rnet_game_transport_latest_admission_invalid_handle_total",
+                latest.admission_invalid_handle,
+            ),
+            (
+                "rnet_game_transport_latest_admission_invalid_state_total",
+                latest.admission_invalid_state,
+            ),
+            (
+                "rnet_game_transport_latest_admission_handshake_required_total",
+                latest.admission_handshake_required,
+            ),
+            (
+                "rnet_game_transport_latest_admission_not_supported_total",
+                latest.admission_not_supported,
+            ),
+            (
+                "rnet_game_transport_latest_admission_message_too_large_total",
+                latest.admission_message_too_large,
+            ),
+            (
+                "rnet_game_transport_latest_admission_other_failures_total",
+                latest.admission_other_failures,
+            ),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
+        }
         let metrics = self.heartbeat_metrics_snapshot();
         for (name, value) in [
             ("rnet_game_heartbeat_probes_sent_total", metrics.probes_sent),

@@ -47,6 +47,9 @@ impl ResumeRuntimeState {
 impl GameRuntime {
     pub(crate) fn convert_game_auth_request(&self, event: &Event) -> Result<GameEvent> {
         let request = AuthRequest::from_event(event)?;
+        if let Some(range_event) = self.range_auth_request(event, &request) {
+            return Ok(range_event);
+        }
         let expected = self
             .server_protocols
             .lock()
@@ -119,7 +122,7 @@ impl GameRuntime {
         }
     }
 
-    fn reject_game_join(&self, event: &Event) -> GameEvent {
+    pub(crate) fn reject_game_join(&self, event: &Event) -> GameEvent {
         let _ = self.network.auth_decide(event.session, false);
         GameEvent::ProtocolRejected {
             endpoint: event.endpoint,
@@ -259,6 +262,10 @@ impl GameRuntime {
                     ticket: ResumeTicket::new(payload.to_vec()),
                 }))
             }
+            DecodedEnvelope::Control {
+                kind: ControlKind::Protocol,
+                payload,
+            } => self.handle_range_control(event, &payload),
             _ => Err(RnetError::new(
                 ErrorCode::ProtocolError,
                 "unsupported game control for this runtime version",
@@ -270,6 +277,17 @@ impl GameRuntime {
         let mut state = self.resume.lock().expect("resume state poisoned");
         state.server_sessions.remove(&session);
         state.pending_server.remove(&session);
+        // A range handshake can close after the old handle is invalidated but before READY.
+        // Do not retain an orphaned old-to-new mapping or its revocation marker indefinitely.
+        let abandoned: Vec<_> = state
+            .inflight_server
+            .iter()
+            .filter_map(|(old, new)| (*new == session).then_some(*old))
+            .collect();
+        for old in abandoned {
+            state.inflight_server.remove(&old);
+            state.revoked_inflight.remove(&old);
+        }
     }
 
     pub(crate) fn revoke_resume_session(&self, session: Handle) {

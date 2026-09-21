@@ -80,6 +80,7 @@ pub(crate) struct Outbound {
     pub(crate) queued_at: Instant,
     /// Dropping an outbound message releases its runtime and session reservations together.
     _reservations: Vec<ByteReservation>,
+    latest_slot: Option<Arc<crate::latest::LatestSlot>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,6 +116,7 @@ impl Outbound {
             kind: OutboundKind::Data,
             queued_at: Instant::now(),
             _reservations: Vec::new(),
+            latest_slot: None,
         }
     }
 
@@ -149,7 +151,65 @@ impl Outbound {
             kind,
             queued_at: Instant::now(),
             _reservations: vec![runtime_reservation, session_reservation],
+            latest_slot: None,
         })
+    }
+
+    pub(crate) fn with_latest_slot(slot: Arc<crate::latest::LatestSlot>) -> Self {
+        Self {
+            bytes: Bytes::new(),
+            kind: OutboundKind::Data,
+            queued_at: Instant::now(),
+            _reservations: Vec::new(),
+            latest_slot: Some(slot),
+        }
+    }
+
+    /// Resolving at the worker preserves replaceability while the placeholder waits in mpsc.
+    pub(crate) fn resolve_latest(self) -> Option<Self> {
+        if let Some(slot) = &self.latest_slot {
+            return slot.take();
+        }
+        Some(self)
+    }
+
+    pub(crate) fn replace_bytes(&mut self, bytes: Bytes) -> Result<()> {
+        if self.kind != OutboundKind::Data || self._reservations.len() != 2 {
+            return Err(RnetError::new(
+                ErrorCode::InvalidState,
+                "outbound is not replaceable",
+            ));
+        }
+        let old_len = self.bytes.len();
+        if bytes.len() > old_len {
+            let extra = bytes.len() - old_len;
+            let runtime = self._reservations[0].budget.reserve(extra)?;
+            let session = self._reservations[1].budget.reserve(extra)?;
+            self._reservations[0].absorb(runtime);
+            self._reservations[1].absorb(session);
+        } else if bytes.len() < old_len {
+            let released = old_len - bytes.len();
+            for reservation in &mut self._reservations {
+                reservation.release(released);
+            }
+        }
+        self.bytes = bytes;
+        self.queued_at = Instant::now();
+        Ok(())
+    }
+}
+
+impl ByteReservation {
+    fn absorb(&mut self, mut other: Self) {
+        debug_assert!(Arc::ptr_eq(&self.budget, &other.budget));
+        self.bytes += other.bytes;
+        other.bytes = 0;
+    }
+
+    fn release(&mut self, bytes: usize) {
+        debug_assert!(self.bytes >= bytes);
+        self.bytes -= bytes;
+        self.budget.used.fetch_sub(bytes, Ordering::AcqRel);
     }
 }
 
@@ -252,6 +312,7 @@ pub(crate) struct Shared {
     pub(crate) latencies: Latencies,
     pub(crate) kcp_telemetry: Arc<crate::kcp::KcpTelemetryRegistry>,
     pub(crate) send_budget: Arc<ByteBudget>,
+    pub(crate) latest: crate::latest::LatestRegistry,
     pub(crate) stopped_event_emitted: Mutex<bool>,
 }
 
@@ -379,6 +440,7 @@ pub(crate) fn remove_session_with_reason(
         .expect("session table poisoned")
         .remove(session)
     {
+        shared.latest.forget_session(session);
         release_pending_session(shared, &route);
         shared.metrics.record_session_closed(reason);
         route.target.request_cleanup(session);

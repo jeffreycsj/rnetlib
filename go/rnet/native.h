@@ -63,6 +63,27 @@ static inline int32_t rnet_go_game_server_listen(
   return rnet_game_server_listen(runtime, &config, out);
 }
 
+static inline int32_t rnet_go_game_server_listen_range(
+    rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
+    size_t host_len, uint16_t port, const uint8_t *private_key,
+    uint32_t initial_encryption, uint64_t protocol_id,
+    uint32_t min_version, uint32_t max_version, rnet_endpoint_t *out) {
+  rnet_game_range_server_config_t config = {0};
+  config.struct_size = sizeof(config);
+  config.abi_version = RNET_ABI_VERSION;
+  config.transport = transport;
+  config.initial_encryption = initial_encryption;
+  config.bind_host.ptr = host;
+  config.bind_host.len = host_len;
+  config.bind_port = port;
+  config.local_private_key.ptr = private_key;
+  config.local_private_key.len = 32;
+  config.protocol_id = protocol_id;
+  config.min_version = min_version;
+  config.max_version = max_version;
+  return rnet_game_server_listen_range(runtime, &config, out);
+}
+
 static inline int32_t rnet_go_game_client_connect(
     rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
     size_t host_len, uint16_t port, const uint8_t *join_ticket,
@@ -82,6 +103,55 @@ static inline int32_t rnet_go_game_client_connect(
   config.build_id = build_id;
   config.capabilities = capabilities;
   return rnet_game_client_connect(runtime, &config, out);
+}
+
+static inline rnet_game_range_client_config_t rnet_go_game_range_client_config(
+    uint32_t transport, const uint8_t *host, size_t host_len, uint16_t port,
+    const uint8_t *join_ticket, size_t join_ticket_len, uint64_t protocol_id,
+    uint32_t min_version, uint32_t max_version, uint64_t build_id,
+    uint64_t capabilities) {
+  rnet_game_range_client_config_t config = {0};
+  config.struct_size = sizeof(config);
+  config.abi_version = RNET_ABI_VERSION;
+  config.transport = transport;
+  config.remote_host.ptr = host;
+  config.remote_host.len = host_len;
+  config.remote_port = port;
+  config.join_ticket.ptr = join_ticket;
+  config.join_ticket.len = join_ticket_len;
+  config.protocol_id = protocol_id;
+  config.min_version = min_version;
+  config.max_version = max_version;
+  config.build_id = build_id;
+  config.capabilities = capabilities;
+  return config;
+}
+
+static inline int32_t rnet_go_game_client_connect_range(
+    rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
+    size_t host_len, uint16_t port, const uint8_t *join_ticket,
+    size_t join_ticket_len, uint64_t protocol_id, uint32_t min_version,
+    uint32_t max_version, uint64_t build_id, uint64_t capabilities,
+    rnet_endpoint_t *out) {
+  rnet_game_range_client_config_t config = rnet_go_game_range_client_config(
+      transport, host, host_len, port, join_ticket, join_ticket_len, protocol_id,
+      min_version, max_version, build_id, capabilities);
+  return rnet_game_client_connect_range(runtime, &config, out);
+}
+
+static inline int32_t rnet_go_game_client_resume_connect_range(
+    rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
+    size_t host_len, uint16_t port, const uint8_t *join_ticket,
+    size_t join_ticket_len, uint64_t protocol_id, uint32_t min_version,
+    uint32_t max_version, uint64_t build_id, uint64_t capabilities,
+    rnet_session_t old_session, const uint8_t *resume_ticket,
+    size_t resume_ticket_len, rnet_endpoint_t *out) {
+  rnet_game_range_client_config_t config = rnet_go_game_range_client_config(
+      transport, host, host_len, port, join_ticket, join_ticket_len, protocol_id,
+      min_version, max_version, build_id, capabilities);
+  rnet_slice_t ticket = {resume_ticket, resume_ticket_len};
+  return rnet_game_client_resume_connect_range(runtime, &config, old_session,
+                                                ticket, out);
 }
 
 static inline int32_t rnet_go_game_client_resume_connect(

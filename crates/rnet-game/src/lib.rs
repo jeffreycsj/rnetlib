@@ -15,6 +15,7 @@ mod lifecycle;
 mod observe;
 mod quality;
 mod quality_runtime;
+mod range_runtime;
 mod realtime;
 mod realtime_runtime;
 mod resume;
@@ -24,7 +25,8 @@ mod runtime;
 pub use clock_sync::ClockSyncSample;
 pub use clock_sync_runtime::ClockSyncMetricsSnapshot;
 pub use config::{
-    GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
+    GameClientConfig, GameHostClientConfig, GameProtocol, GameProtocolRange, GameRangeClientConfig,
+    GameRangeHostClientConfig, GameRangeServerConfig, GameRuntimeConfig, GameServerConfig,
 };
 pub use diagnostics::GameLoggerSnapshot;
 pub use event::{
@@ -35,7 +37,7 @@ pub use observe::{HeartbeatMetricsSnapshot, ResumeMetricsSnapshot};
 pub use quality::{QualityPolicy, UdpLossSnapshot};
 pub use realtime::{RealtimeQueueConfig, RealtimeQueueSnapshot};
 pub use rnet_observe::{BoundedLogger, LogLevel, LogRecord, LoggerConfig};
-pub use rnet_transport::KcpRetransmissionSnapshot;
+pub use rnet_transport::{KcpRetransmissionSnapshot, LatestTransportSnapshot};
 pub use runtime::{GameRuntime, GameSendOptions};
 
 #[cfg(test)]

@@ -1,9 +1,10 @@
 //! Game API for coalesced state snapshots staged ahead of transport send queues.
 
 use crate::realtime::RealtimeQueueSnapshot;
-use crate::runtime::{GameRuntime, GameSendOptions};
+use crate::runtime::GameRuntime;
 use bytes::Bytes;
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
+use rnet_transport::LatestTransportSnapshot;
 
 impl GameRuntime {
     /// Stages a replaceable snapshot. The key is scoped to the session; ordinary `send` remains
@@ -72,13 +73,11 @@ impl GameRuntime {
                 .expect("realtime queue poisoned")
                 .pop_next();
             let Some(message) = message else { break };
-            let result = self.send_game_application(
+            let result = self.send_game_latest_application(
                 message.session,
+                message.key,
                 &message.payload,
-                GameSendOptions {
-                    sequence: None,
-                    tick: message.tick,
-                },
+                message.tick,
             );
             let mut queue = self.realtime.lock().expect("realtime queue poisoned");
             match result {
@@ -98,5 +97,15 @@ impl GameRuntime {
             .lock()
             .expect("realtime queue poisoned")
             .snapshot()
+    }
+
+    /// Number of TCP/KCP snapshots replaced after leaving the game queue but before I/O pickup.
+    pub fn transport_latest_replacements(&self) -> u64 {
+        self.network.latest_transport_replacements()
+    }
+
+    /// Cumulative transport-pending replacement, worker-pickup and admission-failure telemetry.
+    pub fn transport_latest_snapshot(&self) -> LatestTransportSnapshot {
+        self.network.latest_transport_snapshot()
     }
 }

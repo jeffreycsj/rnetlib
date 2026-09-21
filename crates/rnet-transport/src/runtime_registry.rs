@@ -108,6 +108,7 @@ impl NetworkRuntime {
             .expect("session table poisoned")
             .remove(session)
         {
+            self.shared.latest.forget_session(session);
             release_pending_session(&self.shared, &route);
         }
     }

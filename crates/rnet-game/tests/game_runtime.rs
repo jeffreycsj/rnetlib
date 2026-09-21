@@ -538,9 +538,16 @@ fn exercise_game_session(transport: Transport) {
         "only the newest value of each key is forwarded, in fair key order"
     );
     assert_eq!(runtime.realtime_queue_snapshot().forwarded, 2);
-    assert!(runtime
-        .prometheus_snapshot()
-        .contains("rnet_game_realtime_replaced_total 1"));
+    let latest = runtime.transport_latest_snapshot();
+    if transport == Transport::Udp {
+        assert_eq!(latest.worker_pickups, 0);
+    } else {
+        assert!(latest.worker_pickups >= 2);
+    }
+    let prometheus = runtime.prometheus_snapshot();
+    assert!(prometheus.contains("rnet_game_realtime_replaced_total 1"));
+    assert!(prometheus.contains("rnet_game_transport_latest_worker_pickups_total"));
+    assert!(prometheus.contains("rnet_game_transport_latest_admission_would_block_total"));
 
     let metrics = runtime.metrics_snapshot();
     assert!(metrics.frames_sent >= 5);
