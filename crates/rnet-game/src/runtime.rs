@@ -15,6 +15,7 @@ use crate::quality::{QualityPolicy, UdpSessionQuality};
 use crate::range_state::RangeRuntimeState;
 use crate::realtime::LatestQueue;
 use crate::resume_runtime::ResumeRuntimeState;
+use crate::scheduler::{GamePriority, ScheduledQueue};
 use rnet_core::{ErrorCode, Event, EventType, Handle, Result, RnetError, Transport};
 use rnet_protocol::control::SecurityMode;
 use rnet_transport::{
@@ -22,7 +23,7 @@ use rnet_transport::{
 };
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use zeroize::{Zeroize, Zeroizing};
@@ -32,6 +33,12 @@ use zeroize::{Zeroize, Zeroizing};
 pub struct GameSendOptions {
     pub sequence: Option<u32>,
     pub tick: Option<u32>,
+    /// Optional request/trace correlation metadata; zero means absent.
+    pub correlation_id: u64,
+    /// Local scheduling priority. Normal is the default and participates in bounded fair queuing.
+    pub priority: GamePriority,
+    /// Optional local staging lifetime. It cannot recall socket/KCP-owned data.
+    pub expires_after: Option<Duration>,
 }
 
 /// High-level runtime whose normal send/receive path uses only session handles and payload bytes.
@@ -55,11 +62,15 @@ pub struct GameRuntime {
     pub(crate) protocol_metrics: ProtocolMetrics,
     pub(crate) quality_policy: QualityPolicy,
     pub(crate) realtime: Mutex<LatestQueue>,
+    pub(crate) scheduled: Mutex<ScheduledQueue>,
     pub(crate) resume: Mutex<ResumeRuntimeState>,
     pub(crate) range: Mutex<RangeRuntimeState>,
     pub(crate) realtime_flush_batch: usize,
+    pub(crate) scheduled_flush_batch: usize,
     pub(crate) allow_plaintext_business_data: bool,
     pub(crate) diagnostics: GameDiagnostics,
+    /// Closes send admission before shutdown starts draining the bounded queues.
+    pub(crate) stopping: AtomicBool,
     pub(crate) poll_guard: Mutex<()>,
 }
 
@@ -98,6 +109,8 @@ impl GameRuntime {
         let maximum_envelope_len = config.network.max_body_len;
         let realtime = LatestQueue::from_config(config.realtime_queue)?;
         let realtime_flush_batch = config.realtime_queue.flush_batch;
+        let scheduled = ScheduledQueue::from_config(config.scheduled_queue)?;
+        let scheduled_flush_batch = config.scheduled_queue.flush_batch;
         let range_buffer_messages = config.network.event_queue_capacity;
         let range_buffer_bytes = config.network.max_event_bytes;
         let allow_plaintext_business_data =
@@ -125,14 +138,17 @@ impl GameRuntime {
             protocol_metrics: ProtocolMetrics::default(),
             quality_policy: config.quality_policy,
             realtime: Mutex::new(realtime),
+            scheduled: Mutex::new(scheduled),
             resume: Mutex::new(resume),
             range: Mutex::new(RangeRuntimeState::with_buffer_limits(
                 range_buffer_messages,
                 range_buffer_bytes,
             )),
             realtime_flush_batch,
+            scheduled_flush_batch,
             allow_plaintext_business_data,
             diagnostics: GameDiagnostics::new(),
+            stopping: AtomicBool::new(false),
             poll_guard: Mutex::new(()),
         })
     }
@@ -375,6 +391,10 @@ impl GameRuntime {
             .lock()
             .expect("realtime queue poisoned")
             .forget_session(session);
+        self.scheduled
+            .lock()
+            .expect("scheduled queue poisoned")
+            .forget_session(session);
         self.forget_resume_session(session);
         self.range
             .lock()
@@ -394,7 +414,7 @@ impl GameRuntime {
         payload: &[u8],
         options: GameSendOptions,
     ) -> Result<()> {
-        self.send_game_application(session, payload, options)
+        self.send_scheduled(session, payload, options)
     }
 
     /// Changes business-data encryption on an established server-side session.
@@ -553,11 +573,7 @@ impl GameRuntime {
                 // Values other than zero indicate a legacy or non-game peer. Accepting them would
                 // reintroduce application routing fields that the game contract intentionally owns
                 // inside its opaque payload.
-                if event.msg_type != 0
-                    || event.stream_id != 0
-                    || event.request_id != 0
-                    || event.status != ErrorCode::Ok
-                {
+                if event.msg_type != 0 || event.stream_id != 0 || event.status != ErrorCode::Ok {
                     return Err(RnetError::new(
                         ErrorCode::ProtocolError,
                         "game message contains legacy routing metadata",
@@ -576,6 +592,7 @@ impl GameRuntime {
                             session: event.session,
                             sequence,
                             tick,
+                            correlation_id: event.request_id,
                             payload,
                         });
                     }

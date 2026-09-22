@@ -1,8 +1,9 @@
 //! Game-runtime lifecycle operations; application shutdown never needs the transport facade.
 
 use crate::runtime::GameRuntime;
-use rnet_core::{ErrorCode, Handle, Result};
-use std::time::Duration;
+use rnet_core::{ErrorCode, Handle, Result, RnetError};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 impl GameRuntime {
     /// Closes one game session while leaving its listener and other players active.
@@ -18,8 +19,28 @@ impl GameRuntime {
 
     /// Stops the runtime after the requested drain period and closes remaining endpoints.
     pub fn stop(&self, drain_timeout: Duration) -> Result<()> {
+        let deadline = Instant::now().checked_add(drain_timeout).ok_or_else(|| {
+            RnetError::new(
+                ErrorCode::InvalidArgument,
+                "game stop timeout cannot form a deadline",
+            )
+        })?;
+        // Reject new queue admission before taking the poll lock. Existing admitted work is then
+        // either drained within the deadline or counted as a shutdown drop during queue cleanup.
+        self.stopping.store(true, Ordering::Release);
         let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
-        self.network.stop(drain_timeout)?;
+        while (self.scheduled_queue_snapshot().queued_messages != 0
+            || self.realtime_queue_snapshot().queued_messages != 0)
+            && Instant::now() < deadline
+        {
+            let scheduled = self.flush_scheduled_inner(self.scheduled_flush_batch);
+            let realtime = self.flush_realtime_inner(self.realtime_flush_batch);
+            if scheduled == 0 && realtime == 0 {
+                std::thread::yield_now();
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        self.network.stop(remaining)?;
         self.range.lock().expect("range state poisoned").clear();
         self.heartbeat_trackers
             .lock()
@@ -40,6 +61,10 @@ impl GameRuntime {
         self.realtime
             .lock()
             .expect("realtime queue poisoned")
+            .clear();
+        self.scheduled
+            .lock()
+            .expect("scheduled queue poisoned")
             .clear();
         self.endpoint_transports
             .lock()

@@ -69,7 +69,7 @@ fn zero_capacity_poll_still_advances_heartbeat_timeouts() {
 }
 
 #[test]
-fn zero_capacity_poll_does_not_move_an_unbounded_public_backlog() {
+fn zero_capacity_poll_stages_public_events_in_the_bounded_completed_queue() {
     let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
     for protocol_id in 100..104 {
         runtime
@@ -86,14 +86,14 @@ fn zero_capacity_poll_does_not_move_an_unbounded_public_backlog() {
     for _ in 0..32 {
         assert!(runtime.poll(0, Duration::ZERO).is_empty());
     }
-    assert_eq!(
-        runtime
-            .range
-            .lock()
-            .expect("range")
-            .completed_len_for_test(),
-        1,
-        "zero-capacity maintenance must not relocate the bounded transport queue"
+    let completed = runtime
+        .range
+        .lock()
+        .expect("range")
+        .completed_len_for_test();
+    assert!(
+        (1..=5).contains(&completed),
+        "zero-capacity maintenance must retain public events in a bounded queue"
     );
 }
 
@@ -163,6 +163,87 @@ fn completed_backlog_does_not_starve_authenticated_heartbeat_controls() {
     assert!(
         metrics.replies_matched >= 1,
         "heartbeat ACKs were not consumed"
+    );
+}
+
+#[test]
+fn zero_capacity_poll_with_completed_backlog_still_consumes_heartbeat_controls() {
+    let key = Keypair::generate().expect("server key");
+    let client_key = Keypair::generate().expect("client key");
+    let runtime = GameRuntime::new_with_client_security(
+        GameRuntimeConfig::production()
+            .with_heartbeat(Duration::from_millis(20), Duration::from_millis(200)),
+        ClientSecurity::pinned(client_key, key.public.clone()),
+    )
+    .expect("runtime");
+    let listener = runtime
+        .listen(GameServerConfig {
+            transport: Transport::Tcp,
+            bind_addr: "127.0.0.1:0".parse().expect("address"),
+            local_key: key,
+            initial_encryption: true,
+            protocol: GameProtocol::new(92, 1),
+        })
+        .expect("listener");
+    let _client = runtime
+        .connect(GameClientConfig {
+            transport: Transport::Tcp,
+            bind_addr: None,
+            remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
+            join_ticket: b"join".to_vec(),
+            protocol: GameProtocol::new(92, 1),
+        })
+        .expect("client");
+    let ready_deadline = Instant::now() + Duration::from_secs(2);
+    let mut ready = 0;
+    while ready < 2 {
+        assert!(
+            Instant::now() < ready_deadline,
+            "sessions did not become ready"
+        );
+        for event in runtime.poll(16, Duration::from_millis(5)) {
+            match event {
+                GameEvent::AuthRequest { session, .. } => {
+                    runtime.auth_decide(session, true).expect("authorize")
+                }
+                GameEvent::SessionReady { .. } => ready += 1,
+                _ => {}
+            }
+        }
+    }
+    runtime
+        .range
+        .lock()
+        .expect("range")
+        .push_completed_for_test(GameEvent::Writable {
+            endpoint: 999,
+            session: 10_000,
+        });
+
+    let heartbeat_deadline = Instant::now() + Duration::from_millis(350);
+    while Instant::now() < heartbeat_deadline {
+        assert!(runtime.poll(0, Duration::ZERO).is_empty());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let metrics = runtime.heartbeat_metrics_snapshot();
+    assert_eq!(metrics.timeouts, 0, "queued heartbeat ACKs were starved");
+    assert!(
+        metrics.replies_matched >= 1,
+        "heartbeat ACKs were not consumed"
+    );
+    assert!(
+        runtime
+            .poll(16, Duration::ZERO)
+            .iter()
+            .any(|event| matches!(
+                event,
+                GameEvent::Writable {
+                    session: 10_000,
+                    ..
+                }
+            )),
+        "zero-capacity maintenance must preserve the original public event"
     );
 }
 
@@ -589,4 +670,38 @@ fn runtime_rejects_body_limits_that_cannot_carry_clock_reply() {
         .err()
         .expect("impossible protected clock reply must fail at construction");
     assert_eq!(error.code(), ErrorCode::InvalidArgument);
+}
+
+#[test]
+fn stopping_runtime_closes_all_game_send_admission() {
+    let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
+    runtime.stop(Duration::ZERO).expect("stop runtime");
+
+    assert_eq!(
+        runtime.send(1, b"late").expect_err("scheduled send").code(),
+        ErrorCode::InvalidState
+    );
+    assert_eq!(
+        runtime
+            .send_latest(1, 9, b"late")
+            .expect_err("latest send")
+            .code(),
+        ErrorCode::InvalidState
+    );
+}
+
+#[test]
+fn invalid_stop_deadline_does_not_close_game_send_admission() {
+    let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
+
+    assert_eq!(
+        runtime
+            .stop(Duration::MAX)
+            .expect_err("unrepresentable deadline")
+            .code(),
+        ErrorCode::InvalidArgument
+    );
+    assert!(!runtime.stopping.load(Ordering::Acquire));
+
+    runtime.stop(Duration::ZERO).expect("valid stop");
 }

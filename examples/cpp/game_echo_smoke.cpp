@@ -61,15 +61,29 @@ int main() {
       } else if (event.type == RNET_GAME_SESSION_READY &&
                  event.endpoint == client_endpoint) {
         client_session = event.session;
-        runtime.send(event.session, std::string("cpp-opaque"));
+        rnet::GameSendOptions options;
+        options.has_tick = true;
+        options.tick = UINT32_MAX;
+        options.correlation_id = 0x1122334455667788ULL;
+        options.priority = rnet::GamePriority::High;
+        options.expiry_ms = 1000;
+        runtime.send(event.session, std::string("cpp-opaque"), options);
       } else if (event.type == RNET_GAME_MESSAGE) {
         if (event.session != server_session)
           return 3;
         const std::string payload(event.data.begin(), event.data.end());
         if (!first_received) {
-          if (payload != "cpp-opaque" || client_session == 0)
+          if (payload != "cpp-opaque" || client_session == 0 ||
+              !event.has_tick || event.tick != UINT32_MAX ||
+              event.correlation_id != 0x1122334455667788ULL)
             return 3;
           first_received = true;
+          const rnet::GameScheduledQueue scheduled =
+              runtime.scheduled_queue_snapshot();
+          if (scheduled.forwarded_by_priority[2] == 0 ||
+              scheduled.queue_delay_samples == 0 ||
+              scheduled.tick_queue_delay_samples == 0)
+            return 10;
           runtime.send_latest(client_session, 7, std::string("cpp-latest"));
           const rnet::GameRealtimeQueue queue = runtime.realtime_queue_snapshot();
           if (queue.queued_messages != 1 || queue.queued_bytes == 0)

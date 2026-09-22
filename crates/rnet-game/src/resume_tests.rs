@@ -127,6 +127,54 @@ fn racing_claimants_cannot_both_consume_one_ticket() {
 }
 
 #[test]
+fn resume_ticket_storm_stays_bounded_and_recovers_capacity() {
+    const CAPACITY: usize = 1024;
+    let now = Instant::now();
+    let peer = [9; 32];
+    let mut tickets = ResumeRegistry::new(CAPACITY).unwrap();
+    let issued: Vec<_> = (1..=CAPACITY as u64)
+        .map(|session| {
+            tickets
+                .issue(
+                    scope(session, peer),
+                    &session.to_be_bytes(),
+                    now,
+                    Duration::from_secs(30),
+                )
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(tickets.outstanding(), CAPACITY);
+    assert_eq!(
+        tickets
+            .issue(
+                scope(CAPACITY as u64 + 1, peer),
+                b"overflow",
+                now,
+                Duration::from_secs(30),
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::WouldBlock
+    );
+
+    for ticket in issued.iter().rev() {
+        tickets
+            .consume(ticket, 10, peer, protocol(), now)
+            .expect("every unique storm ticket remains consumable");
+    }
+    assert_eq!(tickets.outstanding(), 0);
+    tickets
+        .issue(
+            scope(CAPACITY as u64 + 1, peer),
+            b"recovered",
+            now,
+            Duration::from_secs(30),
+        )
+        .expect("capacity recovers after consumption");
+}
+
+#[test]
 fn ticket_cannot_move_to_another_listener_and_listener_close_revokes_it() {
     let mut tickets = ResumeRegistry::new(2).unwrap();
     let now = Instant::now();

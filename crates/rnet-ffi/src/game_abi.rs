@@ -1,12 +1,16 @@
 //! Additive game-facing ABI layouts. The existing transport ABI remains frozen.
 
-use crate::abi::{RnetSlice, RNET_ABI_VERSION};
-use crate::abi_config::RnetConfigV5;
+use crate::abi::RNET_ABI_VERSION;
 use rnet_game::{
     ClockSyncSample, GameRuntime, LatestTransportSnapshot, NetworkQuality, QualityBasis,
-    QualityGrade, RealtimeQueueSnapshot,
+    QualityGrade,
 };
 use std::mem::size_of;
+
+pub const RNET_GAME_PRIORITY_LOW: u32 = 1;
+pub const RNET_GAME_PRIORITY_NORMAL: u32 = 2;
+pub const RNET_GAME_PRIORITY_HIGH: u32 = 3;
+pub const RNET_GAME_PRIORITY_CRITICAL: u32 = 4;
 
 pub const RNET_GAME_RUNTIME_STARTED: u32 = 1;
 pub const RNET_GAME_ENDPOINT_OPENED: u32 = 2;
@@ -25,104 +29,6 @@ pub const RNET_GAME_SECURITY_CHANGED: u32 = 14;
 pub const RNET_GAME_QUALITY_CHANGED: u32 = 15;
 pub const RNET_GAME_PROTOCOL_VIOLATION: u32 = 16;
 pub const RNET_GAME_RUNTIME_STOPPED: u32 = 17;
-
-/// Zero values on the optional timing fields select the Rust production defaults.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetGameConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub heartbeat_interval_ms: u32,
-    pub heartbeat_timeout_ms: u32,
-    pub allow_plaintext_business_data: u32,
-    pub reserved: u32,
-    /// Optional transport limits; borrowed only during runtime creation.
-    pub network_config: *const RnetConfigV5,
-}
-
-impl Default for RnetGameConfig {
-    fn default() -> Self {
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version: RNET_ABI_VERSION,
-            heartbeat_interval_ms: 0,
-            heartbeat_timeout_ms: 0,
-            allow_plaintext_business_data: 0,
-            reserved: 0,
-            network_config: std::ptr::null(),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetGameServerConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub transport: u32,
-    pub initial_encryption: u32,
-    pub bind_host: RnetSlice,
-    pub bind_port: u16,
-    pub reserved: u16,
-    pub local_private_key: RnetSlice,
-    pub protocol_id: u64,
-    pub protocol_version: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetGameClientConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub transport: u32,
-    pub reserved: u32,
-    pub remote_host: RnetSlice,
-    pub remote_port: u16,
-    pub reserved2: u16,
-    pub join_ticket: RnetSlice,
-    pub protocol_id: u64,
-    pub protocol_version: u32,
-    pub reserved3: u32,
-    pub build_id: u64,
-    pub capabilities: u64,
-}
-
-/// Explicit wire-v4 listener. Existing exact-version game config retains wire v3.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetGameRangeServerConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub transport: u32,
-    pub initial_encryption: u32,
-    pub bind_host: RnetSlice,
-    pub bind_port: u16,
-    pub reserved: u16,
-    pub local_private_key: RnetSlice,
-    pub protocol_id: u64,
-    pub min_version: u32,
-    pub max_version: u32,
-}
-
-/// Explicit wire-v4 hostname join, including metadata authenticated in the join payload.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetGameRangeClientConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub transport: u32,
-    pub reserved: u32,
-    pub remote_host: RnetSlice,
-    pub remote_port: u16,
-    pub reserved2: u16,
-    pub join_ticket: RnetSlice,
-    pub protocol_id: u64,
-    pub min_version: u32,
-    pub max_version: u32,
-    pub reserved3: u32,
-    pub build_id: u64,
-    pub capabilities: u64,
-}
 
 /// Cumulative telemetry for keyed snapshots after game staging.
 #[repr(C)]
@@ -241,6 +147,47 @@ impl Default for RnetGameEvent {
             sequence: 0,
             has_tick: 0,
             tick: 0,
+        }
+    }
+}
+
+/// Additive event layout for advanced message metadata. Keeping the v1 event as a nested prefix
+/// prevents old callers from receiving writes with a larger stride than they allocated.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RnetGameEventV2 {
+    pub event: RnetGameEvent,
+    pub correlation_id: u64,
+}
+
+/// Advanced game send metadata. Message type and transport routing remain library-owned.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RnetGameSendOptions {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub has_sequence: u32,
+    pub sequence: u32,
+    pub has_tick: u32,
+    pub tick: u32,
+    pub correlation_id: u64,
+    pub priority: u32,
+    /// Relative local queue lifetime. Zero means no expiry.
+    pub expiry_ms: u64,
+}
+
+impl Default for RnetGameSendOptions {
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: RNET_ABI_VERSION,
+            has_sequence: 0,
+            sequence: 0,
+            has_tick: 0,
+            tick: 0,
+            correlation_id: 0,
+            priority: RNET_GAME_PRIORITY_NORMAL,
+            expiry_ms: 0,
         }
     }
 }
@@ -496,56 +443,6 @@ impl RnetGameMetrics {
             }
         }
         out
-    }
-}
-
-/// Runtime-wide staging gauges and cumulative counters. Forwarded means admitted to the
-/// transport send queue, not delivered to the peer; no per-player labels or payloads appear.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetGameRealtimeQueue {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub queued_messages: u64,
-    pub queued_bytes: u64,
-    pub admission_rejected: u64,
-    pub replaced: u64,
-    pub closed_dropped: u64,
-    pub backpressure_dropped: u64,
-    pub send_failed: u64,
-    pub forwarded: u64,
-}
-
-impl Default for RnetGameRealtimeQueue {
-    fn default() -> Self {
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version: RNET_ABI_VERSION,
-            queued_messages: 0,
-            queued_bytes: 0,
-            admission_rejected: 0,
-            replaced: 0,
-            closed_dropped: 0,
-            backpressure_dropped: 0,
-            send_failed: 0,
-            forwarded: 0,
-        }
-    }
-}
-
-impl From<RealtimeQueueSnapshot> for RnetGameRealtimeQueue {
-    fn from(value: RealtimeQueueSnapshot) -> Self {
-        Self {
-            queued_messages: u64::try_from(value.queued_messages).unwrap_or(u64::MAX),
-            queued_bytes: u64::try_from(value.queued_bytes).unwrap_or(u64::MAX),
-            admission_rejected: value.admission_rejected,
-            replaced: value.replaced,
-            closed_dropped: value.closed_dropped,
-            backpressure_dropped: value.backpressure_dropped,
-            send_failed: value.send_failed,
-            forwarded: value.forwarded,
-            ..Self::default()
-        }
     }
 }
 

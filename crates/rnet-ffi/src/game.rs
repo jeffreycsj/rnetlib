@@ -2,24 +2,25 @@
 
 use crate::abi::{RnetClientSecurity, RnetLoggerV2, RnetSlice};
 use crate::game_abi::{
-    RnetGameBuffer, RnetGameClientConfig, RnetGameClockSync, RnetGameConfig, RnetGameEvent,
-    RnetGameMetrics, RnetGameQuality, RnetGameRealtimeQueue, RnetGameServerConfig,
+    RnetGameSendOptions, RNET_GAME_PRIORITY_CRITICAL, RNET_GAME_PRIORITY_HIGH,
+    RNET_GAME_PRIORITY_LOW, RNET_GAME_PRIORITY_NORMAL,
 };
-use crate::game_events;
+use crate::game_config_abi::{
+    RnetGameClientConfig, RnetGameConfig, RnetGameConfigV2, RnetGameServerConfig,
+};
 use crate::game_registry;
 use crate::observe::build_game_logger_v2;
 use crate::registry::{
-    copy_key, ffi_status, invalid_argument, invalid_state, parse_address, validate_struct,
-    with_borrowed_slice, IN_LOG_CALLBACK,
+    copy_key, ffi_status, invalid_argument, parse_address, validate_struct, with_borrowed_slice,
 };
 use crate::runtime::runtime_config_v5;
 use rnet_core::{ErrorCode, Result, RnetError, Transport};
 use rnet_game::{
-    GameHostClientConfig, GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig,
+    GameHostClientConfig, GamePriority, GameProtocol, GameRuntime, GameRuntimeConfig,
+    GameSendOptions, GameServerConfig, RealtimeQueueConfig, ScheduledQueueConfig,
 };
 use rnet_security::Keypair;
 use rnet_transport::ClientSecurity;
-use std::cell::Cell;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -35,6 +36,19 @@ pub unsafe extern "C" fn rnet_game_config_init(out: *mut RnetGameConfig) -> i32 
             return invalid_argument("game config output is null");
         }
         unsafe { out.write(RnetGameConfig::default()) };
+        Ok(())
+    })
+}
+
+#[no_mangle]
+/// # Safety
+/// `out` must point to writable storage for one complete V2 configuration.
+pub unsafe extern "C" fn rnet_game_config_v2_init(out: *mut RnetGameConfigV2) -> i32 {
+    ffi_status(|| {
+        if out.is_null() {
+            return invalid_argument("game V2 config output is null");
+        }
+        unsafe { out.write(RnetGameConfigV2::default()) };
         Ok(())
     })
 }
@@ -73,6 +87,37 @@ pub unsafe extern "C" fn rnet_game_runtime_create_logged(
     unsafe { create_game_runtime(config, client, logger, out) }
 }
 
+#[no_mangle]
+/// Creates a game runtime with additive realtime and priority-queue budget controls.
+///
+/// # Safety
+/// Config, security slices, and `out` must be valid for the call.
+pub unsafe extern "C" fn rnet_game_runtime_create_v2(
+    config: *const RnetGameConfigV2,
+    client: *const RnetClientSecurity,
+    out: *mut u64,
+) -> i32 {
+    unsafe { create_game_runtime_v2(config, client, std::ptr::null(), out) }
+}
+
+#[no_mangle]
+/// V2 runtime creation with an asynchronous bounded logger.
+///
+/// # Safety
+/// All pointers must be valid for this call; callback user data must remain thread-safe and valid
+/// until the runtime is destroyed.
+pub unsafe extern "C" fn rnet_game_runtime_create_logged_v2(
+    config: *const RnetGameConfigV2,
+    client: *const RnetClientSecurity,
+    logger: *const RnetLoggerV2,
+    out: *mut u64,
+) -> i32 {
+    if logger.is_null() {
+        return ffi_status(|| invalid_argument("game logger must be non-null"));
+    }
+    unsafe { create_game_runtime_v2(config, client, logger, out) }
+}
+
 unsafe fn create_game_runtime(
     config: *const RnetGameConfig,
     client: *const RnetClientSecurity,
@@ -89,54 +134,145 @@ unsafe fn create_game_runtime(
             config.abi_version,
             size_of::<RnetGameConfig>(),
         )?;
-        if config.reserved != 0 || config.allow_plaintext_business_data > 1 {
-            return invalid_argument("invalid game config flags");
-        }
-        let mut settings = GameRuntimeConfig::production()
-            .allow_plaintext_business_data(config.allow_plaintext_business_data == 1);
-        if !config.network_config.is_null() {
-            let network = unsafe { *config.network_config };
-            validate_struct(
-                network.struct_size,
-                network.abi_version,
-                size_of::<crate::abi_config::RnetConfigV5>(),
-            )?;
-            if !network.logger.is_null() || !network.logger_v2.is_null() {
-                return invalid_argument("game logger configuration is not yet supported");
-            }
-            if network.allow_legacy_unauthenticated_endpoints != 0 {
-                return invalid_argument("game runtime forbids legacy unauthenticated endpoints");
-            }
-            settings.network = runtime_config_v5(network)?;
-            settings
-                .network
-                .security_policy
-                .allow_plaintext_business_data = config.allow_plaintext_business_data == 1;
-        }
-        if config.heartbeat_interval_ms != 0 || config.heartbeat_timeout_ms != 0 {
-            settings = settings.with_heartbeat(
-                Duration::from_millis(u64::from(config.heartbeat_interval_ms)),
-                Duration::from_millis(u64::from(config.heartbeat_timeout_ms)),
-            );
-        }
-        let ffi_identity = Arc::new(AtomicU64::new(0));
-        let game_logger = unsafe { build_game_logger_v2(logger, Arc::clone(&ffi_identity)) }?;
-        let runtime = if client.is_null() {
-            GameRuntime::new(settings)?
-        } else {
-            let security = unsafe { client_security(*client) }?;
-            GameRuntime::new_with_client_security(settings, security)?
-        };
-        let runtime = if let Some(logger) = game_logger {
-            runtime.with_logger(logger)
-        } else {
-            runtime
-        };
-        let handle = game_registry::register(runtime);
-        ffi_identity.store(handle, Ordering::Release);
-        unsafe { out.write(handle) };
-        Ok(())
+        unsafe { create_game_runtime_from_config(config, None, client, logger, out) }
     })
+}
+
+unsafe fn create_game_runtime_v2(
+    config: *const RnetGameConfigV2,
+    client: *const RnetClientSecurity,
+    logger: *const RnetLoggerV2,
+    out: *mut u64,
+) -> i32 {
+    ffi_status(|| {
+        if config.is_null() || out.is_null() {
+            return invalid_argument("game V2 config and output must be non-null");
+        }
+        let config = unsafe { *config };
+        validate_struct(
+            config.struct_size,
+            config.abi_version,
+            size_of::<RnetGameConfigV2>(),
+        )?;
+        let defaults = GameRuntimeConfig::production();
+        let realtime = RealtimeQueueConfig {
+            max_queued_bytes: usize_override(
+                config.realtime_max_queued_bytes,
+                defaults.realtime_queue.max_queued_bytes,
+            )?,
+            max_session_queued_bytes: usize_override(
+                config.realtime_max_session_queued_bytes,
+                defaults.realtime_queue.max_session_queued_bytes,
+            )?,
+            max_keys_per_session: usize_override(
+                config.realtime_max_keys_per_session,
+                defaults.realtime_queue.max_keys_per_session,
+            )?,
+            flush_batch: usize_override(
+                config.realtime_flush_batch,
+                defaults.realtime_queue.flush_batch,
+            )?,
+        };
+        let scheduled = ScheduledQueueConfig {
+            max_queued_bytes: usize_override(
+                config.scheduled_max_queued_bytes,
+                defaults.scheduled_queue.max_queued_bytes,
+            )?,
+            max_session_queued_bytes: usize_override(
+                config.scheduled_max_session_queued_bytes,
+                defaults.scheduled_queue.max_session_queued_bytes,
+            )?,
+            max_queued_messages: usize_override(
+                config.scheduled_max_queued_messages,
+                defaults.scheduled_queue.max_queued_messages,
+            )?,
+            flush_batch: usize_override(
+                config.scheduled_flush_batch,
+                defaults.scheduled_queue.flush_batch,
+            )?,
+        };
+        let base = RnetGameConfig {
+            struct_size: size_of::<RnetGameConfig>() as u32,
+            abi_version: config.abi_version,
+            heartbeat_interval_ms: config.heartbeat_interval_ms,
+            heartbeat_timeout_ms: config.heartbeat_timeout_ms,
+            allow_plaintext_business_data: config.allow_plaintext_business_data,
+            reserved: config.reserved,
+            network_config: config.network_config,
+        };
+        unsafe {
+            create_game_runtime_from_config(base, Some((realtime, scheduled)), client, logger, out)
+        }
+    })
+}
+
+fn usize_override(value: u64, default: usize) -> Result<usize> {
+    if value == 0 {
+        return Ok(default);
+    }
+    usize::try_from(value)
+        .map_err(|_| RnetError::new(ErrorCode::InvalidArgument, "game queue limit exceeds usize"))
+}
+
+unsafe fn create_game_runtime_from_config(
+    config: RnetGameConfig,
+    queues: Option<(RealtimeQueueConfig, ScheduledQueueConfig)>,
+    client: *const RnetClientSecurity,
+    logger: *const RnetLoggerV2,
+    out: *mut u64,
+) -> Result<()> {
+    if config.reserved != 0 || config.allow_plaintext_business_data > 1 {
+        return invalid_argument("invalid game config flags");
+    }
+    let mut settings = GameRuntimeConfig::production()
+        .allow_plaintext_business_data(config.allow_plaintext_business_data == 1);
+    if let Some((realtime, scheduled)) = queues {
+        settings = settings
+            .with_realtime_queue(realtime)
+            .with_scheduled_queue(scheduled);
+    }
+    if !config.network_config.is_null() {
+        let network = unsafe { *config.network_config };
+        validate_struct(
+            network.struct_size,
+            network.abi_version,
+            size_of::<crate::abi_config::RnetConfigV5>(),
+        )?;
+        if !network.logger.is_null() || !network.logger_v2.is_null() {
+            return invalid_argument("game logger configuration is not yet supported");
+        }
+        if network.allow_legacy_unauthenticated_endpoints != 0 {
+            return invalid_argument("game runtime forbids legacy unauthenticated endpoints");
+        }
+        settings.network = runtime_config_v5(network)?;
+        settings
+            .network
+            .security_policy
+            .allow_plaintext_business_data = config.allow_plaintext_business_data == 1;
+    }
+    if config.heartbeat_interval_ms != 0 || config.heartbeat_timeout_ms != 0 {
+        settings = settings.with_heartbeat(
+            Duration::from_millis(u64::from(config.heartbeat_interval_ms)),
+            Duration::from_millis(u64::from(config.heartbeat_timeout_ms)),
+        );
+    }
+    let ffi_identity = Arc::new(AtomicU64::new(0));
+    let game_logger = unsafe { build_game_logger_v2(logger, Arc::clone(&ffi_identity)) }?;
+    let runtime = if client.is_null() {
+        GameRuntime::new(settings)?
+    } else {
+        let security = unsafe { client_security(*client) }?;
+        GameRuntime::new_with_client_security(settings, security)?
+    };
+    let runtime = if let Some(logger) = game_logger {
+        runtime.with_logger(logger)
+    } else {
+        runtime
+    };
+    let handle = game_registry::register(runtime);
+    ffi_identity.store(handle, Ordering::Release);
+    unsafe { out.write(handle) };
+    Ok(())
 }
 
 unsafe fn client_security(client: RnetClientSecurity) -> Result<ClientSecurity> {
@@ -349,6 +485,58 @@ pub unsafe extern "C" fn rnet_game_send(runtime: u64, session: u64, payload: Rne
 }
 
 #[no_mangle]
+/// Sends opaque business bytes with optional network metadata.
+///
+/// # Safety
+/// A nonempty payload and `options` must point to readable memory for the call.
+pub unsafe extern "C" fn rnet_game_send_ex(
+    runtime: u64,
+    session: u64,
+    payload: RnetSlice,
+    options: *const RnetGameSendOptions,
+) -> i32 {
+    ffi_status(|| {
+        let options = unsafe {
+            options.as_ref().ok_or_else(|| {
+                RnetError::new(ErrorCode::InvalidArgument, "game send options are null")
+            })?
+        };
+        validate_struct(
+            options.struct_size,
+            options.abi_version,
+            size_of::<RnetGameSendOptions>(),
+        )?;
+        if options.has_sequence > 1 || options.has_tick > 1 {
+            return invalid_argument("game metadata presence flags must be zero or one");
+        }
+        let priority = match options.priority {
+            RNET_GAME_PRIORITY_LOW => GamePriority::Low,
+            RNET_GAME_PRIORITY_NORMAL => GamePriority::Normal,
+            RNET_GAME_PRIORITY_HIGH => GamePriority::High,
+            RNET_GAME_PRIORITY_CRITICAL => GamePriority::Critical,
+            _ => return invalid_argument("unknown game send priority"),
+        };
+        let entry = game_registry::lease(runtime)?;
+        unsafe {
+            with_borrowed_slice(payload, |bytes| {
+                entry.runtime.send_with_options(
+                    session,
+                    bytes,
+                    GameSendOptions {
+                        sequence: (options.has_sequence != 0).then_some(options.sequence),
+                        tick: (options.has_tick != 0).then_some(options.tick),
+                        correlation_id: options.correlation_id,
+                        priority,
+                        expires_after: (options.expiry_ms != 0)
+                            .then(|| Duration::from_millis(options.expiry_ms)),
+                    },
+                )
+            })
+        }
+    })
+}
+
+#[no_mangle]
 /// Replaces an older unsent snapshot with the same session and key when possible.
 ///
 /// # Safety
@@ -366,229 +554,5 @@ pub unsafe extern "C" fn rnet_game_send_latest(
                 entry.runtime.send_latest(session, key, bytes)
             })
         }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn rnet_game_session_close(runtime: u64, session: u64) -> i32 {
-    ffi_status(|| {
-        game_registry::lease(runtime)?
-            .runtime
-            .close_session(session)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn rnet_game_endpoint_close(runtime: u64, endpoint: u64) -> i32 {
-    ffi_status(|| {
-        game_registry::lease(runtime)?
-            .runtime
-            .close_endpoint(endpoint)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn rnet_game_rekey(runtime: u64, session: u64) -> i32 {
-    ffi_status(|| game_registry::lease(runtime)?.runtime.rekey(session))
-}
-
-#[no_mangle]
-pub extern "C" fn rnet_game_security_set(runtime: u64, session: u64, encrypted: u32) -> i32 {
-    ffi_status(|| {
-        if encrypted > 1 {
-            return invalid_argument("encrypted must be zero or one");
-        }
-        game_registry::lease(runtime)?
-            .runtime
-            .set_encryption(session, encrypted == 1)
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// `out` must point to writable storage for one `RnetGameQuality`.
-pub unsafe extern "C" fn rnet_game_network_quality(
-    runtime: u64,
-    session: u64,
-    out: *mut RnetGameQuality,
-) -> i32 {
-    ffi_status(|| {
-        if out.is_null() {
-            return invalid_argument("game quality output is null");
-        }
-        let quality = game_registry::lease(runtime)?
-            .runtime
-            .network_quality(session)?;
-        unsafe { out.write(quality.map_or_else(RnetGameQuality::default, Into::into)) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Runtime-local monotonic microseconds, not a wall-clock timestamp.
-/// # Safety
-/// `out` must point to writable storage for one `u64`.
-pub unsafe extern "C" fn rnet_game_clock_micros(runtime: u64, out: *mut u64) -> i32 {
-    ffi_status(|| {
-        if out.is_null() {
-            return invalid_argument("game clock output is null");
-        }
-        let now = game_registry::lease(runtime)?.runtime.clock_micros();
-        unsafe { out.write(now) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// `out` must point to writable storage for one `RnetGameClockSync`.
-pub unsafe extern "C" fn rnet_game_clock_sync_snapshot(
-    runtime: u64,
-    session: u64,
-    out: *mut RnetGameClockSync,
-) -> i32 {
-    ffi_status(|| {
-        if out.is_null() {
-            return invalid_argument("game clock snapshot output is null");
-        }
-        let sample = game_registry::lease(runtime)?
-            .runtime
-            .clock_sync_snapshot(session)?;
-        unsafe { out.write(sample.map_or_else(RnetGameClockSync::default, Into::into)) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Returns cumulative, low-cardinality game counters. Snapshots of concurrent counters are
-/// not globally atomic; `logger_available` distinguishes absent logging from zero drops.
-/// # Safety
-/// `out` must point to writable storage for one `RnetGameMetrics`.
-pub unsafe extern "C" fn rnet_game_metrics_snapshot(
-    runtime: u64,
-    out: *mut RnetGameMetrics,
-) -> i32 {
-    ffi_status(|| {
-        if out.is_null() {
-            return invalid_argument("game metrics output is null");
-        }
-        let entry = game_registry::lease(runtime)?;
-        unsafe { out.write(RnetGameMetrics::from_runtime(&entry.runtime)) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Returns runtime-wide `LatestOnly` staging gauges and cumulative loss counters.
-///
-/// # Safety
-/// `out` must point to writable storage for one `RnetGameRealtimeQueue`.
-pub unsafe extern "C" fn rnet_game_realtime_queue_snapshot(
-    runtime: u64,
-    out: *mut RnetGameRealtimeQueue,
-) -> i32 {
-    ffi_status(|| {
-        if out.is_null() {
-            return invalid_argument("game realtime queue output is null");
-        }
-        let snapshot = game_registry::lease(runtime)?
-            .runtime
-            .realtime_queue_snapshot();
-        unsafe { out.write(snapshot.into()) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Returns a borrowed, token-owned Prometheus text snapshot without player labels.
-///
-/// # Safety
-/// `out` must point to writable storage for one `RnetGameBuffer`. Release a nonzero token with
-/// `rnet_game_buffer_release` after the last read; the pointer is invalid afterward.
-pub unsafe extern "C" fn rnet_game_prometheus_snapshot(
-    runtime: u64,
-    out: *mut RnetGameBuffer,
-) -> i32 {
-    ffi_status(|| {
-        if out.is_null() {
-            return invalid_argument("game Prometheus output is null");
-        }
-        let entry = game_registry::lease(runtime)?;
-        let mut buffer = RnetGameBuffer::default();
-        if let Some(view) = entry
-            .buffers
-            .insert(entry.runtime.prometheus_snapshot().into_bytes())
-        {
-            buffer.data = view.ptr;
-            buffer.len = view.len;
-            buffer.token = view.token;
-        }
-        unsafe { out.write(buffer) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// `events` must hold `capacity` writable events; `out_count` must be writable. Each nonzero
-/// returned buffer token must be released exactly once before runtime destroy.
-pub unsafe extern "C" fn rnet_game_poll_events(
-    runtime: u64,
-    events: *mut RnetGameEvent,
-    capacity: usize,
-    timeout_ms: u32,
-    out_count: *mut usize,
-) -> i32 {
-    ffi_status(|| {
-        if out_count.is_null() || (capacity != 0 && events.is_null()) {
-            return invalid_argument("invalid game event output");
-        }
-        unsafe { out_count.write(0) };
-        let entry = game_registry::lease(runtime)?;
-        if capacity == 0 {
-            // A zero-capacity call is a nonblocking maintenance tick. This keeps authenticated
-            // controls and liveness state progressing without requiring a dummy event buffer.
-            let _ = entry.runtime.poll(0, Duration::ZERO);
-            return Ok(());
-        }
-        let polled = entry
-            .runtime
-            .poll(capacity, Duration::from_millis(u64::from(timeout_ms)));
-        for (index, event) in polled.into_iter().enumerate() {
-            let converted = game_events::encode(event, &entry.buffers);
-            unsafe { events.add(index).write(converted) };
-            unsafe { out_count.write(index + 1) };
-        }
-        Ok(())
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn rnet_game_buffer_release(runtime: u64, token: u64) -> i32 {
-    ffi_status(|| game_registry::lease(runtime)?.buffers.release(token))
-}
-
-#[no_mangle]
-pub extern "C" fn rnet_game_runtime_stop(runtime: u64, drain_timeout_ms: u32) -> i32 {
-    ffi_status(|| {
-        if IN_LOG_CALLBACK.with(Cell::get) {
-            return invalid_state("cannot stop a game runtime from a logger callback");
-        }
-        let entry = game_registry::lease(runtime)?;
-        entry
-            .runtime
-            .stop(Duration::from_millis(u64::from(drain_timeout_ms)))?;
-        entry.stopped.store(true, Ordering::Release);
-        Ok(())
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn rnet_game_runtime_destroy(runtime: u64) -> i32 {
-    ffi_status(|| {
-        if IN_LOG_CALLBACK.with(Cell::get) {
-            return invalid_state("cannot destroy a game runtime from a logger callback");
-        }
-        game_registry::destroy(runtime)
     })
 }

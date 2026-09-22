@@ -8,13 +8,12 @@ use rnet_core::{ErrorCode, Result, RnetError, Transport};
 use rnet_protocol::control::{encode_record, Record};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
-const KCP_CONV: u32 = 0x524e_4554;
 const RETRY_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_RETRY_ATTEMPTS: u8 = 50;
 const MAX_KCP_UPDATES_PER_FLUSH: usize = 256;
@@ -32,7 +31,7 @@ pub(crate) struct DatagramWire {
     kcp_queued_bytes: usize,
     started: Instant,
     engines: HashMap<SocketAddr, RustKcpEngine>,
-    authorized_peers: HashSet<SocketAddr>,
+    authorized_peers: HashMap<SocketAddr, u32>,
     update_deadlines: BinaryHeap<Reverse<(u64, SocketAddr)>>,
     scheduled_updates: HashMap<SocketAddr, u64>,
     pending: HashMap<SocketAddr, PendingRecord>,
@@ -77,7 +76,7 @@ impl DatagramWire {
             kcp_queued_bytes: 0,
             started: Instant::now(),
             engines: HashMap::new(),
-            authorized_peers: HashSet::new(),
+            authorized_peers: HashMap::new(),
             update_deadlines: BinaryHeap::new(),
             scheduled_updates: HashMap::new(),
             pending: HashMap::new(),
@@ -128,9 +127,25 @@ impl DatagramWire {
     }
 
     /// Allows one authenticated address to allocate KCP state on its next packet or send.
-    pub(crate) fn authorize_peer(&mut self, peer: SocketAddr) -> Result<()> {
-        if self.engines.contains_key(&peer) || self.authorized_peers.contains(&peer) {
+    pub(crate) fn authorize_peer(&mut self, peer: SocketAddr, conv: u32) -> Result<()> {
+        if conv == 0 {
+            return Err(RnetError::new(
+                ErrorCode::InvalidArgument,
+                "KCP conversation must be nonzero",
+            ));
+        }
+        if self.engines.contains_key(&peer) {
             return Ok(());
+        }
+        if let Some(current) = self.authorized_peers.get(&peer) {
+            return if *current == conv {
+                Ok(())
+            } else {
+                Err(RnetError::new(
+                    ErrorCode::ProtocolError,
+                    "KCP preflight changed an authorized conversation",
+                ))
+            };
         }
         if self
             .engines
@@ -143,7 +158,7 @@ impl DatagramWire {
                 "KCP peer limit reached",
             ));
         }
-        self.authorized_peers.insert(peer);
+        self.authorized_peers.insert(peer, conv);
         Ok(())
     }
 
@@ -160,12 +175,16 @@ impl DatagramWire {
         if self.kind != Transport::Kcp {
             return Ok(vec![packet.to_vec()]);
         }
-        if !self.engines.contains_key(&peer) && !self.authorized_peers.remove(&peer) {
-            return Err(RnetError::new(
-                ErrorCode::AuthRejected,
-                "KCP preflight authorization required",
-            ));
-        }
+        let authorized_conv = if self.engines.contains_key(&peer) {
+            None
+        } else {
+            Some(self.authorized_peers.remove(&peer).ok_or_else(|| {
+                RnetError::new(
+                    ErrorCode::AuthRejected,
+                    "KCP preflight authorization required",
+                )
+            })?)
+        };
         let now = self.started.elapsed().as_millis() as u64;
         if self.engines.len() >= self.max_peers && !self.engines.contains_key(&peer) {
             return Err(RnetError::new(
@@ -179,7 +198,7 @@ impl DatagramWire {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     let mut engine = RustKcpEngine::new_with_limits(
-                        KCP_CONV,
+                        authorized_conv.expect("vacant KCP engine has preflight conversation"),
                         self.mtu,
                         self.max_session_queued_bytes,
                     )?;
@@ -442,12 +461,16 @@ impl DatagramWire {
     }
 
     fn engine(&mut self, peer: SocketAddr) -> Result<&mut RustKcpEngine> {
-        if !self.engines.contains_key(&peer) && !self.authorized_peers.remove(&peer) {
-            return Err(RnetError::new(
-                ErrorCode::AuthRejected,
-                "KCP preflight authorization required",
-            ));
-        }
+        let authorized_conv = if self.engines.contains_key(&peer) {
+            None
+        } else {
+            Some(self.authorized_peers.remove(&peer).ok_or_else(|| {
+                RnetError::new(
+                    ErrorCode::AuthRejected,
+                    "KCP preflight authorization required",
+                )
+            })?)
+        };
         if self.engines.len() >= self.max_peers && !self.engines.contains_key(&peer) {
             return Err(RnetError::new(
                 ErrorCode::RateLimited,
@@ -458,7 +481,7 @@ impl DatagramWire {
             std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let engine = RustKcpEngine::new_with_limits(
-                    KCP_CONV,
+                    authorized_conv.expect("vacant KCP engine has preflight conversation"),
                     self.mtu,
                     self.max_session_queued_bytes,
                 )?;

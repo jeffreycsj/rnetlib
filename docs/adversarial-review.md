@@ -130,3 +130,18 @@
 | 5 | 高 | 首版非阻塞控制消化 | 满容量时批量搬运公开事件会把底层有界事件队列转成可持续增长的 completed 队列。 | 只连续穿透内部控制；遇到首个需延后的公开事件即停止。零容量已有待上抛事件时不继续搬运，并增加多监听事件回归。 |
 
 时钟快照继续使用兼容字段 `available` 作为 has-sample 判别位；服务端会话明确返回 0。四时间戳偏移包含本地与网络排队，只是两套进程内单调时钟的近似传输样本，不能作为 UTC 或反外挂可信时钟。
+
+## 游戏生产冻结复审
+
+| # | 严重度 | 位置 | 问题描述 | 修复结果 |
+|---|---|---|---|---|
+| 1 | 高 | 游戏普通发送 | 普通发送直接进入传输队列，无法提供跨优先级与同优先级 session 公平性、排队过期和 correlation 追踪。 | 增加有总量/每会话/条目硬上限的加权调度器；默认接口保持无额外必填参数，高级元数据通过 Rust/C/C++11/Go 追加接口传递。 |
+| 2 | 高 | 游戏 runtime stop | 调度器加入后，停止与并发入队可能遗漏消息；不可表示的超长停止期限还会先关闭发送准入再按零超时停止。 | `stopping` 在 drain 前关闭新准入，poll 锁串行 flush/stop；期限在任何状态变化前验证，`Duration::MAX` 回归确认失败后 runtime 未被毒化。 |
+| 3 | 高 | KCP preflight | 固定 conversation 允许相同 UDP 四元组上的旧 KCP 数据进入新 engine，长会话串号边界也被人工截断。 | cookie preflight 升级为独立 marker 并协商随机非零 conversation；上游 KCP 包单独使用模 2^32 算术，RNet 其余代码仍保留溢出检查；旧 conversation 与有符号边界均有回归。 |
+| 4 | 高 | KCP 非可信 ACK | fuzz 生成来自未来半个串号空间的 ACK timestamp，可在 cargo-fuzz 强制检查算术时触发上游 signed subtraction panic。 | 在依赖调用前拒绝未来或超过 60 秒安全窗口的 ACK timestamp；崩溃样本已固化，合法跨 `0x7fffffff/0x80000000` 边界仍通过。 |
+| 5 | 中 | Go 高级发送 | 正的亚毫秒 expiry 经 `Duration.Milliseconds()` 截断为 0，意外变成“永不过期”。 | Go 转换改为正数向上取整到毫秒，负数拒绝，0 仍表示未配置，并补边界测试。 |
+| 6 | 中 | FFI/C++/Go 模块结构 | 新 ABI 与遥测使单文件超过结构门禁，降低查找和审查可用性。 | Rust ABI 拆为配置、控制、轮询、遥测和队列布局模块；C++/Go 公共类型拆到独立文件，旧 umbrella include/package API 不变。 |
+
+调度器指标只使用固定 priority 标签，不把玩家、session 或 correlation ID 放进 Prometheus。异步失败日志保留 correlation ID 和稳定错误码但不记录 payload。恢复票据风暴、持续背压、公平性、队列预算、零容量 poll、tick 最大值、停止竞态和 KCP 串号边界均有确定性回归；三传输短时 probe 与全部六个非 sanitizer fuzz target 已通过。当前没有遗留的高置信代码阻塞项。
+
+ASan 与 Miri 在本机稳定版、无 rustup 的 Rust 工具链上不可执行；loom 尚未建模。目标环境 24–72 小时弱网长稳和独立 Noise/依赖审计仍是外部生产准入项，不能由本地门禁替代。详细命令、短时数据和边界见 [game-production-qualification.md](game-production-qualification.md)。

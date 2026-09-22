@@ -169,6 +169,17 @@ pub(crate) fn encode(event: GameEvent, buffers: &GameBuffers) -> RnetGameEvent {
     out
 }
 
+pub(crate) fn encode_v2(event: GameEvent, buffers: &GameBuffers) -> RnetGameEventV2 {
+    let correlation_id = match &event {
+        GameEvent::Message(message) => message.correlation_id,
+        _ => 0,
+    };
+    RnetGameEventV2 {
+        event: encode(event, buffers),
+        correlation_id,
+    }
+}
+
 fn put_data(out: &mut RnetGameEvent, buffers: &GameBuffers, data: Vec<u8>) {
     if let Some(view) = buffers.insert(data) {
         out.data = view.ptr;

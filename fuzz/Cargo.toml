@@ -59,3 +59,8 @@ bench = false
 
 [workspace]
 members = ["."]
+
+# cargo-fuzz is a separate workspace and enables overflow checks in its release profile.
+# KCP serial comparisons intentionally use C-compatible modulo-2^32 arithmetic.
+[profile.release.package.kcp]
+overflow-checks = false

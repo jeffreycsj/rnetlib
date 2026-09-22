@@ -165,10 +165,6 @@ impl RangeRuntimeState {
         }
     }
 
-    pub(crate) fn has_completed(&self) -> bool {
-        !self.completed.is_empty()
-    }
-
     pub(crate) fn queue_public(
         &mut self,
         event: GameEvent,
@@ -450,6 +446,7 @@ mod tests {
             session,
             sequence: None,
             tick: None,
+            correlation_id: 0,
             payload: Bytes::from_static(payload),
         };
         assert!(state
@@ -499,6 +496,7 @@ mod tests {
             session,
             sequence: None,
             tick: None,
+            correlation_id: 0,
             payload: Bytes::from_static(b"1234"),
         };
 

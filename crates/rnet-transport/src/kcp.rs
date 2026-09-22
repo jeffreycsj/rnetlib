@@ -330,7 +330,9 @@ fn retire_acked_sequences(mut packet: &[u8], transmitted: &mut HashSet<u32>) {
             u32::from_le_bytes(packet[20..24].try_into().expect("validated KCP length")) as usize;
         let segment_length = 24 + length; // Packet validation already checked this addition.
         let una = u32::from_le_bytes(packet[16..20].try_into().expect("KCP UNA"));
-        transmitted.retain(|sequence| *sequence >= una);
+        // KCP serials use modulo-2^32 ordering. Values less than half a space ahead of UNA are
+        // still outstanding; values behind it have been cumulatively acknowledged.
+        transmitted.retain(|sequence| sequence.wrapping_sub(una) < (1_u32 << 31));
         if packet[4] == 82 {
             let sequence = u32::from_le_bytes(packet[12..16].try_into().expect("KCP ACK sequence"));
             transmitted.remove(&sequence);
@@ -355,12 +357,6 @@ fn validate_kcp_packet(mut packet: &[u8], now_ms: u32, maximum_payload: usize) -
     // larger advertisement cannot improve throughput, but it can drive the dependency through
     // arithmetic states that a conforming peer can never produce.
     const RECEIVE_WINDOW: u16 = 128;
-    // kcp 0.6.0 implements serial-number comparison with signed subtraction instead of an
-    // explicit wrapping subtraction. Keep attacker-controlled values away from the sign boundary.
-    // This is not a substitute for rotating extremely long-lived KCP conversations before their
-    // own sequence counter reaches the boundary; that remains a production qualification limit.
-    const MAX_SAFE_SEQUENCE: u32 = i32::MAX as u32 - RECEIVE_WINDOW as u32;
-
     if packet.len() < OVERHEAD {
         return Err(RnetError::new(
             ErrorCode::ProtocolError,
@@ -387,19 +383,6 @@ fn validate_kcp_packet(mut packet: &[u8], now_ms: u32, maximum_payload: usize) -
             return Err(RnetError::new(
                 ErrorCode::ProtocolError,
                 "KCP peer advertised a window larger than the negotiated limit",
-            ));
-        }
-        let sequence =
-            u32::from_le_bytes(packet[12..16].try_into().expect("fixed KCP sequence field"));
-        let unacknowledged = u32::from_le_bytes(
-            packet[16..20]
-                .try_into()
-                .expect("fixed KCP unacknowledged field"),
-        );
-        if sequence > MAX_SAFE_SEQUENCE || unacknowledged > MAX_SAFE_SEQUENCE {
-            return Err(RnetError::new(
-                ErrorCode::ProtocolError,
-                "KCP sequence exceeds the dependency's safe serial-number range",
             ));
         }
         let payload_len = u32::from_le_bytes(
@@ -438,18 +421,14 @@ fn validate_kcp_packet(mut packet: &[u8], now_ms: u32, maximum_payload: usize) -
         if command == ACK {
             let timestamp =
                 u32::from_le_bytes(packet[8..12].try_into().expect("fixed KCP timestamp field"));
-            let signed_difference = i64::from(now_ms as i32) - i64::from(timestamp as i32);
-            if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&signed_difference) {
+            let rtt = now_ms.wrapping_sub(timestamp) as i32;
+            // ACK timestamps echo a timestamp we already emitted, so they cannot be in our
+            // future. Rejecting the negative half of the serial space also keeps malformed wire
+            // values away from the pinned dependency's checked signed subtraction.
+            if rtt < 0 || rtt as u32 > MAX_ACK_RTT_MS {
                 return Err(RnetError::new(
                     ErrorCode::ProtocolError,
-                    "KCP ACK timestamp would overflow dependency time arithmetic",
-                ));
-            }
-            let rtt = signed_difference as i32;
-            if rtt >= 0 && rtt as u32 > MAX_ACK_RTT_MS {
-                return Err(RnetError::new(
-                    ErrorCode::ProtocolError,
-                    "KCP ACK timestamp exceeds the safe RTT window",
+                    "KCP ACK timestamp is outside the safe RTT window",
                 ));
             }
         }

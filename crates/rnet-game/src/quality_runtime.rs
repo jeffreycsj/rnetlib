@@ -4,7 +4,7 @@ use crate::envelope::{encode_application, encode_udp_application};
 use crate::quality::{UdpLossSnapshot, UdpSessionQuality};
 use crate::runtime::{GameRuntime, GameSendOptions};
 use rnet_core::{ErrorCode, Handle, Result, RnetError, Transport};
-use rnet_transport::KcpRetransmissionSnapshot;
+use rnet_transport::{KcpRetransmissionSnapshot, SendOptions};
 use std::sync::{Arc, Mutex};
 
 impl GameRuntime {
@@ -100,7 +100,13 @@ impl GameRuntime {
                 state.next_outbound_sequence,
                 self.maximum_envelope_len,
             )?;
-            self.network.send_payload(session, &envelope)?;
+            self.network.send_payload_with_options(
+                session,
+                &envelope,
+                SendOptions {
+                    correlation_id: options.correlation_id,
+                },
+            )?;
             state.next_outbound_sequence = state.next_outbound_sequence.wrapping_add(1);
             return Ok(());
         }
@@ -110,7 +116,13 @@ impl GameRuntime {
             options.tick,
             self.maximum_envelope_len,
         )?;
-        self.network.send_payload(session, &envelope)
+        self.network.send_payload_with_options(
+            session,
+            &envelope,
+            SendOptions {
+                correlation_id: options.correlation_id,
+            },
+        )
     }
 
     /// Coalesced snapshots keep their key until the adaptive transport worker takes the slot.
@@ -134,6 +146,9 @@ impl GameRuntime {
                 crate::runtime::GameSendOptions {
                     sequence: None,
                     tick,
+                    correlation_id: 0,
+                    priority: crate::GamePriority::Normal,
+                    expires_after: None,
                 },
             );
         }

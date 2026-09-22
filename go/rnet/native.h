@@ -12,11 +12,11 @@ static inline void rnet_go_log_v2_shim(
     size_t message_len);
 
 static inline int32_t rnet_go_game_runtime_create(
-    const rnet_game_config_t *config, const rnet_config_v5_t *network_config,
+    const rnet_game_config_v2_t *config, const rnet_config_v5_t *network_config,
     const uint8_t *client_private_key,
     const uint8_t *server_public_key, uintptr_t logger_handle,
     uint32_t min_log_level, rnet_runtime_t *out) {
-  rnet_game_config_t configured = *config;
+  rnet_game_config_v2_t configured = *config;
   configured.network_config = network_config;
   rnet_logger_v2_t logger = {0};
   if (logger_handle != 0) {
@@ -28,8 +28,8 @@ static inline int32_t rnet_go_game_runtime_create(
   }
   if (client_private_key == NULL || server_public_key == NULL) {
     return logger_handle == 0
-               ? rnet_game_runtime_create(&configured, NULL, out)
-               : rnet_game_runtime_create_logged(&configured, NULL, &logger, out);
+               ? rnet_game_runtime_create_v2(&configured, NULL, out)
+               : rnet_game_runtime_create_logged_v2(&configured, NULL, &logger, out);
   }
   rnet_client_security_t security = {0};
   security.struct_size = sizeof(security);
@@ -39,8 +39,8 @@ static inline int32_t rnet_go_game_runtime_create(
   security.expected_server_public_key.ptr = server_public_key;
   security.expected_server_public_key.len = 32;
   return logger_handle == 0
-             ? rnet_game_runtime_create(&configured, &security, out)
-             : rnet_game_runtime_create_logged(&configured, &security, &logger, out);
+             ? rnet_game_runtime_create_v2(&configured, &security, out)
+             : rnet_game_runtime_create_logged_v2(&configured, &security, &logger, out);
 }
 
 static inline int32_t rnet_go_game_server_listen(

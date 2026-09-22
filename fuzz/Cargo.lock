@@ -449,9 +449,11 @@ name = "rnet-ffi"
 version = "0.1.0"
 dependencies = [
  "rnet-core",
+ "rnet-game",
  "rnet-observe",
  "rnet-security",
  "rnet-transport",
+ "zeroize",
 ]
 
 [[package]]
@@ -473,9 +475,11 @@ dependencies = [
  "bytes",
  "ring",
  "rnet-core",
+ "rnet-observe",
  "rnet-protocol",
  "rnet-security",
  "rnet-transport",
+ "zeroize",
 ]
 
 [[package]]

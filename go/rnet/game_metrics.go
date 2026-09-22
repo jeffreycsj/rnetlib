@@ -20,6 +20,23 @@ type GameRealtimeQueue struct {
 	Forwarded           uint64
 }
 
+type GameScheduledQueue struct {
+	QueuedMessages                                                             uint64
+	QueuedBytes                                                                uint64
+	AdmissionRejected                                                          uint64
+	ExpiredDropped                                                             uint64
+	ClosedDropped                                                              uint64
+	SendFailed                                                                 uint64
+	Forwarded                                                                  uint64
+	BackpressureRequeued                                                       uint64
+	AdmittedByPriority                                                         [4]uint64
+	ForwardedByPriority                                                        [4]uint64
+	QueueDelaySamples                                                          uint64
+	QueueDelayP90, QueueDelayP95, QueueDelayP99, QueueDelayMax                 time.Duration
+	TickQueueDelaySamples                                                      uint64
+	TickQueueDelayP90, TickQueueDelayP95, TickQueueDelayP99, TickQueueDelayMax time.Duration
+}
+
 // GameRangeBuffer reports runtime-wide wire-v4 early-data usage and rejection totals.
 type GameRangeBuffer struct {
 	BufferedMessages         uint64
@@ -124,6 +141,34 @@ func (r *GameRuntime) RealtimeQueueSnapshot() (GameRealtimeQueue, error) {
 		ClosedDropped: uint64(raw.closed_dropped), BackpressureDropped: uint64(raw.backpressure_dropped),
 		SendFailed: uint64(raw.send_failed), Forwarded: uint64(raw.forwarded),
 	}, nil
+}
+
+func (r *GameRuntime) ScheduledQueueSnapshot() (GameScheduledQueue, error) {
+	handle, err := r.handleValue()
+	if err != nil {
+		return GameScheduledQueue{}, err
+	}
+	var raw C.rnet_game_scheduled_queue_t
+	if err := statusError(C.rnet_game_scheduled_queue_snapshot(handle, &raw)); err != nil {
+		return GameScheduledQueue{}, err
+	}
+	value := GameScheduledQueue{
+		QueuedMessages: uint64(raw.queued_messages), QueuedBytes: uint64(raw.queued_bytes),
+		AdmissionRejected: uint64(raw.admission_rejected), ExpiredDropped: uint64(raw.expired_dropped),
+		ClosedDropped: uint64(raw.closed_dropped), SendFailed: uint64(raw.send_failed), Forwarded: uint64(raw.forwarded),
+		BackpressureRequeued: uint64(raw.backpressure_requeued),
+		QueueDelaySamples:    uint64(raw.queue_delay_samples),
+		QueueDelayP90:        microseconds(raw.queue_delay_p90_us), QueueDelayP95: microseconds(raw.queue_delay_p95_us),
+		QueueDelayP99: microseconds(raw.queue_delay_p99_us), QueueDelayMax: microseconds(raw.queue_delay_max_us),
+		TickQueueDelaySamples: uint64(raw.tick_queue_delay_samples),
+		TickQueueDelayP90:     microseconds(raw.tick_queue_delay_p90_us), TickQueueDelayP95: microseconds(raw.tick_queue_delay_p95_us),
+		TickQueueDelayP99: microseconds(raw.tick_queue_delay_p99_us), TickQueueDelayMax: microseconds(raw.tick_queue_delay_max_us),
+	}
+	for index := 0; index < 4; index++ {
+		value.AdmittedByPriority[index] = uint64(raw.admitted_by_priority[index])
+		value.ForwardedByPriority[index] = uint64(raw.forwarded_by_priority[index])
+	}
+	return value, nil
 }
 
 // RangeBufferSnapshot returns low-cardinality wire-v4 early-data capacity telemetry.

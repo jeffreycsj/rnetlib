@@ -27,3 +27,15 @@ snow = "=0.10.0"
 thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = ["macros", "net", "rt-multi-thread", "sync", "time", "io-util"] }
 zeroize = { version = "1.8.1", features = ["zeroize_derive"] }
+
+# kcp 0.6.0 ports C's modulo-2^32 serial arithmetic with ordinary Rust integer operations.
+# Scope wrapping semantics to that dependency so debug/test behavior matches its production build
+# without hiding arithmetic mistakes in rnet itself.
+[profile.dev.package.kcp]
+overflow-checks = false
+
+[profile.test.package.kcp]
+overflow-checks = false
+
+[profile.release.package.kcp]
+overflow-checks = false

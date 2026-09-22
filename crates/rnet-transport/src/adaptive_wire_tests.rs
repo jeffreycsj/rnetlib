@@ -1,4 +1,4 @@
-use super::{DatagramWire, RustKcpEngine, KCP_CONV, RETRY_INTERVAL};
+use super::{DatagramWire, RustKcpEngine, RETRY_INTERVAL};
 use crate::kcp::KcpEngine;
 use crate::kcp::KcpTelemetryRegistry;
 use rnet_core::Transport;
@@ -75,7 +75,8 @@ fn invalid_kcp_first_packet_does_not_reserve_an_engine() {
 #[test]
 fn valid_kcp_packet_requires_preflight_authorization() {
     let peer = SocketAddr::from(([127, 0, 0, 1], 7002));
-    let mut client = RustKcpEngine::new_with_mtu(KCP_CONV, 1200).unwrap();
+    let conv = 0x1020_3040;
+    let mut client = RustKcpEngine::new_with_mtu(conv, 1200).unwrap();
     client.send(b"complete KCP record").unwrap();
     let mut packets = Vec::new();
     client.update(0, &mut |packet| packets.push(packet.to_vec()));
@@ -90,12 +91,42 @@ fn valid_kcp_packet_requires_preflight_authorization() {
     assert!(server.engines.is_empty());
 }
 
+#[test]
+fn authorized_kcp_peer_uses_the_negotiated_conversation() {
+    let peer = SocketAddr::from(([127, 0, 0, 1], 7004));
+    let conv = 0xa1b2_c3d4;
+    let mut client = RustKcpEngine::new_with_mtu(conv, 1200).unwrap();
+    client.send(b"isolated conversation").unwrap();
+    let mut packets = Vec::new();
+    client.update(0, &mut |packet| packets.push(packet.to_vec()));
+    let mut server = DatagramWire::new(Transport::Kcp, 1200, TEST_MAX_PEERS);
+    server.authorize_peer(peer, conv).unwrap();
+
+    let records = server.receive(peer, &packets[0]).unwrap();
+
+    assert_eq!(records, vec![b"isolated conversation".to_vec()]);
+}
+
+#[test]
+fn stale_kcp_conversation_cannot_enter_a_new_authorized_peer() {
+    let peer = SocketAddr::from(([127, 0, 0, 1], 7005));
+    let mut stale = RustKcpEngine::new_with_mtu(11, 1200).unwrap();
+    stale.send(b"stale").unwrap();
+    let mut packets = Vec::new();
+    stale.update(0, &mut |packet| packets.push(packet.to_vec()));
+    let mut server = DatagramWire::new(Transport::Kcp, 1200, TEST_MAX_PEERS);
+    server.authorize_peer(peer, 12).unwrap();
+
+    assert!(server.receive(peer, &packets[0]).is_err());
+    assert!(server.engines.is_empty());
+}
+
 #[tokio::test]
 async fn kcp_wire_enforces_the_runtime_unacknowledged_byte_budget() {
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let peer = SocketAddr::from(([127, 0, 0, 1], 7003));
     let mut wire = DatagramWire::new_with_limits(Transport::Kcp, 576, TEST_MAX_PEERS, 4096, 1000);
-    wire.authorize_peer(peer).unwrap();
+    wire.authorize_peer(peer, 7).unwrap();
     let record = Record::new(RecordKind::Handshake, 0, &vec![3_u8; 400]);
 
     wire.send(&socket, peer, &record, 1024).await.unwrap();
@@ -117,7 +148,7 @@ async fn kcp_telemetry_is_removed_with_peer_and_endpoint() {
     let mut wire = DatagramWire::new(Transport::Kcp, 1200, TEST_MAX_PEERS)
         .with_telemetry(42, Arc::clone(&telemetry));
     for peer in [first, second] {
-        wire.authorize_peer(peer).unwrap();
+        wire.authorize_peer(peer, 7).unwrap();
         wire.send(
             &socket,
             peer,
@@ -139,7 +170,7 @@ fn removing_a_peer_releases_every_wire_allocation() {
     let peer = SocketAddr::from(([127, 0, 0, 1], 7001));
     let mut wire = DatagramWire::new(Transport::Kcp, 1200, TEST_MAX_PEERS);
     wire.engines
-        .insert(peer, super::RustKcpEngine::new(super::KCP_CONV).unwrap());
+        .insert(peer, super::RustKcpEngine::new(7).unwrap());
     wire.pending.insert(
         peer,
         super::PendingRecord {

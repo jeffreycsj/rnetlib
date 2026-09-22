@@ -24,6 +24,8 @@ mod realtime_runtime;
 mod resume;
 mod resume_runtime;
 mod runtime;
+mod scheduler;
+mod scheduler_runtime;
 
 pub use clock_sync::ClockSyncSample;
 pub use clock_sync_runtime::ClockSyncMetricsSnapshot;
@@ -44,6 +46,7 @@ pub use realtime::{RealtimeQueueConfig, RealtimeQueueSnapshot};
 pub use rnet_observe::{BoundedLogger, LogLevel, LogRecord, LoggerConfig};
 pub use rnet_transport::{KcpRetransmissionSnapshot, LatestTransportSnapshot};
 pub use runtime::{GameRuntime, GameSendOptions};
+pub use scheduler::{GamePriority, ScheduledQueueConfig, ScheduledQueueSnapshot};
 
 #[cfg(test)]
 mod clock_sync_tests;
@@ -61,3 +64,5 @@ mod quality_tests;
 mod realtime_tests;
 #[cfg(test)]
 mod resume_tests;
+#[cfg(test)]
+mod scheduler_tests;

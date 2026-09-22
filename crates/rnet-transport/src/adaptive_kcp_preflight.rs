@@ -33,9 +33,10 @@ pub(crate) async fn handle_preflight(
         return Ok(false);
     }
     match decode(packet) {
-        Some(Preflight::Hello(client_cookie))
-            if matches!(security, EndpointSecurity::AdaptiveServer { .. }) =>
-        {
+        Some(Preflight::Hello {
+            conv,
+            cookie: client_cookie,
+        }) if matches!(security, EndpointSecurity::AdaptiveServer { .. }) => {
             if client_cookie.len() == COOKIE_LEN && cookie.validate(peer, client_cookie) {
                 if let std::collections::hash_map::Entry::Vacant(entry) = permits.entry(peer) {
                     let permit = match per_ip.try_acquire(peer.ip()) {
@@ -49,7 +50,7 @@ pub(crate) async fn handle_preflight(
                     };
                     entry.insert(permit);
                 }
-                if wire.authorize_peer(peer).is_ok() {
+                if wire.authorize_peer(peer, conv).is_ok() {
                     authorized.insert(peer, Instant::now() + shared.config.handshake_timeout);
                 } else {
                     permits.remove(&peer);
@@ -59,17 +60,21 @@ pub(crate) async fn handle_preflight(
                 }
             } else {
                 socket
-                    .send_to(&encode_challenge(&cookie.issue(peer)), peer)
+                    .send_to(&encode_challenge(conv, &cookie.issue(peer)), peer)
                     .await?;
             }
             Ok(true)
         }
-        Some(Preflight::Challenge(server_cookie))
-            if matches!(security, EndpointSecurity::AdaptiveClient { .. })
-                && remote == Some(peer) =>
+        Some(Preflight::Challenge {
+            conv,
+            cookie: server_cookie,
+        }) if matches!(security, EndpointSecurity::AdaptiveClient { .. })
+            && remote == Some(peer) =>
         {
-            socket.send_to(&encode_hello(server_cookie), peer).await?;
-            wire.authorize_peer(peer)?;
+            socket
+                .send_to(&encode_hello(conv, server_cookie), peer)
+                .await?;
+            wire.authorize_peer(peer, conv)?;
             wire.send_reliable(
                 socket,
                 peer,

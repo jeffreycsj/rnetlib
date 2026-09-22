@@ -489,12 +489,16 @@ fn exercise_game_session(transport: Transport) {
             GameSendOptions {
                 sequence: Some(u32::MAX),
                 tick: Some(60),
+                correlation_id: 0x1020_3040_5060_7080,
+                priority: rnet_game::GamePriority::Normal,
+                expires_after: None,
             },
         )
         .expect("send with network metadata");
     let message = assert_message(&runtime, server_session, b"tick-owned-by-envelope");
     assert_eq!(message.sequence, Some(u32::MAX));
     assert_eq!(message.tick, Some(60));
+    assert_eq!(message.correlation_id, 0x1020_3040_5060_7080);
 
     let loss = runtime
         .udp_loss_snapshot(server_session)

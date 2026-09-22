@@ -47,6 +47,7 @@ fn completed_early_messages_respect_public_poll_capacity() {
             session: 2,
             sequence: None,
             tick: None,
+            correlation_id: 0,
             payload: Bytes::from(vec![byte]),
         }));
     }
@@ -66,6 +67,7 @@ fn resumed_mapping_precedes_buffered_business_data() {
         session: 3,
         sequence: None,
         tick: None,
+        correlation_id: 0,
         payload: Bytes::from_static(b"early"),
     }));
     let mut output = Vec::new();
@@ -99,6 +101,7 @@ fn closing_range_session_discards_deferred_ready_and_message_events() {
         session: 9,
         sequence: None,
         tick: None,
+        correlation_id: 0,
         payload: Bytes::from_static(b"late"),
     }));
     state.forget_session(9);

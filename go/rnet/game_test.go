@@ -8,6 +8,26 @@ import (
 	"time"
 )
 
+func TestGameSendExpiryRoundsSubMillisecondDurationsUp(t *testing.T) {
+	for _, test := range []struct {
+		expiry time.Duration
+		want   uint64
+	}{
+		{expiry: 0, want: 0},
+		{expiry: time.Nanosecond, want: 1},
+		{expiry: time.Millisecond, want: 1},
+		{expiry: time.Millisecond + time.Nanosecond, want: 2},
+	} {
+		got, err := gameExpiryMilliseconds(test.expiry)
+		if err != nil || got != test.want {
+			t.Fatalf("expiry %v: got %d, %v; want %d", test.expiry, got, err, test.want)
+		}
+	}
+	if _, err := gameExpiryMilliseconds(-time.Nanosecond); err == nil {
+		t.Fatal("negative expiry was accepted")
+	}
+}
+
 func TestGameDebugFormattingRedactsCredentials(t *testing.T) {
 	server := GameServerConfig{Keypair: Keypair{Private: [32]byte{1, 2, 3}}}
 	client := GameClientConfig{JoinTicket: []byte("private-ticket")}
@@ -179,7 +199,11 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 				t.Fatal("game sessions did not become ready")
 			}
 			payload := []byte("go-opaque-payload")
-			if err := runtime.Send(clientSession, payload); err != nil {
+			const correlationID = uint64(0x1020304050607080)
+			if err := runtime.SendWithOptions(clientSession, payload, GameSendOptions{
+				HasTick: true, Tick: ^uint32(0), CorrelationID: correlationID,
+				Priority: GamePriorityHigh, Expiry: time.Second,
+			}); err != nil {
 				t.Fatal(err)
 			}
 			received := false
@@ -190,8 +214,9 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 				}
 				for _, event := range events {
 					if event.Type == GameMessage && event.Session == serverSession {
-						if !bytes.Equal(event.Data, payload) {
-							t.Fatalf("payload = %q", event.Data)
+						if !bytes.Equal(event.Data, payload) || !event.HasTick ||
+							event.Tick != ^uint32(0) || event.CorrelationID != correlationID {
+							t.Fatalf("advanced message = %+v", event)
 						}
 						received = true
 					}
@@ -199,6 +224,11 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 			}
 			if !received {
 				t.Fatal("game message did not arrive")
+			}
+			scheduled, err := runtime.ScheduledQueueSnapshot()
+			if err != nil || scheduled.ForwardedByPriority[2] == 0 ||
+				scheduled.QueueDelaySamples == 0 || scheduled.TickQueueDelaySamples == 0 {
+				t.Fatalf("advanced send telemetry=%+v err=%v", scheduled, err)
 			}
 			if err := runtime.SendLatest(clientSession, 7, []byte("go-latest")); err != nil {
 				t.Fatal(err)

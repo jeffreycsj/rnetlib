@@ -1,162 +1,17 @@
 #ifndef RNET_GAME_HPP
 #define RNET_GAME_HPP
 
-#include "rnet/runtime.hpp"
+#include "rnet/game_types.hpp"
 
 namespace rnet {
 
-enum class GameProfile : uint32_t {
-  Realtime = RNET_GAME_PROFILE_REALTIME,
-  ReliableRealtime = RNET_GAME_PROFILE_RELIABLE_REALTIME,
-  Session = RNET_GAME_PROFILE_SESSION,
-};
-
-struct GameProtocol {
-  uint64_t id = 0;
-  uint32_t version = 0;
-  uint64_t build_id = 0;
-  uint64_t capabilities = 0;
-};
-
-// Wire-v4 negotiation is opt-in; ordinary GameProtocol remains exact-version wire v3.
-struct GameProtocolRange {
-  uint64_t id = 0;
-  uint32_t min_version = 0;
-  uint32_t max_version = 0;
-  uint64_t build_id = 0;
-  uint64_t capabilities = 0;
-};
-
-struct GameServerOptions {
-  Transport transport = Transport::Kcp;
-  std::string host = "127.0.0.1";
-  uint16_t port = 0;
-  Keypair keypair;
-  bool initial_encryption = true;
-  GameProtocol protocol;
-};
-
-struct GameClientOptions {
-  Transport transport = Transport::Kcp;
-  std::string host = "127.0.0.1";
-  uint16_t port = 0;
-  std::vector<uint8_t> join_ticket;
-  GameProtocol protocol;
-};
-
-struct GameRangeServerOptions {
-  Transport transport = Transport::Kcp;
-  std::string host = "127.0.0.1";
-  uint16_t port = 0;
-  Keypair keypair;
-  bool initial_encryption = true;
-  GameProtocolRange protocol;
-};
-
-struct GameRangeClientOptions {
-  Transport transport = Transport::Kcp;
-  std::string host = "127.0.0.1";
-  uint16_t port = 0;
-  std::vector<uint8_t> join_ticket;
-  GameProtocolRange protocol;
-};
-
-struct GameEvent {
-  uint32_t type = 0;
-  rnet_endpoint_t endpoint = 0;
-  rnet_session_t session = 0;
-  rnet_session_t related_session = 0;
-  int32_t status = RNET_OK;
-  std::vector<uint8_t> data;
-  std::vector<uint8_t> aux_data;
-  std::array<uint8_t, 32> client_public_key{};
-  uint64_t build_id = 0;
-  uint64_t capabilities = 0;
-  bool encrypted = false;
-  uint64_t security_epoch = 0;
-  uint32_t security_operation = 0;
-  uint32_t quality_grade = 0;
-  uint32_t quality_basis = 0;
-  uint64_t last_rtt_us = 0;
-  uint64_t jitter_us = 0;
-  uint64_t quality_samples = 0;
-  bool has_sequence = false;
-  uint32_t sequence = 0;
-  bool has_tick = false;
-  uint32_t tick = 0;
-};
-
-struct GameQuality {
-  bool available = false;
-  uint32_t grade = 0;
-  uint32_t basis = 0;
-  bool has_udp_loss = false;
-  bool has_kcp_retransmissions = false;
-  uint32_t udp_recent_loss_per_mille = 0;
-  uint32_t kcp_recent_retransmission_per_mille = 0;
-  uint64_t last_rtt_us = 0;
-  uint64_t smoothed_rtt_us = 0;
-  uint64_t jitter_us = 0;
-  uint64_t samples = 0;
-  uint64_t udp_expected = 0;
-  uint64_t udp_missing = 0;
-  uint64_t kcp_segments_sent = 0;
-  uint64_t kcp_retransmitted = 0;
-};
-
-// Runtime-local offset, not UTC or an authenticated time authority.
-struct GameClockSync {
-  bool available = false;
-  int64_t server_minus_client_us = 0;
-  uint64_t rtt_us = 0;
-  uint64_t samples = 0;
-};
-
-// Cumulative game telemetry. `logger_available` distinguishes a disabled
-// logger from one that has emitted no drops or callback errors.
-using GameMetrics = rnet_game_metrics_t;
-
-// Runtime-wide pre-transport snapshot queue; forwarded is not delivery.
-struct GameRealtimeQueue {
-  uint64_t queued_messages = 0;
-  uint64_t queued_bytes = 0;
-  uint64_t admission_rejected = 0;
-  uint64_t replaced = 0;
-  uint64_t closed_dropped = 0;
-  uint64_t backpressure_dropped = 0;
-  uint64_t send_failed = 0;
-  uint64_t forwarded = 0;
-};
-
-struct GameRangeBuffer {
-  uint64_t buffered_messages = 0;
-  uint64_t buffered_bytes = 0;
-  uint64_t peak_buffered_messages = 0;
-  uint64_t peak_buffered_bytes = 0;
-  uint64_t max_buffered_messages = 0;
-  uint64_t max_buffered_bytes = 0;
-  uint64_t session_admission_rejected = 0;
-  uint64_t runtime_admission_rejected = 0;
-};
-
-struct GameTransportLatest {
-  uint64_t pending_replaced = 0;
-  uint64_t worker_pickups = 0;
-  uint64_t admission_would_block = 0;
-  uint64_t admission_invalid_handle = 0;
-  uint64_t admission_invalid_state = 0;
-  uint64_t admission_handshake_required = 0;
-  uint64_t admission_not_supported = 0;
-  uint64_t admission_message_too_large = 0;
-  uint64_t admission_other_failures = 0;
-};
 
 class GameRuntime {
  public:
   GameRuntime() {
-    rnet_game_config_t config{};
-    check(rnet_game_config_init(&config));
-    check(rnet_game_runtime_create(&config, nullptr, &handle_));
+    rnet_game_config_v2_t config{};
+    check(rnet_game_config_v2_init(&config));
+    check(rnet_game_runtime_create_v2(&config, nullptr, &handle_));
   }
 
   explicit GameRuntime(const rnet_game_config_t &config) {
@@ -168,6 +23,16 @@ class GameRuntime {
     check(rnet_game_runtime_create_logged(&config, nullptr, &logger, &handle_));
   }
 
+  explicit GameRuntime(const rnet_game_config_v2_t &config) {
+    check(rnet_game_runtime_create_v2(&config, nullptr, &handle_));
+  }
+
+  GameRuntime(const rnet_game_config_v2_t &config,
+              const rnet_logger_v2_t &logger) {
+    check(rnet_game_runtime_create_logged_v2(&config, nullptr, &logger,
+                                             &handle_));
+  }
+
   GameRuntime(const rnet_game_config_t &config, const Keypair &client_key,
               const std::array<uint8_t, 32> &expected_server_key) {
     rnet_client_security_t security{};
@@ -176,6 +41,16 @@ class GameRuntime {
     security.local_private_key = {client_key.private_key(), 32};
     security.expected_server_public_key = {expected_server_key.data(), 32};
     check(rnet_game_runtime_create(&config, &security, &handle_));
+  }
+
+  GameRuntime(const rnet_game_config_v2_t &config, const Keypair &client_key,
+              const std::array<uint8_t, 32> &expected_server_key) {
+    rnet_client_security_t security{};
+    security.struct_size = sizeof(security);
+    security.abi_version = RNET_ABI_VERSION;
+    security.local_private_key = {client_key.private_key(), 32};
+    security.expected_server_public_key = {expected_server_key.data(), 32};
+    check(rnet_game_runtime_create_v2(&config, &security, &handle_));
   }
 
   GameRuntime(const rnet_game_config_t &config, const Keypair &client_key,
@@ -189,18 +64,30 @@ class GameRuntime {
     check(rnet_game_runtime_create_logged(&config, &security, &logger, &handle_));
   }
 
+  GameRuntime(const rnet_game_config_v2_t &config, const Keypair &client_key,
+              const std::array<uint8_t, 32> &expected_server_key,
+              const rnet_logger_v2_t &logger) {
+    rnet_client_security_t security{};
+    security.struct_size = sizeof(security);
+    security.abi_version = RNET_ABI_VERSION;
+    security.local_private_key = {client_key.private_key(), 32};
+    security.expected_server_public_key = {expected_server_key.data(), 32};
+    check(rnet_game_runtime_create_logged_v2(&config, &security, &logger,
+                                             &handle_));
+  }
+
   GameRuntime(const Keypair &client_key,
               const std::array<uint8_t, 32> &expected_server_key,
               bool allow_plaintext_business_data = false) {
-    rnet_game_config_t config{};
-    check(rnet_game_config_init(&config));
+    rnet_game_config_v2_t config{};
+    check(rnet_game_config_v2_init(&config));
     config.allow_plaintext_business_data = allow_plaintext_business_data ? 1U : 0U;
     rnet_client_security_t security{};
     security.struct_size = sizeof(security);
     security.abi_version = RNET_ABI_VERSION;
     security.local_private_key = {client_key.private_key(), 32};
     security.expected_server_public_key = {expected_server_key.data(), 32};
-    check(rnet_game_runtime_create(&config, &security, &handle_));
+    check(rnet_game_runtime_create_v2(&config, &security, &handle_));
   }
 
   GameRuntime(const GameRuntime &) = delete;
@@ -339,6 +226,16 @@ class GameRuntime {
     check(rnet_game_send(handle_, session, bytes(payload)));
   }
 
+  void send(rnet_session_t session, const std::vector<uint8_t> &payload,
+            const GameSendOptions &options) const {
+    send_with_options(session, bytes(payload), options);
+  }
+
+  void send(rnet_session_t session, const std::string &payload,
+            const GameSendOptions &options) const {
+    send_with_options(session, bytes(payload), options);
+  }
+
   void send_latest(rnet_session_t session, uint64_t key,
                    const std::vector<uint8_t> &payload) const {
     check(rnet_game_send_latest(handle_, session, key, bytes(payload)));
@@ -426,6 +323,35 @@ class GameRuntime {
     return value;
   }
 
+  GameScheduledQueue scheduled_queue_snapshot() const {
+    rnet_game_scheduled_queue_t raw{};
+    check(rnet_game_scheduled_queue_snapshot(handle_, &raw));
+    GameScheduledQueue value;
+    value.queued_messages = raw.queued_messages;
+    value.queued_bytes = raw.queued_bytes;
+    value.admission_rejected = raw.admission_rejected;
+    value.expired_dropped = raw.expired_dropped;
+    value.closed_dropped = raw.closed_dropped;
+    value.send_failed = raw.send_failed;
+    value.forwarded = raw.forwarded;
+    value.backpressure_requeued = raw.backpressure_requeued;
+    for (std::size_t index = 0; index < 4; ++index) {
+      value.admitted_by_priority[index] = raw.admitted_by_priority[index];
+      value.forwarded_by_priority[index] = raw.forwarded_by_priority[index];
+    }
+    value.queue_delay_samples = raw.queue_delay_samples;
+    value.queue_delay_p90_us = raw.queue_delay_p90_us;
+    value.queue_delay_p95_us = raw.queue_delay_p95_us;
+    value.queue_delay_p99_us = raw.queue_delay_p99_us;
+    value.queue_delay_max_us = raw.queue_delay_max_us;
+    value.tick_queue_delay_samples = raw.tick_queue_delay_samples;
+    value.tick_queue_delay_p90_us = raw.tick_queue_delay_p90_us;
+    value.tick_queue_delay_p95_us = raw.tick_queue_delay_p95_us;
+    value.tick_queue_delay_p99_us = raw.tick_queue_delay_p99_us;
+    value.tick_queue_delay_max_us = raw.tick_queue_delay_max_us;
+    return value;
+  }
+
   GameRangeBuffer range_buffer_snapshot() const {
     rnet_game_range_buffer_t raw{};
     check(rnet_game_range_buffer_snapshot(handle_, &raw));
@@ -458,28 +384,28 @@ class GameRuntime {
   }
 
   std::vector<GameEvent> poll(size_t capacity, uint32_t timeout_ms) const {
-    std::vector<rnet_game_event_t> raw(capacity);
+    std::vector<rnet_game_event_v2_t> raw(capacity);
     size_t count = 0;
-    check(rnet_game_poll_events(handle_, raw.empty() ? nullptr : raw.data(),
-                                raw.size(), timeout_ms, &count));
+    check(rnet_game_poll_events_v2(handle_, raw.empty() ? nullptr : raw.data(),
+                                   raw.size(), timeout_ms, &count));
     // Own all returned tokens before any C++ allocation can throw.
     struct ReleaseBatch {
       rnet_runtime_t runtime;
-      const std::vector<rnet_game_event_t> &events;
+      const std::vector<rnet_game_event_v2_t> &events;
       size_t count;
       ~ReleaseBatch() {
         for (size_t i = 0; i < count; ++i) {
-          if (events[i].buffer_token != 0)
-            (void)rnet_game_buffer_release(runtime, events[i].buffer_token);
-          if (events[i].aux_buffer_token != 0)
-            (void)rnet_game_buffer_release(runtime, events[i].aux_buffer_token);
+          if (events[i].event.buffer_token != 0)
+            (void)rnet_game_buffer_release(runtime, events[i].event.buffer_token);
+          if (events[i].event.aux_buffer_token != 0)
+            (void)rnet_game_buffer_release(runtime, events[i].event.aux_buffer_token);
         }
       }
     } release{handle_, raw, count};
     std::vector<GameEvent> result;
     result.reserve(count);
     for (size_t i = 0; i < count; ++i) {
-      const rnet_game_event_t &source = raw[i];
+      const rnet_game_event_t &source = raw[i].event;
       GameEvent event;
       event.type = source.event_type;
       event.endpoint = source.endpoint;
@@ -506,6 +432,7 @@ class GameRuntime {
       event.sequence = source.sequence;
       event.has_tick = source.has_tick != 0;
       event.tick = source.tick;
+      event.correlation_id = raw[i].correlation_id;
       result.push_back(std::move(event));
     }
     return result;
@@ -524,7 +451,22 @@ class GameRuntime {
     handle_ = 0;
   }
 
- private:
+private:
+  void send_with_options(rnet_session_t session, rnet_slice_t payload,
+                         const GameSendOptions &options) const {
+    rnet_game_send_options_t raw{};
+    raw.struct_size = sizeof(raw);
+    raw.abi_version = RNET_ABI_VERSION;
+    raw.has_sequence = options.has_sequence ? 1U : 0U;
+    raw.sequence = options.sequence;
+    raw.has_tick = options.has_tick ? 1U : 0U;
+    raw.tick = options.tick;
+    raw.correlation_id = options.correlation_id;
+    raw.priority = static_cast<uint32_t>(options.priority);
+    raw.expiry_ms = options.expiry_ms;
+    check(rnet_game_send_ex(handle_, session, payload, &raw));
+  }
+
   static rnet_game_range_client_config_t range_client_config(
       const GameRangeClientOptions &options) {
     rnet_game_range_client_config_t config{};

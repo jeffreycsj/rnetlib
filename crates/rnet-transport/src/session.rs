@@ -142,7 +142,18 @@ impl NetworkRuntime {
     /// inside the caller's payload schema; TCP, UDP, or KCP routing was already fixed when the
     /// endpoint was created.
     pub fn send_payload(&self, session: Handle, payload: &[u8]) -> Result<()> {
-        self.send_legacy(session, 0, 0, 0, payload)
+        self.send_payload_with_options(session, payload, SendOptions::default())
+    }
+
+    /// Enqueues opaque game/application bytes with optional correlation metadata while keeping
+    /// transport routing and message typing internal.
+    pub fn send_payload_with_options(
+        &self,
+        session: Handle,
+        payload: &[u8],
+        options: SendOptions,
+    ) -> Result<()> {
+        self.send_legacy(session, 0, 0, options.correlation_id, payload)
     }
 
     /// Enqueues one application message. Transport stream selection is internal.

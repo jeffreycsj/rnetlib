@@ -91,8 +91,12 @@ fn clients_sample_protected_clock_offset_on_all_transports() {
         client
             .send(client_session, b"game-still-works")
             .expect("send");
+        // Clock sampling and session setup consume the earlier shared deadline. Give the
+        // independent business-data assertion its own bounded delivery window.
+        let message_deadline = Instant::now() + Duration::from_secs(3);
         let mut received = false;
-        while !received && Instant::now() < deadline {
+        while !received && Instant::now() < message_deadline {
+            client.poll(16, Duration::ZERO);
             received = server
                 .poll(16, Duration::from_millis(5))
                 .iter()

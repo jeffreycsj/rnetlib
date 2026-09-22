@@ -15,144 +15,6 @@ import (
 	"unsafe"
 )
 
-// GameProtocol is an exact application protocol identity, checked before business authorization.
-type GameProtocol struct {
-	ID           uint64
-	Version      uint32
-	BuildID      uint64
-	Capabilities uint64
-}
-
-type GameConfig struct {
-	HeartbeatInterval          time.Duration
-	HeartbeatTimeout           time.Duration
-	AllowPlaintextBusinessData bool
-	// Network optionally overrides production transport limits; start from DefaultConfig.
-	Network *Config
-	// Logger receives bounded, asynchronous game lifecycle/security/quality records.
-	// It must return quickly and never call Stop or Close on its own runtime.
-	Logger      func(LogRecord)
-	MinLogLevel LogLevel
-}
-
-type GameServerConfig struct {
-	Transport Transport
-	Host      string
-	Port      uint16
-	Keypair   Keypair
-	// Zero means encrypted; plaintext must be chosen explicitly.
-	InitialSecurity SecurityMode
-	Protocol        GameProtocol
-}
-
-func (config GameServerConfig) String() string {
-	return fmt.Sprintf("GameServerConfig{Transport:%d Host:%q Port:%d InitialSecurity:%d ProtocolID:%d Version:%d Keypair:<redacted>}",
-		config.Transport, config.Host, config.Port, config.InitialSecurity, config.Protocol.ID, config.Protocol.Version)
-}
-
-func (config GameServerConfig) GoString() string { return config.String() }
-
-type GameClientConfig struct {
-	Transport  Transport
-	Host       string
-	Port       uint16
-	JoinTicket []byte
-	Protocol   GameProtocol
-}
-
-func (config GameClientConfig) String() string {
-	return fmt.Sprintf("GameClientConfig{Transport:%d Host:%q Port:%d ProtocolID:%d Version:%d JoinTicketLen:%d}",
-		config.Transport, config.Host, config.Port, config.Protocol.ID, config.Protocol.Version, len(config.JoinTicket))
-}
-
-func (config GameClientConfig) GoString() string { return config.String() }
-
-type GameEventType uint32
-
-const (
-	GameRuntimeStarted    GameEventType = C.RNET_GAME_RUNTIME_STARTED
-	GameEndpointOpened    GameEventType = C.RNET_GAME_ENDPOINT_OPENED
-	GameEndpointError     GameEventType = C.RNET_GAME_ENDPOINT_ERROR
-	GameAuthRequest       GameEventType = C.RNET_GAME_AUTH_REQUEST
-	GameResumeRequest     GameEventType = C.RNET_GAME_RESUME_REQUEST
-	GameProtocolRejected  GameEventType = C.RNET_GAME_PROTOCOL_REJECTED
-	GameSessionReady      GameEventType = C.RNET_GAME_SESSION_READY
-	GameSessionResumed    GameEventType = C.RNET_GAME_SESSION_RESUMED
-	GameResumeTicket      GameEventType = C.RNET_GAME_RESUME_TICKET
-	GameSessionClosed     GameEventType = C.RNET_GAME_SESSION_CLOSED
-	GameMessage           GameEventType = C.RNET_GAME_MESSAGE
-	GameWritable          GameEventType = C.RNET_GAME_WRITABLE
-	GameJoinFailed        GameEventType = C.RNET_GAME_JOIN_FAILED
-	GameSecurityChanged   GameEventType = C.RNET_GAME_SECURITY_CHANGED
-	GameQualityChanged    GameEventType = C.RNET_GAME_QUALITY_CHANGED
-	GameProtocolViolation GameEventType = C.RNET_GAME_PROTOCOL_VIOLATION
-	GameRuntimeStopped    GameEventType = C.RNET_GAME_RUNTIME_STOPPED
-)
-
-// GameEvent owns copies of its payloads. The caller is responsible for erasing
-// copied join credentials and resume tickets when no longer needed.
-type GameEvent struct {
-	Type              GameEventType
-	Endpoint          Endpoint
-	Session           Session
-	RelatedSession    Session
-	Status            int32
-	Data              []byte
-	AuxData           []byte
-	ClientPublicKey   [32]byte
-	BuildID           uint64
-	Capabilities      uint64
-	Encrypted         bool
-	SecurityEpoch     uint64
-	SecurityOperation SecurityOperation
-	QualityGrade      uint32
-	QualityBasis      uint32
-	LastRTT           time.Duration
-	Jitter            time.Duration
-	QualitySamples    uint64
-	HasSequence       bool
-	Sequence          uint32
-	HasTick           bool
-	Tick              uint32
-}
-
-// GameQuality distinguishes unavailable TCP loss from a measured zero.
-// UDP loss is a sequence-gap estimate; KCP reports retransmissions, not IP loss.
-type GameQuality struct {
-	Available                       bool
-	Grade                           uint32
-	Basis                           uint32
-	HasUDPLoss                      bool
-	HasKCPRetransmissions           bool
-	UDPRecentLossPerMille           uint32
-	KCPRecentRetransmissionPerMille uint32
-	LastRTT                         time.Duration
-	SmoothedRTT                     time.Duration
-	Jitter                          time.Duration
-	Samples                         uint64
-	UDPExpected                     uint64
-	UDPMissing                      uint64
-	KCPSegmentsSent                 uint64
-	KCPRetransmitted                uint64
-}
-
-// GameClockSync maps this client's runtime-local monotonic clock to the
-// server's runtime-local monotonic clock. It is not UTC or a trusted time source.
-type GameClockSync struct {
-	Available         bool
-	ServerMinusClient time.Duration
-	RTT               time.Duration
-	Samples           uint64
-}
-
-func (event GameEvent) String() string {
-	return fmt.Sprintf("GameEvent{Type:%d Endpoint:%d Session:%d RelatedSession:%d Status:%d DataLen:%d AuxDataLen:%d}",
-		event.Type, event.Endpoint, event.Session, event.RelatedSession, event.Status,
-		len(event.Data), len(event.AuxData))
-}
-
-func (event GameEvent) GoString() string { return event.String() }
-
 type GameRuntime struct {
 	mu         sync.RWMutex
 	handle     C.rnet_runtime_t
@@ -167,8 +29,8 @@ func NewGameRuntime(security *ClientSecurity, configs ...GameConfig) (*GameRunti
 	if len(configs) > 1 {
 		return nil, fmt.Errorf("rnet: NewGameRuntime accepts at most one config")
 	}
-	var native C.rnet_game_config_t
-	if err := statusError(C.rnet_game_config_init(&native)); err != nil {
+	var native C.rnet_game_config_v2_t
+	if err := statusError(C.rnet_game_config_v2_init(&native)); err != nil {
 		return nil, err
 	}
 	if len(configs) == 1 {
@@ -183,6 +45,14 @@ func NewGameRuntime(security *ClientSecurity, configs ...GameConfig) (*GameRunti
 		if config.AllowPlaintextBusinessData {
 			native.allow_plaintext_business_data = 1
 		}
+		native.realtime_max_queued_bytes = C.uint64_t(config.RealtimeQueue.MaxQueuedBytes)
+		native.realtime_max_session_queued_bytes = C.uint64_t(config.RealtimeQueue.MaxSessionQueuedBytes)
+		native.realtime_max_keys_per_session = C.uint64_t(config.RealtimeQueue.MaxKeysPerSession)
+		native.realtime_flush_batch = C.uint64_t(config.RealtimeQueue.FlushBatch)
+		native.scheduled_max_queued_bytes = C.uint64_t(config.ScheduledQueue.MaxQueuedBytes)
+		native.scheduled_max_session_queued_bytes = C.uint64_t(config.ScheduledQueue.MaxSessionQueuedBytes)
+		native.scheduled_max_queued_messages = C.uint64_t(config.ScheduledQueue.MaxQueuedMessages)
+		native.scheduled_flush_batch = C.uint64_t(config.ScheduledQueue.FlushBatch)
 	}
 	var privateKey, serverKey *C.uint8_t
 	var network C.rnet_config_v5_t
@@ -342,6 +212,49 @@ func (r *GameRuntime) Send(session Session, payload []byte) error {
 	return statusError(status)
 }
 
+func (r *GameRuntime) SendWithOptions(session Session, payload []byte, options GameSendOptions) error {
+	handle, err := r.handleValue()
+	if err != nil {
+		return err
+	}
+	priority := options.Priority
+	if priority == 0 {
+		priority = GamePriorityNormal
+	}
+	expiryMS, err := gameExpiryMilliseconds(options.Expiry)
+	if err != nil {
+		return err
+	}
+	native := C.rnet_slice_t{ptr: bytePointer(payload), len: C.size_t(len(payload))}
+	raw := C.rnet_game_send_options_t{
+		struct_size: C.uint32_t(C.sizeof_rnet_game_send_options_t),
+		abi_version: C.RNET_ABI_VERSION,
+		sequence:    C.uint32_t(options.Sequence), tick: C.uint32_t(options.Tick),
+		correlation_id: C.uint64_t(options.CorrelationID), priority: C.uint32_t(priority),
+		expiry_ms: C.uint64_t(expiryMS),
+	}
+	if options.HasSequence {
+		raw.has_sequence = 1
+	}
+	if options.HasTick {
+		raw.has_tick = 1
+	}
+	status := C.rnet_game_send_ex(handle, C.rnet_session_t(session), native, &raw)
+	runtime.KeepAlive(payload)
+	return statusError(status)
+}
+
+func gameExpiryMilliseconds(expiry time.Duration) (uint64, error) {
+	if expiry < 0 {
+		return 0, fmt.Errorf("rnet: game send expiry must not be negative")
+	}
+	milliseconds := expiry / time.Millisecond
+	if expiry%time.Millisecond != 0 {
+		milliseconds++
+	}
+	return uint64(milliseconds), nil
+}
+
 // SendLatest coalesces snapshots by session and key. TCP/KCP snapshots can also
 // be replaced while waiting in a transport-pending slot; worker-owned data
 // already handed to a socket or KCP cannot be withdrawn.
@@ -480,8 +393,8 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 	if capacity > 65536 {
 		return nil, fmt.Errorf("rnet: game poll capacity is too large")
 	}
-	native := make([]C.rnet_game_event_t, capacity)
-	var pointer *C.rnet_game_event_t
+	native := make([]C.rnet_game_event_v2_t, capacity)
+	var pointer *C.rnet_game_event_v2_t
 	if capacity > 0 {
 		pointer = &native[0]
 	}
@@ -492,12 +405,12 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 		timeoutMS = math.MaxUint32
 	}
 	var count C.size_t
-	if err = statusError(C.rnet_game_poll_events(handle, pointer, C.size_t(capacity), C.uint32_t(timeoutMS), &count)); err != nil {
+	if err = statusError(C.rnet_game_poll_events_v2(handle, pointer, C.size_t(capacity), C.uint32_t(timeoutMS), &count)); err != nil {
 		return nil, err
 	}
 	defer func() {
 		for i := 0; i < int(count); i++ {
-			for _, token := range []C.uint64_t{native[i].buffer_token, native[i].aux_buffer_token} {
+			for _, token := range []C.uint64_t{native[i].event.buffer_token, native[i].event.aux_buffer_token} {
 				if token != 0 {
 					if releaseErr := statusError(C.rnet_game_buffer_release(handle, token)); err == nil {
 						err = releaseErr
@@ -508,7 +421,8 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 	}()
 	result = make([]GameEvent, 0, count)
 	for i := 0; i < int(count); i++ {
-		source := native[i]
+		sourceV2 := native[i]
+		source := sourceV2.event
 		data, copyErr := gameCopyBytes(source.data, source.data_len)
 		if copyErr != nil {
 			return nil, copyErr
@@ -530,6 +444,7 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 			QualitySamples: uint64(source.quality_samples),
 			HasSequence:    source.has_sequence != 0, Sequence: uint32(source.sequence),
 			HasTick: source.has_tick != 0, Tick: uint32(source.tick),
+			CorrelationID: uint64(sourceV2.correlation_id),
 		}
 		copy(event.ClientPublicKey[:], unsafe.Slice((*byte)(unsafe.Pointer(&source.client_public_key[0])), 32))
 		result = append(result, event)

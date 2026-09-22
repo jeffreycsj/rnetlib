@@ -54,6 +54,36 @@ impl GameDiagnostics {
             correlation_id: 0,
         });
     }
+
+    fn record_send_failure(
+        &self,
+        endpoint: Handle,
+        session: Handle,
+        transport: u32,
+        status: ErrorCode,
+        correlation_id: u64,
+    ) {
+        let Some(logger) = self.logger.as_ref() else {
+            return;
+        };
+        let _ = logger.log(LogRecord {
+            timestamp_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+            level: LogLevel::Warn,
+            event_name: "game_scheduled_send_failed".into(),
+            target: "rnet.game".into(),
+            message: String::new(),
+            runtime: self.runtime_id,
+            endpoint,
+            session,
+            transport,
+            error_code: status,
+            correlation_id,
+        });
+    }
 }
 
 impl GameRuntime {
@@ -104,6 +134,29 @@ impl GameRuntime {
             .get(&endpoint)
             .map(|protocol| (protocol.protocol_id, protocol.version));
         self.diagnostics.record(event, transport, protocol);
+    }
+
+    pub(crate) fn log_scheduled_send_failure(
+        &self,
+        session: Handle,
+        status: ErrorCode,
+        correlation_id: u64,
+    ) {
+        let endpoint = self
+            .session_endpoints
+            .lock()
+            .expect("game session table poisoned")
+            .get(&session)
+            .copied()
+            .unwrap_or_default();
+        let transport = self
+            .endpoint_transports
+            .lock()
+            .expect("game endpoint table poisoned")
+            .get(&endpoint)
+            .map_or(0, |transport| *transport as u32);
+        self.diagnostics
+            .record_send_failure(endpoint, session, transport, status, correlation_id);
     }
 }
 
@@ -341,6 +394,7 @@ mod tests {
                 session: 8,
                 sequence: None,
                 tick: None,
+                correlation_id: 0,
                 payload: Bytes::from_static(b"private-business-data"),
             }),
             None

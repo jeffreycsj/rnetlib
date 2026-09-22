@@ -15,7 +15,7 @@ use crate::admission::{AdmissionController, AdmissionPermit};
 use crate::auto_rekey::AutoRekey;
 use crate::config::{ClientSecurity, EndpointSecurity};
 use crate::cookie::{CookieGuard, COOKIE_LEN};
-use crate::kcp_preflight::encode_hello;
+use crate::kcp_preflight::{encode_hello, random_conv};
 use crate::state::{
     fail_secure_session, push_endpoint_error, remove_session_with_reason,
     retarget_datagram_endpoint, retarget_datagram_session, session_active, DatagramCleanup,
@@ -482,7 +482,9 @@ async fn send_client_hello(
     peer: SocketAddr,
 ) -> Result<()> {
     if transport == Transport::Kcp {
-        socket.send_to(&encode_hello(&[]), peer).await?;
+        socket
+            .send_to(&encode_hello(random_conv()?, &[]), peer)
+            .await?;
         Ok(())
     } else {
         wire.send_reliable(

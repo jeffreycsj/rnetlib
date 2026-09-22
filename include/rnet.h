@@ -543,6 +543,13 @@ enum {
   RNET_GAME_RUNTIME_STOPPED = 17
 };
 
+enum {
+  RNET_GAME_PRIORITY_LOW = 1,
+  RNET_GAME_PRIORITY_NORMAL = 2,
+  RNET_GAME_PRIORITY_HIGH = 3,
+  RNET_GAME_PRIORITY_CRITICAL = 4
+};
+
 typedef struct rnet_game_config {
   uint32_t struct_size;
   uint32_t abi_version;
@@ -555,6 +562,26 @@ typedef struct rnet_game_config {
    * The game-level plaintext flag remains authoritative. */
   const rnet_config_v5_t *network_config;
 } rnet_game_config_t;
+
+/* Additive configuration for game-stage queue budgets. Every zero queue field
+ * selects the production default. The V1 layout remains frozen. */
+typedef struct rnet_game_config_v2 {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t heartbeat_interval_ms;
+  uint32_t heartbeat_timeout_ms;
+  uint32_t allow_plaintext_business_data;
+  uint32_t reserved;
+  const rnet_config_v5_t *network_config;
+  uint64_t realtime_max_queued_bytes;
+  uint64_t realtime_max_session_queued_bytes;
+  uint64_t realtime_max_keys_per_session;
+  uint64_t realtime_flush_batch;
+  uint64_t scheduled_max_queued_bytes;
+  uint64_t scheduled_max_session_queued_bytes;
+  uint64_t scheduled_max_queued_messages;
+  uint64_t scheduled_flush_batch;
+} rnet_game_config_v2_t;
 
 typedef struct rnet_game_server_config {
   uint32_t struct_size;
@@ -651,6 +678,26 @@ typedef struct rnet_game_event {
   uint32_t tick;
 } rnet_game_event_t;
 
+/* Additive advanced-event layout. Use rnet_game_poll_events_v2; token ownership
+ * remains in the nested v1 event. */
+typedef struct rnet_game_event_v2 {
+  rnet_game_event_t event;
+  uint64_t correlation_id;
+} rnet_game_event_v2_t;
+
+typedef struct rnet_game_send_options {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t has_sequence;
+  uint32_t sequence;
+  uint32_t has_tick;
+  uint32_t tick;
+  uint64_t correlation_id;
+  uint32_t priority;
+  /* Relative local queue lifetime; zero means no expiry. */
+  uint64_t expiry_ms;
+} rnet_game_send_options_t;
+
 /* Quality loss is a UDP sequence-gap estimate; KCP reports retransmission,
  * not raw IP loss. TCP has neither loss nor retransmission availability. */
 typedef struct rnet_game_quality {
@@ -742,6 +789,33 @@ typedef struct rnet_game_realtime_queue {
   uint64_t forwarded;
 } rnet_game_realtime_queue_t;
 
+/* Runtime-wide priority/expiry staging metrics. */
+typedef struct rnet_game_scheduled_queue {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint64_t queued_messages;
+  uint64_t queued_bytes;
+  uint64_t admission_rejected;
+  uint64_t expired_dropped;
+  uint64_t closed_dropped;
+  uint64_t send_failed;
+  uint64_t forwarded;
+  uint64_t backpressure_requeued;
+  /* Index order: low, normal, high, critical. */
+  uint64_t admitted_by_priority[4];
+  uint64_t forwarded_by_priority[4];
+  uint64_t queue_delay_samples;
+  uint64_t queue_delay_p90_us;
+  uint64_t queue_delay_p95_us;
+  uint64_t queue_delay_p99_us;
+  uint64_t queue_delay_max_us;
+  uint64_t tick_queue_delay_samples;
+  uint64_t tick_queue_delay_p90_us;
+  uint64_t tick_queue_delay_p95_us;
+  uint64_t tick_queue_delay_p99_us;
+  uint64_t tick_queue_delay_max_us;
+} rnet_game_scheduled_queue_t;
+
 /* Runtime-wide wire-v4 business data retained until readiness is observable.
  * Rejection fields are cumulative; all other usage fields are gauges. */
 typedef struct rnet_game_range_buffer {
@@ -782,6 +856,7 @@ typedef struct rnet_game_buffer {
 } rnet_game_buffer_t;
 
 int32_t rnet_game_config_init(rnet_game_config_t *out);
+int32_t rnet_game_config_v2_init(rnet_game_config_v2_t *out);
 /* Expands a scenario profile into existing config fields without changing wire semantics. */
 int32_t rnet_game_profile_defaults(uint32_t profile, uint32_t *out_transport,
                                    uint32_t *out_initial_encryption);
@@ -794,6 +869,13 @@ int32_t rnet_game_runtime_create(const rnet_game_config_t *config,
  * query metrics but must not call runtime_stop/runtime_destroy. */
 int32_t rnet_game_runtime_create_logged(
     const rnet_game_config_t *config,
+    const rnet_client_security_t *client_security,
+    const rnet_logger_v2_t *logger, rnet_runtime_t *out);
+int32_t rnet_game_runtime_create_v2(
+    const rnet_game_config_v2_t *config,
+    const rnet_client_security_t *client_security, rnet_runtime_t *out);
+int32_t rnet_game_runtime_create_logged_v2(
+    const rnet_game_config_v2_t *config,
     const rnet_client_security_t *client_security,
     const rnet_logger_v2_t *logger, rnet_runtime_t *out);
 int32_t rnet_game_server_listen(rnet_runtime_t runtime,
@@ -830,6 +912,9 @@ int32_t rnet_game_auth_decide(rnet_runtime_t runtime,
                               rnet_session_t session, uint32_t accept);
 int32_t rnet_game_send(rnet_runtime_t runtime, rnet_session_t session,
                        rnet_slice_t payload);
+int32_t rnet_game_send_ex(rnet_runtime_t runtime, rnet_session_t session,
+                          rnet_slice_t payload,
+                          const rnet_game_send_options_t *options);
 /* Best-effort coalescing before transport admission; already admitted reliable
  * messages cannot be withdrawn. The key is scoped to one session. */
 int32_t rnet_game_send_latest(rnet_runtime_t runtime, rnet_session_t session,
@@ -851,6 +936,8 @@ int32_t rnet_game_metrics_snapshot(rnet_runtime_t runtime,
                                    rnet_game_metrics_t *out);
 int32_t rnet_game_realtime_queue_snapshot(
     rnet_runtime_t runtime, rnet_game_realtime_queue_t *out);
+int32_t rnet_game_scheduled_queue_snapshot(
+    rnet_runtime_t runtime, rnet_game_scheduled_queue_t *out);
 int32_t rnet_game_range_buffer_snapshot(rnet_runtime_t runtime,
                                         rnet_game_range_buffer_t *out);
 /* TCP/KCP snapshots replaced after game staging but before I/O worker pickup. */
@@ -866,6 +953,10 @@ int32_t rnet_game_prometheus_snapshot(rnet_runtime_t runtime,
 int32_t rnet_game_poll_events(rnet_runtime_t runtime, rnet_game_event_t *events,
                               size_t capacity, uint32_t timeout_ms,
                               size_t *out_count);
+int32_t rnet_game_poll_events_v2(rnet_runtime_t runtime,
+                                 rnet_game_event_v2_t *events,
+                                 size_t capacity, uint32_t timeout_ms,
+                                 size_t *out_count);
 int32_t rnet_game_buffer_release(rnet_runtime_t runtime, uint64_t token);
 int32_t rnet_game_runtime_stop(rnet_runtime_t runtime,
                                uint32_t drain_timeout_ms);

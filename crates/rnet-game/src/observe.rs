@@ -295,6 +295,84 @@ impl GameRuntime {
         ] {
             let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
         }
+        let scheduled = self.scheduled_queue_snapshot();
+        for (name, value) in [
+            (
+                "rnet_game_scheduled_admission_rejected_total",
+                scheduled.admission_rejected,
+            ),
+            (
+                "rnet_game_scheduled_expired_dropped_total",
+                scheduled.expired_dropped,
+            ),
+            (
+                "rnet_game_scheduled_closed_dropped_total",
+                scheduled.closed_dropped,
+            ),
+            (
+                "rnet_game_scheduled_send_failed_total",
+                scheduled.send_failed,
+            ),
+            ("rnet_game_scheduled_forwarded_total", scheduled.forwarded),
+            (
+                "rnet_game_scheduled_backpressure_requeued_total",
+                scheduled.backpressure_requeued,
+            ),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
+        }
+        for (name, value) in [
+            (
+                "rnet_game_scheduled_queued_messages",
+                scheduled.queued_messages,
+            ),
+            ("rnet_game_scheduled_queued_bytes", scheduled.queued_bytes),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
+        }
+        output.push_str("# TYPE rnet_game_scheduled_admitted_by_priority_total counter\n");
+        output.push_str("# TYPE rnet_game_scheduled_forwarded_by_priority_total counter\n");
+        for (index, priority) in ["low", "normal", "high", "critical"].iter().enumerate() {
+            let _ = writeln!(
+                output,
+                "rnet_game_scheduled_admitted_by_priority_total{{priority=\"{priority}\"}} {}",
+                scheduled.admitted_by_priority[index]
+            );
+            let _ = writeln!(
+                output,
+                "rnet_game_scheduled_forwarded_by_priority_total{{priority=\"{priority}\"}} {}",
+                scheduled.forwarded_by_priority[index]
+            );
+        }
+        for (metric, latency) in [
+            ("rnet_game_scheduled_queue_delay_us", scheduled.queue_delay),
+            (
+                "rnet_game_scheduled_tick_queue_delay_us",
+                scheduled.tick_queue_delay,
+            ),
+        ] {
+            let _ = writeln!(output, "# TYPE {metric} gauge");
+            for (quantile, value) in [
+                ("0.5", latency.p50_us),
+                ("0.9", latency.p90_us),
+                ("0.95", latency.p95_us),
+                ("0.99", latency.p99_us),
+                ("0.999", latency.p999_us),
+            ] {
+                let _ = writeln!(output, "{metric}{{quantile=\"{quantile}\"}} {value}");
+            }
+            let _ = writeln!(output, "{metric}{{quantile=\"max\"}} {}", latency.max_us);
+        }
+        let _ = writeln!(
+            output,
+            "# TYPE rnet_game_scheduled_queue_delay_samples_total counter\nrnet_game_scheduled_queue_delay_samples_total {}",
+            scheduled.queue_delay.sample_count
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE rnet_game_scheduled_tick_queue_delay_samples_total counter\nrnet_game_scheduled_tick_queue_delay_samples_total {}",
+            scheduled.tick_queue_delay.sample_count
+        );
         let range = self.range_buffer_snapshot();
         for (name, value) in [
             (

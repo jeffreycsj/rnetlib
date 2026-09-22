@@ -2,6 +2,7 @@
 
 use crate::quality::QualityPolicy;
 use crate::realtime::RealtimeQueueConfig;
+use crate::scheduler::ScheduledQueueConfig;
 use rnet_core::{ErrorCode, RnetError, Transport};
 use rnet_security::Keypair;
 use rnet_transport::RuntimeConfig;
@@ -120,6 +121,8 @@ pub struct GameRuntimeConfig {
     pub quality_policy: QualityPolicy,
     /// Independent bounded staging budget for coalesced realtime state messages.
     pub realtime_queue: RealtimeQueueConfig,
+    /// Bounded staging for advanced priority/expiry sends.
+    pub scheduled_queue: ScheduledQueueConfig,
     /// Lifetime of a one-use, client-key-bound resume credential.
     pub resume_ticket_ttl: Duration,
     /// Maximum outstanding credentials in this runtime; state is not shared across processes.
@@ -135,6 +138,7 @@ impl GameRuntimeConfig {
             heartbeat_timeout: Duration::from_secs(15),
             quality_policy: QualityPolicy::default(),
             realtime_queue: RealtimeQueueConfig::default(),
+            scheduled_queue: ScheduledQueueConfig::default(),
             resume_ticket_ttl: Duration::from_secs(30),
             max_resume_tickets: 65_536,
         }
@@ -154,6 +158,11 @@ impl GameRuntimeConfig {
 
     pub fn with_realtime_queue(mut self, queue: RealtimeQueueConfig) -> Self {
         self.realtime_queue = queue;
+        self
+    }
+
+    pub fn with_scheduled_queue(mut self, queue: ScheduledQueueConfig) -> Self {
+        self.scheduled_queue = queue;
         self
     }
 
@@ -181,6 +190,7 @@ impl GameRuntimeConfig {
             heartbeat_timeout: Duration::from_secs(15),
             quality_policy: QualityPolicy::default(),
             realtime_queue: RealtimeQueueConfig::default(),
+            scheduled_queue: ScheduledQueueConfig::default(),
             resume_ticket_ttl: Duration::from_secs(30),
             max_resume_tickets: 65_536,
         }

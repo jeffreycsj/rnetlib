@@ -74,6 +74,10 @@ fn malformed_kcp_headers_cannot_panic_the_process() {
             0x01, 0x00, 0x00, 0x00, 0x51, 0x00, 0x02, 0xfc, 0x00, 0x1a, 0x32, 0xff, 0x00, 0x00,
             0x00, 0x80, 0xfa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ],
+        &[
+            0x01, 0x00, 0x00, 0x00, 0x52, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x09, 0x00,
+            0xff, 0xff, 0x00, 0x00, 0xfa, 0x04, 0x00, 0x00, 0x00, 0x00,
+        ],
     ];
 
     for packet in packets {
@@ -87,4 +91,22 @@ fn malformed_kcp_headers_cannot_panic_the_process() {
             rnet_core::ErrorCode::ProtocolError
         );
     }
+}
+
+#[test]
+fn kcp_accepts_valid_serials_across_the_signed_boundary() {
+    let mut packet = Vec::with_capacity(24);
+    packet.extend_from_slice(&1_u32.to_le_bytes());
+    packet.push(82); // ACK
+    packet.push(0);
+    packet.extend_from_slice(&128_u16.to_le_bytes());
+    packet.extend_from_slice(&0x7fff_fff0_u32.to_le_bytes());
+    packet.extend_from_slice(&0x8000_0000_u32.to_le_bytes());
+    packet.extend_from_slice(&0x8000_0000_u32.to_le_bytes());
+    packet.extend_from_slice(&0_u32.to_le_bytes());
+    let mut engine = RustKcpEngine::new(1).expect("engine");
+
+    engine
+        .input(&packet, 0x8000_0010)
+        .expect("the full KCP serial number space must remain usable");
 }

@@ -5,6 +5,7 @@ use crate::runtime::GameRuntime;
 use bytes::Bytes;
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
 use rnet_transport::LatestTransportSnapshot;
+use std::sync::atomic::Ordering;
 
 impl GameRuntime {
     /// Stages a replaceable snapshot. The key is scoped to the session; ordinary `send` remains
@@ -22,6 +23,12 @@ impl GameRuntime {
         payload: &[u8],
         tick: Option<u32>,
     ) -> Result<()> {
+        if self.stopping.load(Ordering::Acquire) {
+            return Err(RnetError::new(
+                ErrorCode::InvalidState,
+                "game runtime is stopping",
+            ));
+        }
         self.ensure_game_ready(session)?;
         let udp = self
             .udp_sessions
@@ -42,7 +49,7 @@ impl GameRuntime {
             .ready_sessions
             .read()
             .expect("game ready table poisoned");
-        if !ready.contains(&session) {
+        if !ready.contains(&session) || self.stopping.load(Ordering::Acquire) {
             return Err(RnetError::new(
                 ErrorCode::InvalidHandle,
                 "game session closed during snapshot admission",
@@ -58,6 +65,11 @@ impl GameRuntime {
     /// Non-blockingly forwards at most `capacity` staged snapshots in fair key order.
     /// A full transport queue rotates that snapshot behind other pending keys.
     pub fn flush_realtime(&self, capacity: usize) -> usize {
+        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
+        self.flush_realtime_inner(capacity)
+    }
+
+    pub(crate) fn flush_realtime_inner(&self, capacity: usize) -> usize {
         let attempts = capacity.min(
             self.realtime
                 .lock()

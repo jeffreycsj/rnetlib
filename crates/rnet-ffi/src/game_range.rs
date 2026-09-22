@@ -1,9 +1,8 @@
 //! Additive wire-v4 game ABI. Old exact-version structs and symbols are unchanged.
 
 use crate::abi::RnetSlice;
-use crate::game_abi::{
-    RnetGameRangeClientConfig, RnetGameRangeServerConfig, RnetGameTransportLatest,
-};
+use crate::game_abi::RnetGameTransportLatest;
+use crate::game_config_abi::{RnetGameRangeClientConfig, RnetGameRangeServerConfig};
 use crate::game_range_abi::RnetGameRangeBuffer;
 use crate::game_registry;
 use crate::registry::{

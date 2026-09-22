@@ -284,20 +284,21 @@ fn failed_v4_resume_keeps_the_old_session_usable() {
     client
         .send(old_client, b"client-old-route")
         .expect("old client remains ready");
-    await_message(&server, old_server, b"client-old-route");
+    await_message(&client, &server, old_server, b"client-old-route");
     server
         .send(old_server, b"server-old-route")
         .expect("old server remains ready");
-    await_message(&client, old_client, b"server-old-route");
+    await_message(&server, &client, old_client, b"server-old-route");
 
     client.stop(Duration::ZERO).expect("stop client");
     server.stop(Duration::ZERO).expect("stop server");
 }
 
-fn await_message(runtime: &GameRuntime, session: u64, expected: &[u8]) {
+fn await_message(sender: &GameRuntime, receiver: &GameRuntime, session: u64, expected: &[u8]) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        if runtime
+        sender.poll(32, Duration::ZERO);
+        if receiver
             .poll(32, Duration::from_millis(5))
             .into_iter()
             .any(|event| {

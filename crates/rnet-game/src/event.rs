@@ -125,6 +125,8 @@ pub struct GameMessage {
     pub sequence: Option<u32>,
     /// Simulation tick supplied by the sender, without any business-type interpretation.
     pub tick: Option<u32>,
+    /// Optional request/trace correlation metadata; zero means absent.
+    pub correlation_id: u64,
     pub payload: Bytes,
 }
 

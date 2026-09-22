@@ -15,21 +15,19 @@ impl GameRuntime {
         // Game controls are handled by the same event queue as lifecycle changes. Serializing
         // polls preserves their order and keeps challenge state single-writer.
         let _guard = self.poll_guard.lock().expect("game poll lock poisoned");
-        self.flush_realtime(self.realtime_flush_batch);
+        self.flush_scheduled_inner(self.scheduled_flush_batch);
+        self.flush_realtime_inner(self.realtime_flush_batch);
         let mut carried = Vec::new();
-        let completed_waiting = {
+        {
             let mut range = self.range.lock().expect("range state poisoned");
             range.drain_completed(&mut carried, capacity);
-            range.has_completed()
-        };
+        }
         let mut internal_events = 0usize;
         if capacity == 0 || !carried.is_empty() {
             // Public backlog must not hide authenticated acknowledgements or negotiation controls.
             // Any newly converted public event remains ordered in the completed queue when the
             // caller has no remaining output capacity.
-            if capacity != 0 || !completed_waiting {
-                self.drain_network_nonblocking(&mut carried, capacity, &mut internal_events);
-            }
+            self.drain_network_nonblocking(&mut carried, capacity, &mut internal_events);
             self.drive_heartbeats();
             self.drive_clock_sync();
             self.drive_range_negotiation();

@@ -2,7 +2,7 @@
 
 RNet is a bounded, event-driven networking foundation for client/server games. The new Rust `rnet-game` facade selects TCP, UDP, or KCP once at listener/connect time, then sends opaque business bytes with `send(session, payload)`; protobuf or another application schema owns its own message type. The server owns the encryption policy and can change it for a live session without changing the client API.
 
-The game facade is under active development, **not yet production-certified**. It provides authenticated wire-v3 exact-version joins and opt-in wire-v4 server-selected version-range joins, a no-`msg_type` send/receive API, numeric-IP and hostname connections, server-led encryption changes, authenticated heartbeat/quality/clock measurements, bounded `LatestOnly` staging with TCP/KCP transport-pending replacement, and single-runtime one-use reconnect tickets. Game-level C/C++11/Go facades cover joining, authorization, sending, polling, lifecycle, resume, quality, clock snapshots, cumulative metrics, bounded structured logging, and Prometheus text. Cross-instance/rolling-restart recovery is intentionally out of scope; target-environment long-soak certification and some advanced telemetry remain pending.
+The game facade is a production candidate, **not yet target-environment certified**. It provides authenticated wire-v3 exact-version joins and opt-in wire-v4 server-selected version-range joins, a no-`msg_type` send/receive API, numeric-IP and hostname connections, server-led encryption changes, authenticated heartbeat/quality/clock measurements, bounded `LatestOnly` staging with TCP/KCP transport-pending replacement, priority/expiry scheduling, correlation/tick metadata, and single-runtime one-use reconnect tickets. Game-level C/C++11/Go facades cover the same flow and telemetry. Cross-instance/rolling-restart recovery is intentionally out of scope; 24–72 hour target-environment soak and independent security review remain release gates.
 
 See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, and Go entry points and their security boundaries.
 
@@ -13,7 +13,7 @@ See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, a
 - `Noise_XX_25519_ChaChaPoly_BLAKE2s` authenticated encryption. Clients pin the server static public key; servers receive the client public key plus encrypted join payload in `AUTH_REQUEST` and call `rnet_session_auth_decide`.
 - Stateful encrypted records for ordered TCP and explicit-nonce stateless records with a 64-packet replay window for UDP/KCP.
 - HMAC cookie challenges, bound to the source address and a 60-second time bucket, before UDP/KCP Noise/session allocation.
-- KCP 0.6.0 with one timer loop per endpoint rather than one thread per session, configured MTU, deadline-aware updates, and reused hot-path buffers. Its core adapter is tested against packet loss and reordering.
+- KCP 0.6.0 with one timer loop per endpoint rather than one thread per session, configured MTU, deadline-aware updates, reused hot-path buffers, a random conversation negotiated during cookie preflight, and full modulo-2^32 serial arithmetic. Its core adapter is tested against loss, reordering, stale-conversation isolation, and the signed boundary.
 - A 28-byte logical frame, incremental TCP framing, Protobuf helpers, metrics, bounded asynchronous logging, static/dynamic libraries, and final-link examples.
 - Fixed-memory latency histograms for connect, Noise handshake, authorization wait, send/event queues, KCP RTT/update delay, and logger callbacks. Window snapshots and periodic summaries include P50/P90/P95/P99/P99.9/max in microseconds.
 - Configurable per-endpoint admission, handshake deadlines, datagram idle reclamation, and session-isolated event backpressure for high-connection deployments.
@@ -69,7 +69,9 @@ for event in runtime.poll(64, std::time::Duration::from_millis(10)) {
 }
 ```
 
-`send` is nonblocking and bounded. If it returns `WouldBlock`, retain the business message and retry after `Writable`; a successful return means locally queued, not delivered. Never send before `SessionReady`. A complete executable server/client echo is in [`game_quickstart.rs`](crates/rnet-game/examples/game_quickstart.rs) and can be run with `cargo run -p rnet-game --example game_quickstart`.
+`send` is nonblocking and bounded. If it returns `WouldBlock`, retain the business message, keep polling so the scheduler can drain, then retry; a successful return means locally staged, not delivered. Transport backpressure after admission keeps the message in the scheduler for a later bounded flush. Never send before `SessionReady`. A complete executable server/client echo is in [`game_quickstart.rs`](crates/rnet-game/examples/game_quickstart.rs) and can be run with `cargo run -p rnet-game --example game_quickstart`.
+
+Advanced sends remain optional. `send_with_options` adds a fair local priority, a pre-transport expiry, tick/sequence metadata and a correlation ID; transport selection and business packet type still do not appear in the call. All ordinary and advanced sends first enter a bounded per-session-fair scheduler that `poll` flushes automatically. `scheduled_queue_snapshot()` and Prometheus report per-priority admission/forwarding, backpressure requeues, expiry, and local queue-delay P90/P95/P99/max. Expiry cannot recall bytes already owned by a socket or KCP.
 
 | Language | Send | Receive and lifecycle |
 | --- | --- | --- |
@@ -156,7 +158,7 @@ Raw UDP is intentionally unreliable and unordered. KCP is reliable and ordered b
   observation, and keypair responsibilities; `native.h` owns the cgo shims.
 - `fuzz`: frame, security-control, cookie/preflight, KCP, game-wire, and FFI configuration fuzz targets.
 
-See [Production deployment](docs/production-deployment.md), [SECURITY.md](SECURITY.md), [dependency-review.md](docs/dependency-review.md), and [adversarial-review.md](docs/adversarial-review.md) before production exposure.
+See [Production deployment](docs/production-deployment.md), the current [game qualification record](docs/game-production-qualification.md), [SECURITY.md](SECURITY.md), [dependency-review.md](docs/dependency-review.md), and [adversarial-review.md](docs/adversarial-review.md) before production exposure.
 
 ## License
 
