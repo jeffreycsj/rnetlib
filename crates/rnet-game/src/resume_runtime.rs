@@ -277,7 +277,7 @@ impl GameRuntime {
         let mut state = self.resume.lock().expect("resume state poisoned");
         state.server_sessions.remove(&session);
         state.pending_server.remove(&session);
-        // A range handshake can close after the old handle is invalidated but before READY.
+        // A range handshake can close before READY while the old handle remains authoritative.
         // Do not retain an orphaned old-to-new mapping or its revocation marker indefinitely.
         let abandoned: Vec<_> = state
             .inflight_server

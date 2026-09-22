@@ -36,6 +36,28 @@ pub struct ResumeMetricsSnapshot {
     pub outstanding_tickets: usize,
 }
 
+/// Cumulative protocol-input counters. Plaintext corruption is intentionally aggregated instead
+/// of being logged or labeled by session, because an unauthenticated sender controls its rate.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProtocolMetricsSnapshot {
+    pub plaintext_invalid_envelopes_dropped: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct ProtocolMetrics {
+    pub(crate) plaintext_invalid_envelopes_dropped: AtomicU64,
+}
+
+impl ProtocolMetrics {
+    fn snapshot(&self) -> ProtocolMetricsSnapshot {
+        ProtocolMetricsSnapshot {
+            plaintext_invalid_envelopes_dropped: self
+                .plaintext_invalid_envelopes_dropped
+                .load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ResumeMetrics {
     pub(crate) tickets_issued: AtomicU64,
@@ -97,6 +119,10 @@ impl HeartbeatMetrics {
 }
 
 impl GameRuntime {
+    pub fn protocol_metrics_snapshot(&self) -> ProtocolMetricsSnapshot {
+        self.protocol_metrics.snapshot()
+    }
+
     pub fn resume_metrics_snapshot(&self) -> ResumeMetricsSnapshot {
         let outstanding = self
             .resume
@@ -234,6 +260,12 @@ impl GameRuntime {
         ] {
             let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
         }
+        let protocol = self.protocol_metrics_snapshot();
+        let _ = writeln!(
+            output,
+            "# TYPE rnet_game_plaintext_invalid_envelopes_dropped_total counter\nrnet_game_plaintext_invalid_envelopes_dropped_total {}",
+            protocol.plaintext_invalid_envelopes_dropped
+        );
         let realtime = self.realtime_queue_snapshot();
         for (name, value) in [
             (

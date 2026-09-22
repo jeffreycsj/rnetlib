@@ -437,6 +437,17 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
         unsafe { rnet_game_runtime_create(&config, &client_security, &mut runtime) },
         RNET_OK
     );
+    let mut zero_count = usize::MAX;
+    let zero_started = Instant::now();
+    assert_eq!(
+        unsafe { rnet_game_poll_events(runtime, std::ptr::null_mut(), 0, 1_000, &mut zero_count,) },
+        RNET_OK
+    );
+    assert_eq!(zero_count, 0);
+    assert!(
+        zero_started.elapsed() < Duration::from_millis(100),
+        "zero-capacity maintenance poll must not honor the blocking timeout"
+    );
     let server = RnetGameServerConfig {
         struct_size: size_of::<RnetGameServerConfig>() as u32,
         abi_version: RNET_ABI_VERSION,
@@ -696,6 +707,15 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
     assert_eq!(clock.available, 1);
     assert!(clock.samples >= 1);
     assert_eq!(clock.struct_size as usize, size_of::<RnetGameClockSync>());
+    let mut server_clock = RnetGameClockSync::default();
+    assert_eq!(
+        unsafe {
+            rnet_game_clock_sync_snapshot(runtime, server_session.unwrap(), &mut server_clock)
+        },
+        RNET_OK
+    );
+    assert_eq!(server_clock.available, 0);
+    assert_eq!(server_clock.samples, 0);
     let mut game_metrics = RnetGameMetrics::default();
     assert_eq!(
         unsafe { rnet_game_metrics_snapshot(runtime, &mut game_metrics) },

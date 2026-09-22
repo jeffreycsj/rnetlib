@@ -165,13 +165,18 @@ impl RangeRuntimeState {
         }
     }
 
+    pub(crate) fn has_completed(&self) -> bool {
+        !self.completed.is_empty()
+    }
+
     pub(crate) fn queue_public(
         &mut self,
         event: GameEvent,
         output: &mut Vec<GameEvent>,
         capacity: usize,
-    ) {
-        if output.len() < capacity && self.completed.is_empty() {
+    ) -> bool {
+        let deferred = output.len() >= capacity || !self.completed.is_empty();
+        if !deferred {
             output.push(event);
         } else {
             // Readiness or resume mapping must precede buffered business data.
@@ -199,6 +204,7 @@ impl RangeRuntimeState {
             }
         }
         self.drain_completed(output, capacity);
+        deferred
     }
 
     /// Stages business data received before version negotiation is publicly ready. The limit is
@@ -285,6 +291,11 @@ impl RangeRuntimeState {
             event,
             reserved_bytes: None,
         });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completed_len_for_test(&self) -> usize {
+        self.completed.len()
     }
 
     fn release_completed(&mut self, completed: &CompletedEvent) {

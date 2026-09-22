@@ -16,6 +16,7 @@ struct LossyUdpProxy {
     address: SocketAddr,
     client_to_server_drop_countdown: Arc<AtomicUsize>,
     server_to_client_drop_countdown: Arc<AtomicUsize>,
+    server_to_client_forward_budget: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -29,10 +30,12 @@ impl LossyUdpProxy {
         let address = socket.local_addr().expect("proxy address");
         let drop_client_to_server = Arc::new(AtomicUsize::new(usize::MAX));
         let drop_server_to_client = Arc::new(AtomicUsize::new(usize::MAX));
+        let server_to_client_forward_budget = Arc::new(AtomicUsize::new(usize::MAX));
         let stop = Arc::new(AtomicBool::new(false));
         let worker = {
             let client_drops = Arc::clone(&drop_client_to_server);
             let server_drops = Arc::clone(&drop_server_to_client);
+            let server_forward_budget = Arc::clone(&server_to_client_forward_budget);
             let stop = Arc::clone(&stop);
             thread::spawn(move || {
                 let mut client = None;
@@ -54,6 +57,9 @@ impl LossyUdpProxy {
                         if consume_drop(&server_drops) {
                             continue;
                         }
+                        if !consume_forward_budget(&server_forward_budget) {
+                            continue;
+                        }
                         if let Some(client) = client {
                             let _ = socket.send_to(&buffer[..length], client);
                         }
@@ -71,6 +77,7 @@ impl LossyUdpProxy {
             address,
             client_to_server_drop_countdown: drop_client_to_server,
             server_to_client_drop_countdown: drop_server_to_client,
+            server_to_client_forward_budget,
             stop,
             worker: Some(worker),
         }
@@ -88,6 +95,13 @@ impl LossyUdpProxy {
             self.server_to_client_drop_countdown.load(Ordering::Acquire),
             usize::MAX
         );
+    }
+
+    fn forward_one_server_packet_then_block(&self) {
+        // AuthDecision opens the protected transport. Blocking subsequent server records keeps
+        // wire-v4 below READY while the original direct connection remains unaffected.
+        self.server_to_client_forward_budget
+            .store(1, Ordering::Release);
     }
 }
 
@@ -119,11 +133,181 @@ fn consume_drop(counter: &AtomicUsize) -> bool {
     )
 }
 
+fn consume_forward_budget(counter: &AtomicUsize) -> bool {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+            if remaining == usize::MAX || remaining == 0 {
+                None
+            } else {
+                Some(remaining - 1)
+            }
+        })
+        .map_or_else(
+            |remaining| remaining == usize::MAX,
+            |remaining| remaining > 0,
+        )
+}
+
 #[test]
 fn wire_v4_udp_and_kcp_recover_when_negotiation_packets_are_lost() {
     for transport in [Transport::Udp, Transport::Kcp] {
         run_loss_case(transport);
     }
+}
+
+#[test]
+fn failed_v4_resume_keeps_the_old_session_usable() {
+    let server_key = Keypair::generate().expect("server key");
+    let client_key = Keypair::generate().expect("client key");
+    let server_public = server_key.public.clone();
+    let server = GameRuntime::new(GameRuntimeConfig::production()).expect("server runtime");
+    let client = GameRuntime::new_with_client_security(
+        GameRuntimeConfig::production(),
+        ClientSecurity::pinned(client_key, server_public),
+    )
+    .expect("client runtime");
+    let listener = server
+        .listen_range(GameRangeServerConfig {
+            transport: Transport::Udp,
+            bind_addr: "127.0.0.1:0".parse().expect("bind address"),
+            local_key: server_key,
+            initial_encryption: true,
+            protocol: GameProtocolRange::new(0x5253_554d, 1, 3),
+        })
+        .expect("range listener");
+    let listener_address = server
+        .endpoint_local_addr(listener)
+        .expect("listener address");
+    let old_endpoint = client
+        .connect_range(GameRangeClientConfig {
+            transport: Transport::Udp,
+            bind_addr: None,
+            remote_addr: listener_address,
+            join_ticket: b"old-login".to_vec(),
+            protocol: GameProtocolRange::new(0x5253_554d, 1, 3),
+        })
+        .expect("old connection");
+
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut old_server = None;
+    let mut old_client = None;
+    while (old_server.is_none() || old_client.is_none()) && Instant::now() < deadline {
+        for event in server.poll(32, Duration::from_millis(5)) {
+            match event {
+                GameEvent::AuthRequest { session, .. } => {
+                    server.auth_decide(session, true).expect("authorize old")
+                }
+                GameEvent::SessionReady { session, .. } => old_server = Some(session),
+                _ => {}
+            }
+        }
+        for event in client.poll(32, Duration::from_millis(5)) {
+            if let GameEvent::SessionReady { endpoint, session } = event {
+                if endpoint == old_endpoint {
+                    old_client = Some(session);
+                }
+            }
+        }
+    }
+    let old_server = old_server.expect("old server ready");
+    let old_client = old_client.expect("old client ready");
+    server
+        .issue_resume_ticket(old_server, b"player")
+        .expect("issue ticket");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let ticket = loop {
+        assert!(Instant::now() < deadline, "resume ticket did not arrive");
+        if let Some(ticket) = client
+            .poll(32, Duration::from_millis(5))
+            .into_iter()
+            .find_map(|event| match event {
+                GameEvent::ResumeTicket { ticket, .. } => Some(ticket),
+                _ => None,
+            })
+        {
+            break ticket;
+        }
+        let _ = server.poll(32, Duration::ZERO);
+    };
+
+    let proxy = LossyUdpProxy::start(listener_address);
+    let resumed_endpoint = client
+        .connect_range_resume(
+            GameRangeClientConfig {
+                transport: Transport::Udp,
+                bind_addr: None,
+                remote_addr: proxy.address,
+                join_ticket: b"resume-login".to_vec(),
+                protocol: GameProtocolRange::new(0x5253_554d, 1, 3),
+            },
+            old_client,
+            ticket.as_bytes(),
+        )
+        .expect("resume connection");
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut authorized_resume = false;
+    while !authorized_resume && Instant::now() < deadline {
+        for event in server.poll(32, Duration::from_millis(5)) {
+            if let GameEvent::ResumeRequest { session, .. } = event {
+                proxy.forward_one_server_packet_then_block();
+                server.auth_decide(session, true).expect("authorize resume");
+                authorized_resume = true;
+            }
+        }
+        let _ = client.poll(32, Duration::from_millis(5));
+    }
+    assert!(
+        authorized_resume,
+        "resume did not reach business authorization"
+    );
+
+    // Keep both runtimes driving beyond the v4 negotiation deadline. The resumed route can fail,
+    // but the original direct route must not be invalidated before a mapping event is published.
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        assert!(
+            !server
+                .poll(32, Duration::from_millis(5))
+                .iter()
+                .any(|event| matches!(event, GameEvent::SessionResumed { .. })),
+            "blocked negotiation cannot publish a server mapping"
+        );
+        assert!(
+            !client
+                .poll(32, Duration::from_millis(5))
+                .iter()
+                .any(|event| matches!(event, GameEvent::SessionResumed { endpoint, .. } if *endpoint == resumed_endpoint)),
+            "blocked negotiation cannot publish a client mapping"
+        );
+    }
+
+    client
+        .send(old_client, b"client-old-route")
+        .expect("old client remains ready");
+    await_message(&server, old_server, b"client-old-route");
+    server
+        .send(old_server, b"server-old-route")
+        .expect("old server remains ready");
+    await_message(&client, old_client, b"server-old-route");
+
+    client.stop(Duration::ZERO).expect("stop client");
+    server.stop(Duration::ZERO).expect("stop server");
+}
+
+fn await_message(runtime: &GameRuntime, session: u64, expected: &[u8]) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if runtime
+            .poll(32, Duration::from_millis(5))
+            .into_iter()
+            .any(|event| {
+                matches!(event, GameEvent::Message(message) if message.session == session && message.payload.as_ref() == expected)
+            })
+        {
+            return;
+        }
+    }
+    panic!("message did not arrive on preserved old session");
 }
 
 fn run_loss_case(transport: Transport) {

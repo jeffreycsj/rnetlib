@@ -10,7 +10,7 @@ use crate::envelope::{decode, DecodedEnvelope};
 use crate::event::{GameEvent, GameMessage};
 use crate::heartbeat::HeartbeatTracker;
 use crate::join;
-use crate::observe::{HeartbeatMetrics, ResumeMetrics};
+use crate::observe::{HeartbeatMetrics, ProtocolMetrics, ResumeMetrics};
 use crate::quality::{QualityPolicy, UdpSessionQuality};
 use crate::range_state::RangeRuntimeState;
 use crate::realtime::LatestQueue;
@@ -52,6 +52,7 @@ pub struct GameRuntime {
     pub(crate) ready_sessions: RwLock<HashSet<Handle>>,
     pub(crate) heartbeat_metrics: HeartbeatMetrics,
     pub(crate) resume_metrics: ResumeMetrics,
+    pub(crate) protocol_metrics: ProtocolMetrics,
     pub(crate) quality_policy: QualityPolicy,
     pub(crate) realtime: Mutex<LatestQueue>,
     pub(crate) resume: Mutex<ResumeRuntimeState>,
@@ -121,6 +122,7 @@ impl GameRuntime {
             ready_sessions: RwLock::new(HashSet::new()),
             heartbeat_metrics: HeartbeatMetrics::default(),
             resume_metrics: ResumeMetrics::default(),
+            protocol_metrics: ProtocolMetrics::default(),
             quality_policy: config.quality_policy,
             realtime: Mutex::new(realtime),
             resume: Mutex::new(resume),
@@ -416,127 +418,6 @@ impl GameRuntime {
         self.network.rekey_session(session)
     }
 
-    /// Polls typed game events. Unsupported internal controls fail closed until implemented.
-    pub fn poll(&self, capacity: usize, timeout: Duration) -> Vec<GameEvent> {
-        if capacity == 0 {
-            return Vec::new();
-        }
-        // Game controls are handled by the same event queue as lifecycle changes. Serializing
-        // polls preserves their order and keeps challenge state single-writer.
-        let _guard = self.poll_guard.lock().expect("game poll lock poisoned");
-        self.flush_realtime(self.realtime_flush_batch);
-        let mut carried = Vec::new();
-        self.range
-            .lock()
-            .expect("range state poisoned")
-            .drain_completed(&mut carried, capacity);
-        if !carried.is_empty() {
-            self.drive_heartbeats();
-            self.drive_clock_sync();
-            self.drive_range_negotiation();
-            return carried;
-        }
-        let deadline = Instant::now().checked_add(timeout);
-        let mut internal_events = 0usize;
-        loop {
-            // Authenticated replies already queued by I/O workers take precedence over timeout.
-            // Drain even when a batch contains only internal controls, so a small public capacity
-            // cannot leave a timely acknowledgement stranded behind other control events.
-            let buffered = self.network.poll_events(capacity, Duration::ZERO);
-            if !buffered.is_empty() {
-                internal_events = internal_events.saturating_add(buffered.len());
-                let output = self.convert_events(buffered, capacity);
-                // Hidden controls and public events alike must not defer liveness scheduling.
-                // Conversion runs first so already queued authenticated acknowledgements win.
-                self.drive_heartbeats();
-                self.drive_clock_sync();
-                self.drive_range_negotiation();
-                if !output.is_empty() {
-                    return output;
-                }
-                // A malicious authenticated peer cannot keep one poll call trapped forever by
-                // continuously filling the queue with controls that are hidden from game code.
-                if internal_events >= 1024 {
-                    return Vec::new();
-                }
-                continue;
-            }
-            self.drive_heartbeats();
-            self.drive_clock_sync();
-            self.drive_range_negotiation();
-            let remaining = deadline
-                .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-                .unwrap_or(timeout);
-            let wait = if self
-                .heartbeat_trackers
-                .lock()
-                .expect("heartbeat table poisoned")
-                .is_empty()
-            {
-                remaining
-            } else {
-                remaining.min(Duration::from_millis(50))
-            };
-            let events = self.network.poll_events(capacity, wait);
-            internal_events = internal_events.saturating_add(events.len());
-            let output = self.convert_events(events, capacity);
-            self.drive_heartbeats();
-            self.drive_clock_sync();
-            self.drive_range_negotiation();
-            if !output.is_empty()
-                || timeout.is_zero()
-                || deadline.is_some_and(|deadline| Instant::now() >= deadline)
-                || internal_events >= 1024
-            {
-                return output;
-            }
-        }
-    }
-
-    fn convert_events(&self, events: Vec<Event>, capacity: usize) -> Vec<GameEvent> {
-        let mut output = Vec::with_capacity(events.len());
-        for event in events {
-            let endpoint = event.endpoint;
-            let session = event.session;
-            let is_business_message = event.event_type == EventType::Message;
-            let integrity_verified = event.integrity_verified;
-            match self.convert_event(event) {
-                Ok(Some(event)) => {
-                    self.log_game_event(&event);
-                    self.range
-                        .lock()
-                        .expect("range state poisoned")
-                        .queue_public(event, &mut output, capacity);
-                }
-                Ok(None) => {}
-                Err(_) => {
-                    // Only an actual plaintext business record may be treated as untrusted
-                    // input. A later encrypted record must still fail closed after a mode switch.
-                    if session != 0
-                        && !(self.allow_plaintext_business_data
-                            && is_business_message
-                            && !integrity_verified)
-                    {
-                        let _ = self
-                            .network
-                            .close_session(session, ErrorCode::ProtocolError);
-                    }
-                    let violation = GameEvent::ProtocolViolation { endpoint, session };
-                    self.log_game_event(&violation);
-                    self.range
-                        .lock()
-                        .expect("range state poisoned")
-                        .queue_public(violation, &mut output, capacity);
-                }
-            }
-            self.range
-                .lock()
-                .expect("range state poisoned")
-                .drain_completed(&mut output, capacity);
-        }
-        output
-    }
-
     pub(crate) fn convert_event(&self, mut event: Event) -> Result<Option<GameEvent>> {
         let converted = match event.event_type {
             EventType::RuntimeStarted => GameEvent::RuntimeStarted,
@@ -591,12 +472,6 @@ impl GameRuntime {
                         (state.client_endpoints.remove(&event.endpoint), false)
                     }
                 };
-                if let Some(old) = old_session {
-                    // A valid ticket did not authorize the player. Only this post-authorization
-                    // transport event transfers ownership and invalidates the old network route.
-                    let _ = self.network.close_session(old, ErrorCode::Cancelled);
-                    self.forget_ready_session(old);
-                }
                 self.track_session(event.session);
                 self.track_clock_session(event.session, !server_session);
                 self.track_quality_session(event.session, transport);
@@ -611,6 +486,12 @@ impl GameRuntime {
                     server_resume,
                 )? {
                     return Ok(None);
+                }
+                if let Some(old) = old_session {
+                    // Exact-version wire v3 is ready at SessionOpened. Wire v4 returned above and
+                    // defers this takeover until SELECT/ACK/READY publication.
+                    let _ = self.network.close_session(old, ErrorCode::Cancelled);
+                    self.forget_ready_session(old);
                 }
                 if server_resume {
                     let old = old_session.expect("server resume has an old session");

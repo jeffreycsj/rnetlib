@@ -13,6 +13,7 @@ mod heartbeat_runtime;
 mod join;
 mod lifecycle;
 mod observe;
+mod poll_runtime;
 mod quality;
 mod quality_runtime;
 mod range_api;
@@ -36,7 +37,7 @@ pub use event::{
     GameEvent, GameMessage, NetworkQuality, QualityBasis, QualityGrade, ResumeTicket,
     SensitiveBytes,
 };
-pub use observe::{HeartbeatMetricsSnapshot, ResumeMetricsSnapshot};
+pub use observe::{HeartbeatMetricsSnapshot, ProtocolMetricsSnapshot, ResumeMetricsSnapshot};
 pub use quality::{QualityPolicy, UdpLossSnapshot};
 pub use range_state::RangeBufferSnapshot;
 pub use realtime::{RealtimeQueueConfig, RealtimeQueueSnapshot};

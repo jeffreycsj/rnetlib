@@ -546,6 +546,9 @@ pub unsafe extern "C" fn rnet_game_poll_events(
         unsafe { out_count.write(0) };
         let entry = game_registry::lease(runtime)?;
         if capacity == 0 {
+            // A zero-capacity call is a nonblocking maintenance tick. This keeps authenticated
+            // controls and liveness state progressing without requiring a dummy event buffer.
+            let _ = entry.runtime.poll(0, Duration::ZERO);
             return Ok(());
         }
         let polled = entry

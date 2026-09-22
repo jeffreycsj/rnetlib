@@ -362,6 +362,12 @@ impl GameRuntime {
                 .expect("game ready table poisoned")
                 .insert(session);
         }
+        if let Some(old) = old_session {
+            // Version negotiation is now complete. Invalidate the previous route immediately
+            // before returning its replacement event; failed negotiation never reaches here.
+            let _ = self.network.close_session(old, ErrorCode::Cancelled);
+            self.forget_ready_session(old);
+        }
         Ok(Some(if let Some(old_session) = old_session {
             GameEvent::SessionResumed {
                 endpoint,

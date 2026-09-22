@@ -678,7 +678,7 @@ typedef struct rnet_game_quality {
 typedef struct rnet_game_clock_sync {
   uint32_t struct_size;
   uint32_t abi_version;
-  uint32_t available;
+  uint32_t available; /* has_sample: 0 for server sessions or before the first sample */
   uint32_t reserved;
   int64_t server_minus_client_us;
   uint64_t rtt_us;

@@ -45,6 +45,128 @@ fn queued_public_events_do_not_starve_expired_heartbeat_checks() {
 }
 
 #[test]
+fn zero_capacity_poll_still_advances_heartbeat_timeouts() {
+    let runtime = GameRuntime::new(
+        GameRuntimeConfig::production()
+            .with_heartbeat(Duration::from_millis(10), Duration::from_millis(100)),
+    )
+    .expect("runtime");
+    let old = Instant::now() - Duration::from_secs(1);
+    let mut tracker =
+        HeartbeatTracker::new(Duration::from_millis(10), Duration::from_millis(100), old)
+            .expect("tracker");
+    tracker
+        .mark_sent(7, old + Duration::from_millis(10))
+        .expect("outstanding probe");
+    runtime
+        .heartbeat_trackers
+        .lock()
+        .expect("trackers")
+        .insert(42, tracker);
+
+    assert!(runtime.poll(0, Duration::from_secs(1)).is_empty());
+    assert_eq!(runtime.heartbeat_metrics_snapshot().timeouts, 1);
+}
+
+#[test]
+fn zero_capacity_poll_does_not_move_an_unbounded_public_backlog() {
+    let runtime = GameRuntime::new(GameRuntimeConfig::production()).expect("runtime");
+    for protocol_id in 100..104 {
+        runtime
+            .listen(GameServerConfig {
+                transport: Transport::Tcp,
+                bind_addr: "127.0.0.1:0".parse().expect("address"),
+                local_key: Keypair::generate().expect("key"),
+                initial_encryption: true,
+                protocol: GameProtocol::new(protocol_id, 1),
+            })
+            .expect("listener");
+    }
+
+    for _ in 0..32 {
+        assert!(runtime.poll(0, Duration::ZERO).is_empty());
+    }
+    assert_eq!(
+        runtime
+            .range
+            .lock()
+            .expect("range")
+            .completed_len_for_test(),
+        1,
+        "zero-capacity maintenance must not relocate the bounded transport queue"
+    );
+}
+
+#[test]
+fn completed_backlog_does_not_starve_authenticated_heartbeat_controls() {
+    let key = Keypair::generate().expect("server key");
+    let client_key = Keypair::generate().expect("client key");
+    let runtime = GameRuntime::new_with_client_security(
+        GameRuntimeConfig::production()
+            .with_heartbeat(Duration::from_millis(20), Duration::from_millis(200)),
+        ClientSecurity::pinned(client_key, key.public.clone()),
+    )
+    .expect("runtime");
+    let listener = runtime
+        .listen(GameServerConfig {
+            transport: Transport::Tcp,
+            bind_addr: "127.0.0.1:0".parse().expect("address"),
+            local_key: key,
+            initial_encryption: true,
+            protocol: GameProtocol::new(91, 1),
+        })
+        .expect("listener");
+    let client = runtime
+        .connect(GameClientConfig {
+            transport: Transport::Tcp,
+            bind_addr: None,
+            remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
+            join_ticket: b"join".to_vec(),
+            protocol: GameProtocol::new(91, 1),
+        })
+        .expect("client");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut ready = 0;
+    while ready < 2 {
+        assert!(Instant::now() < deadline, "sessions did not become ready");
+        for event in runtime.poll(16, Duration::from_millis(5)) {
+            match event {
+                GameEvent::AuthRequest { session, .. } => {
+                    runtime.auth_decide(session, true).expect("authorize")
+                }
+                GameEvent::SessionReady { .. } => ready += 1,
+                _ => {}
+            }
+        }
+    }
+    assert_ne!(listener, client);
+    for index in 0..100 {
+        runtime
+            .range
+            .lock()
+            .expect("range")
+            .push_completed_for_test(GameEvent::Writable {
+                endpoint: 999,
+                session: 10_000 + index,
+            });
+    }
+    let deadline = Instant::now() + Duration::from_millis(350);
+    while Instant::now() < deadline {
+        assert_eq!(runtime.poll(1, Duration::ZERO).len(), 1);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let metrics = runtime.heartbeat_metrics_snapshot();
+    assert_eq!(
+        metrics.timeouts, 0,
+        "completed events starved heartbeat ACKs"
+    );
+    assert!(
+        metrics.replies_matched >= 1,
+        "heartbeat ACKs were not consumed"
+    );
+}
+
+#[test]
 fn runtime_rejects_invalid_heartbeat_policy_before_starting_threads() {
     let error = GameRuntime::new(
         GameRuntimeConfig::production().with_heartbeat(Duration::ZERO, Duration::from_secs(1)),
@@ -204,15 +326,19 @@ fn malformed_plaintext_business_frame_does_not_close_a_ready_session() {
         .network
         .send(client_session, 0, &forged)
         .expect("send forged business frame");
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut violation_seen = false;
-    while !violation_seen {
-        assert!(Instant::now() < deadline, "violation not reported");
-        violation_seen = runtime
-            .poll(16, Duration::from_millis(10))
-            .iter()
-            .any(|event| matches!(event, GameEvent::ProtocolViolation { session, .. } if *session == server_session));
+    let deadline = Instant::now() + Duration::from_millis(200);
+    while Instant::now() < deadline {
+        assert!(
+            !runtime
+                .poll(16, Duration::from_millis(10))
+                .iter()
+                .any(|event| matches!(event, GameEvent::ProtocolViolation { session, .. } if *session == server_session)),
+            "unauthenticated plaintext corruption must not reach the game loop"
+        );
     }
+    assert!(runtime
+        .prometheus_snapshot()
+        .contains("rnet_game_plaintext_invalid_envelopes_dropped_total 1"));
     runtime
         .send(client_session, b"still-alive")
         .expect("client remains connected");
