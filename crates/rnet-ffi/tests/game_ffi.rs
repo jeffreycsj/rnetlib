@@ -3,7 +3,7 @@ use rnet::{
     rnet_game_client_resume_connect, rnet_game_clock_micros, rnet_game_clock_sync_snapshot,
     rnet_game_config_init, rnet_game_endpoint_local_port, rnet_game_issue_resume_ticket,
     rnet_game_metrics_snapshot, rnet_game_network_quality, rnet_game_poll_events,
-    rnet_game_prometheus_snapshot, rnet_game_range_buffer_snapshot,
+    rnet_game_profile_defaults, rnet_game_prometheus_snapshot, rnet_game_range_buffer_snapshot,
     rnet_game_realtime_queue_snapshot, rnet_game_runtime_create, rnet_game_runtime_create_logged,
     rnet_game_runtime_destroy, rnet_game_runtime_stop, rnet_game_send, rnet_game_send_latest,
     rnet_game_server_listen, rnet_game_session_close, rnet_runtime_create_v5, rnet_runtime_destroy,
@@ -12,8 +12,10 @@ use rnet::{
     RnetGameRangeBuffer, RnetGameRealtimeQueue, RnetGameServerConfig, RnetLoggerV2, RnetSlice,
     RNET_ABI_VERSION, RNET_E_HANDSHAKE_REQUIRED, RNET_E_INVALID_ARGUMENT, RNET_E_INVALID_HANDLE,
     RNET_E_INVALID_STATE, RNET_E_WOULD_BLOCK, RNET_GAME_AUTH_REQUEST, RNET_GAME_MESSAGE,
+    RNET_GAME_PROFILE_REALTIME, RNET_GAME_PROFILE_RELIABLE_REALTIME, RNET_GAME_PROFILE_SESSION,
     RNET_GAME_RESUME_REQUEST, RNET_GAME_RESUME_TICKET, RNET_GAME_SESSION_READY,
-    RNET_GAME_SESSION_RESUMED, RNET_LOG_INFO, RNET_OK, RNET_TRANSPORT_TCP,
+    RNET_GAME_SESSION_RESUMED, RNET_LOG_INFO, RNET_OK, RNET_TRANSPORT_KCP, RNET_TRANSPORT_TCP,
+    RNET_TRANSPORT_UDP,
 };
 use rnet_security::Keypair;
 use std::mem::size_of;
@@ -25,6 +27,40 @@ static GAME_LOG_CALLBACK_STOP: AtomicI32 = AtomicI32::new(i32::MAX);
 static GAME_LOG_CALLBACK_DESTROY: AtomicI32 = AtomicI32::new(i32::MAX);
 static GAME_LOG_CALLBACK_METRICS: AtomicI32 = AtomicI32::new(i32::MAX);
 static GAME_LOG_RECORDS: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn game_profiles_return_stable_transport_and_encryption_defaults() {
+    for (profile, expected_transport) in [
+        (RNET_GAME_PROFILE_REALTIME, RNET_TRANSPORT_UDP),
+        (RNET_GAME_PROFILE_RELIABLE_REALTIME, RNET_TRANSPORT_KCP),
+        (RNET_GAME_PROFILE_SESSION, RNET_TRANSPORT_TCP),
+    ] {
+        let mut transport = u32::MAX;
+        let mut encrypted = 0;
+        assert_eq!(
+            unsafe { rnet_game_profile_defaults(profile, &mut transport, &mut encrypted) },
+            RNET_OK
+        );
+        assert_eq!(transport, expected_transport);
+        assert_eq!(encrypted, 1);
+    }
+    let mut transport = 0;
+    let mut encrypted = 0;
+    assert_eq!(
+        unsafe { rnet_game_profile_defaults(0, &mut transport, &mut encrypted) },
+        RNET_E_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe {
+            rnet_game_profile_defaults(
+                RNET_GAME_PROFILE_SESSION,
+                std::ptr::null_mut(),
+                &mut encrypted,
+            )
+        },
+        RNET_E_INVALID_ARGUMENT
+    );
+}
 
 #[test]
 fn range_game_c_abi_selects_version_without_changing_v3_layout() {

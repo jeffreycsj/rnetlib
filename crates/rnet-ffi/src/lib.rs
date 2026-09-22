@@ -10,6 +10,7 @@ mod events;
 mod game;
 mod game_abi;
 mod game_events;
+mod game_profile;
 mod game_range;
 mod game_range_abi;
 mod game_registry;
@@ -29,6 +30,7 @@ pub use error::rnet_last_error_message;
 pub use events::{rnet_buffer_release, rnet_poll_events, rnet_poll_events_ex};
 pub use game::*;
 pub use game_abi::*;
+pub use game_profile::*;
 pub use game_range::*;
 pub use game_range_abi::*;
 pub use observe::{

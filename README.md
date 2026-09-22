@@ -25,24 +25,24 @@ The old `rnet_endpoint_open`, `rnet_listener_open`, and `rnet_client_join` APIs 
 
 ## Game API quick start
 
-Rust games use the same listener and send calls for TCP, UDP, and KCP. The transport is selected when the endpoint is created:
+Rust games use the same listener and send calls for TCP, UDP, and KCP. `GameProfile` supplies encrypted scenario defaults (`Realtime` → UDP, `ReliableRealtime` → KCP, `Session` → TCP); advanced callers may still fill the explicit transport field:
 
 ```rust
-use rnet_core::Transport;
-use rnet_game::{GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig};
+use rnet_game::{GameProfile, GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig};
 use rnet_security::Keypair;
 
 let runtime = GameRuntime::new(GameRuntimeConfig::production())?;
-let listener = runtime.listen(GameServerConfig {
-    transport: Transport::Kcp, // change only this value for TCP or UDP
-    bind_addr: "127.0.0.1:7000".parse()?,
-    local_key: Keypair::generate()?,
-    initial_encryption: true,
-    protocol: GameProtocol::new(0x4741_4d45, 1),
-})?;
+let listener = runtime.listen(GameServerConfig::for_profile(
+    GameProfile::ReliableRealtime,
+    "127.0.0.1:7000".parse()?,
+    Keypair::generate()?,
+    GameProtocol::new(0x4741_4d45, 1),
+))?;
 ```
 
 Create the client runtime with `GameRuntime::new_with_client_security` and a pinned server public key, then call `connect` with a numeric address or `connect_host` with a hostname. The server receives `GameEvent::AuthRequest` and calls `auth_decide` after validating the join ticket. Both peers receive `GameEvent::SessionReady` before they use `send(session, payload)` and `poll(...)`. No business message type, stream ID, or transport argument is required on send. The server alone can call `set_encryption` or `rekey`; clients follow the authenticated change using the same session handle.
+
+Equivalent helpers are `rnet_game_profile_defaults` in C, `rnet::game_*_options(GameProfile)` in C++11, and `Game*ConfigForProfile` in Go. Profiles only create existing configs; they are not transmitted and never change a live session's transport.
 
 Sending and receiving use the same event loop on servers and clients. Keep polling for the lifetime of the runtime; internal handshake, heartbeat, clock-sync and security controls also advance through `poll`:
 

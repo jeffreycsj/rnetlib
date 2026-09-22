@@ -43,6 +43,12 @@ enum {
 };
 
 enum {
+  RNET_GAME_PROFILE_REALTIME = 1,
+  RNET_GAME_PROFILE_RELIABLE_REALTIME = 2,
+  RNET_GAME_PROFILE_SESSION = 3
+};
+
+enum {
   RNET_SECURITY_PLAINTEXT = 1,
   RNET_SECURITY_ENCRYPTED = 2
 };
@@ -776,6 +782,9 @@ typedef struct rnet_game_buffer {
 } rnet_game_buffer_t;
 
 int32_t rnet_game_config_init(rnet_game_config_t *out);
+/* Expands a scenario profile into existing config fields without changing wire semantics. */
+int32_t rnet_game_profile_defaults(uint32_t profile, uint32_t *out_transport,
+                                   uint32_t *out_initial_encryption);
 int32_t rnet_game_runtime_create(const rnet_game_config_t *config,
                                  const rnet_client_security_t *client_security,
                                  rnet_runtime_t *out);

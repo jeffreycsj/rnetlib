@@ -3,19 +3,19 @@
 `rnet-game` is the current game-facing API. It is a production candidate, not a completed game SDK: authenticated heartbeat, per-session RTT/jitter, UDP sequence-gap and KCP retransmission estimates, protected four-timestamp client clock samples, quality grades, bounded real-time snapshot replacement, opt-in wire-v4 version-range negotiation, and single-runtime one-use reconnect tickets are available. The game flow, range joins, clock snapshot, cumulative metrics and optional bounded game-event logging are also available through the additive C ABI and C++11/Go facades. Cross-instance recovery is intentionally out of scope; target-environment long-soak certification and some advanced telemetry remain unfinished. The transport library underneath still exposes its existing C/C++11/Go APIs.
 
 ```rust
-use rnet_core::Transport;
-use rnet_game::{GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig};
+use rnet_game::{GameProfile, GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig};
 use rnet_security::Keypair;
 
 let runtime = GameRuntime::new(GameRuntimeConfig::production())?;
-let listener = runtime.listen(GameServerConfig {
-    transport: Transport::Kcp, // fixed for this endpoint; no transport argument on send
-    bind_addr: "0.0.0.0:7000".parse()?,
-    local_key: Keypair::generate()?,
-    initial_encryption: true,
-    protocol: GameProtocol::new(0x4741_4d45, 1),
-})?;
+let listener = runtime.listen(GameServerConfig::for_profile(
+    GameProfile::ReliableRealtime,
+    "0.0.0.0:7000".parse()?,
+    Keypair::generate()?,
+    GameProtocol::new(0x4741_4d45, 1),
+))?;
 ```
+
+Profiles are additive configuration helpers: `Realtime` selects UDP, `ReliableRealtime` selects KCP, and `Session` selects TCP; server helpers enable initial business encryption. Existing explicit transport fields remain available, and neither profile nor transport appears in `send`. C uses `rnet_game_profile_defaults`, C++11 uses `game_server_options` / `game_client_options` (and range variants), and Go uses `Game*ConfigForProfile`.
 
 For clients, construct `ClientSecurity::pinned(client_key, server_public_key)` and pass it to `GameRuntime::new_with_client_security`. Then call `connect(GameClientConfig { ... })` for a numeric address, or `connect_host(GameHostClientConfig { ... })` for a hostname. Both configs select transport once and carry an opaque `join_ticket`; neither exposes an encryption setting.
 

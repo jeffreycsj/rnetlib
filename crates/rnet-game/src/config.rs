@@ -2,11 +2,52 @@
 
 use crate::quality::QualityPolicy;
 use crate::realtime::RealtimeQueueConfig;
-use rnet_core::Transport;
+use rnet_core::{ErrorCode, RnetError, Transport};
 use rnet_security::Keypair;
 use rnet_transport::RuntimeConfig;
 use std::net::SocketAddr;
 use std::time::Duration;
+
+/// High-level game traffic shape used only to choose safe connection defaults.
+///
+/// A profile is expanded into one immutable transport when configuration is created. It is not
+/// sent on the wire and never appears in the message send/receive API.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GameProfile {
+    /// Loss-tolerant input/state traffic: native UDP.
+    Realtime,
+    /// Reliable, ordered, latency-sensitive traffic: KCP.
+    ReliableRealtime,
+    /// Reliable session/login/turn traffic: TCP.
+    Session,
+}
+
+impl GameProfile {
+    /// Returns the stable recommended transport for this profile.
+    pub const fn transport(self) -> Transport {
+        match self {
+            Self::Realtime => Transport::Udp,
+            Self::ReliableRealtime => Transport::Kcp,
+            Self::Session => Transport::Tcp,
+        }
+    }
+}
+
+impl TryFrom<u32> for GameProfile {
+    type Error = RnetError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Realtime),
+            2 => Ok(Self::ReliableRealtime),
+            3 => Ok(Self::Session),
+            _ => Err(RnetError::new(
+                ErrorCode::InvalidArgument,
+                "unknown game profile",
+            )),
+        }
+    }
+}
 
 /// Exact application protocol identity selected by one client connection.
 ///
@@ -164,6 +205,24 @@ pub struct GameServerConfig {
     pub protocol: GameProtocol,
 }
 
+impl GameServerConfig {
+    /// Creates an encrypted exact-version listener using the profile's recommended transport.
+    pub fn for_profile(
+        profile: GameProfile,
+        bind_addr: SocketAddr,
+        local_key: Keypair,
+        protocol: GameProtocol,
+    ) -> Self {
+        Self {
+            transport: profile.transport(),
+            bind_addr,
+            local_key,
+            initial_encryption: true,
+            protocol,
+        }
+    }
+}
+
 /// Explicit wire-v4 listener. Existing `GameServerConfig` remains exact-version wire v3.
 #[derive(Clone, Debug)]
 pub struct GameRangeServerConfig {
@@ -172,6 +231,24 @@ pub struct GameRangeServerConfig {
     pub local_key: Keypair,
     pub initial_encryption: bool,
     pub protocol: GameProtocolRange,
+}
+
+impl GameRangeServerConfig {
+    /// Creates an encrypted wire-v4 listener using the profile's recommended transport.
+    pub fn for_profile(
+        profile: GameProfile,
+        bind_addr: SocketAddr,
+        local_key: Keypair,
+        protocol: GameProtocolRange,
+    ) -> Self {
+        Self {
+            transport: profile.transport(),
+            bind_addr,
+            local_key,
+            initial_encryption: true,
+            protocol,
+        }
+    }
 }
 
 /// Client join configuration; encryption is intentionally controlled by the server.
@@ -185,6 +262,24 @@ pub struct GameClientConfig {
     pub protocol: GameProtocol,
 }
 
+impl GameClientConfig {
+    /// Creates a numeric-address client join using the profile's recommended transport.
+    pub fn for_profile(
+        profile: GameProfile,
+        remote_addr: SocketAddr,
+        join_ticket: Vec<u8>,
+        protocol: GameProtocol,
+    ) -> Self {
+        Self {
+            transport: profile.transport(),
+            bind_addr: None,
+            remote_addr,
+            join_ticket,
+            protocol,
+        }
+    }
+}
+
 /// Explicit wire-v4 numeric-address client join.
 #[derive(Clone, Debug)]
 pub struct GameRangeClientConfig {
@@ -193,6 +288,24 @@ pub struct GameRangeClientConfig {
     pub remote_addr: SocketAddr,
     pub join_ticket: Vec<u8>,
     pub protocol: GameProtocolRange,
+}
+
+impl GameRangeClientConfig {
+    /// Creates a numeric-address wire-v4 join using the profile's recommended transport.
+    pub fn for_profile(
+        profile: GameProfile,
+        remote_addr: SocketAddr,
+        join_ticket: Vec<u8>,
+        protocol: GameProtocolRange,
+    ) -> Self {
+        Self {
+            transport: profile.transport(),
+            bind_addr: None,
+            remote_addr,
+            join_ticket,
+            protocol,
+        }
+    }
 }
 
 impl std::fmt::Debug for GameClientConfig {
@@ -218,6 +331,25 @@ pub struct GameHostClientConfig {
     pub protocol: GameProtocol,
 }
 
+impl GameHostClientConfig {
+    /// Creates a hostname join using the profile's recommended transport.
+    pub fn for_profile(
+        profile: GameProfile,
+        host: String,
+        port: u16,
+        join_ticket: Vec<u8>,
+        protocol: GameProtocol,
+    ) -> Self {
+        Self {
+            transport: profile.transport(),
+            host,
+            port,
+            join_ticket,
+            protocol,
+        }
+    }
+}
+
 /// Explicit wire-v4 hostname client join.
 #[derive(Clone, Debug)]
 pub struct GameRangeHostClientConfig {
@@ -226,6 +358,25 @@ pub struct GameRangeHostClientConfig {
     pub port: u16,
     pub join_ticket: Vec<u8>,
     pub protocol: GameProtocolRange,
+}
+
+impl GameRangeHostClientConfig {
+    /// Creates a hostname wire-v4 join using the profile's recommended transport.
+    pub fn for_profile(
+        profile: GameProfile,
+        host: String,
+        port: u16,
+        join_ticket: Vec<u8>,
+        protocol: GameProtocolRange,
+    ) -> Self {
+        Self {
+            transport: profile.transport(),
+            host,
+            port,
+            join_ticket,
+            protocol,
+        }
+    }
 }
 
 impl std::fmt::Debug for GameHostClientConfig {

@@ -111,3 +111,10 @@
 - 对抗复审发现早到业务消息原先只有每会话 32 条/256 KiB 限制，大量协商中会话可叠加占用数 GiB。现增加运行时级消息数与字节预算，分别受 `event_queue_capacity` 和 `max_event_bytes` 限制；消息从协商缓存转入待上抛队列后继续计费，直到应用取走或会话关闭，并有跨会话耗尽/释放回归。当前/峰值/上限及分层拒绝计数可通过 Rust 快照和无 session 标签的 Prometheus 指标追踪。
 - TCP/KCP `LatestOnly` 只在 I/O worker 取槽前允许替换；pickup、替换及入队失败原因均有低基数累计指标。pickup 不代表送达，之后的 I/O 失败仍以会话关闭原因追踪。
 - 尚未执行目标网络的 `tc netem` 丢包/延迟/乱序矩阵和 24 小时以上 soak；这些外部资格测试仍是生产认证边界。
+
+## GameProfile 易用性复审
+
+- `Realtime`、`ReliableRealtime`、`Session` 分别只展开为 UDP、KCP、TCP 的既有配置；profile 不进入 wire，也不出现在收发接口中。
+- C ABI 复用 Rust 的有效值校验和映射，C++11 再从该 ABI 同时取得 transport 与服务端加密默认值，避免跨语言复制规则后发生漂移。
+- Rust/C/C++11/Go 的入口均为追加式 API，既有配置结构布局和显式 transport 用法不变；客户端仍无法自行选择是否加密。
+- profile 只降低正确创建配置的接入成本，不改变队列、可靠性、动态安全切换和恢复语义，也不替代目标环境弱网与长稳准入。

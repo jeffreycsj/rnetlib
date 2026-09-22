@@ -4,8 +4,8 @@
 #include <string>
 
 int main() {
-  rnet::GameRangeServerOptions server;
-  server.transport = rnet::Transport::Tcp;
+  rnet::GameRangeServerOptions server =
+      rnet::game_range_server_options(rnet::GameProfile::Session);
   server.protocol.id = 91;
   server.protocol.min_version = 2;
   server.protocol.max_version = 8;
@@ -15,8 +15,8 @@ int main() {
             server_public_key.begin());
   rnet::GameRuntime runtime(client_key, server_public_key);
   const rnet_endpoint_t listener = runtime.listen_range(server);
-  rnet::GameRangeClientOptions client;
-  client.transport = rnet::Transport::Tcp;
+  rnet::GameRangeClientOptions client =
+      rnet::game_range_client_options(rnet::GameProfile::Session);
   client.host = "localhost";
   client.port = runtime.local_port(listener);
   client.protocol.id = 91;

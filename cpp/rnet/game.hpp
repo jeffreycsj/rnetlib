@@ -5,6 +5,12 @@
 
 namespace rnet {
 
+enum class GameProfile : uint32_t {
+  Realtime = RNET_GAME_PROFILE_REALTIME,
+  ReliableRealtime = RNET_GAME_PROFILE_RELIABLE_REALTIME,
+  Session = RNET_GAME_PROFILE_SESSION,
+};
+
 struct GameProtocol {
   uint64_t id = 0;
   uint32_t version = 0;

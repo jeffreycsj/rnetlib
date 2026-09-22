@@ -27,8 +27,9 @@ mod runtime;
 pub use clock_sync::ClockSyncSample;
 pub use clock_sync_runtime::ClockSyncMetricsSnapshot;
 pub use config::{
-    GameClientConfig, GameHostClientConfig, GameProtocol, GameProtocolRange, GameRangeClientConfig,
-    GameRangeHostClientConfig, GameRangeServerConfig, GameRuntimeConfig, GameServerConfig,
+    GameClientConfig, GameHostClientConfig, GameProfile, GameProtocol, GameProtocolRange,
+    GameRangeClientConfig, GameRangeHostClientConfig, GameRangeServerConfig, GameRuntimeConfig,
+    GameServerConfig,
 };
 pub use diagnostics::GameLoggerSnapshot;
 pub use event::{
@@ -45,6 +46,8 @@ pub use runtime::{GameRuntime, GameSendOptions};
 
 #[cfg(test)]
 mod clock_sync_tests;
+#[cfg(test)]
+mod config_tests;
 #[cfg(test)]
 mod envelope_tests;
 #[cfg(test)]
