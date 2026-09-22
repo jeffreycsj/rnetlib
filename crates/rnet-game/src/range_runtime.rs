@@ -348,19 +348,13 @@ impl GameRuntime {
                 return Ok(None);
             }
             // The revocation check and publication share the resume lock, as in wire v3.
-            self.ready_sessions
-                .write()
-                .expect("game ready table poisoned")
-                .insert(session);
+            self.admission.publish(session);
             resume.inflight_server.remove(&old);
             self.resume_metrics
                 .sessions_resumed
                 .fetch_add(1, Ordering::Relaxed);
         } else {
-            self.ready_sessions
-                .write()
-                .expect("game ready table poisoned")
-                .insert(session);
+            self.admission.publish(session);
         }
         if let Some(old) = old_session {
             // Version negotiation is now complete. Invalidate the previous route immediately

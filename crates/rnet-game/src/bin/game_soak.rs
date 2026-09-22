@@ -9,7 +9,7 @@ use rnet_game::{
     GameClientConfig, GameEvent, GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig,
 };
 use rnet_security::Keypair;
-use rnet_transport::ClientSecurity;
+use rnet_transport::{ClientSecurity, LatencyKind};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -23,8 +23,9 @@ struct Config {
 
 struct SoakCounters {
     sent: u64,
-    received: u64,
     would_block: u64,
+    echo_queued: u64,
+    echo_would_block: u64,
     started: Instant,
     cpu_start: Option<(u64, u64)>,
 }
@@ -141,11 +142,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut next_send = vec![Instant::now(); config.clients];
     let mut sequences = vec![0_u64; config.clients];
     let mut payload = vec![0x5a_u8; config.payload_bytes];
-    let mut receiver = ProbeReceiver::new(config.transport, config.clients, config.payload_bytes);
+    let mut server_receiver =
+        ProbeReceiver::new(config.transport, config.clients, config.payload_bytes);
+    let mut client_receiver =
+        ProbeReceiver::new(config.transport, config.clients, config.payload_bytes);
     let mut counters = SoakCounters {
         sent: 0,
-        received: 0,
         would_block: 0,
+        echo_queued: 0,
+        echo_would_block: 0,
         started: Instant::now(),
         cpu_start: cpu_ticks(),
     };
@@ -176,20 +181,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             next_send[index] = now + tick;
         }
-        poll_messages(&runtime, listener, &mut receiver, &sequences)?;
-        counters.received = receiver.received;
+        poll_messages(
+            &runtime,
+            listener,
+            &mut server_receiver,
+            &mut client_receiver,
+            &sequences,
+            &mut counters,
+        )?;
         if now >= next_report {
-            report(&config, &runtime, &counters, &receiver, "running")?;
+            report(
+                &config,
+                &runtime,
+                &counters,
+                &server_receiver,
+                &client_receiver,
+                "running",
+            )?;
             next_report = now + Duration::from_secs(60);
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    let drain_deadline = Instant::now() + Duration::from_millis(200);
-    while Instant::now() < drain_deadline {
-        poll_messages(&runtime, listener, &mut receiver, &sequences)?;
-        counters.received = receiver.received;
+    let drain_started = Instant::now();
+    let drain_deadline = drain_started + Duration::from_secs(10);
+    let udp_grace_deadline = drain_started + Duration::from_millis(200);
+    while Instant::now() < drain_deadline
+        && ((config.transport == Transport::Udp && Instant::now() < udp_grace_deadline)
+            || runtime.scheduled_queue_snapshot().queued_messages != 0
+            || (config.transport != Transport::Udp && client_receiver.received < counters.sent))
+    {
+        poll_messages(
+            &runtime,
+            listener,
+            &mut server_receiver,
+            &mut client_receiver,
+            &sequences,
+            &mut counters,
+        )?;
+        std::thread::yield_now();
     }
-    report(&config, &runtime, &counters, &receiver, "completed")?;
+    if config.transport != Transport::Udp
+        && (server_receiver.received != counters.sent
+            || counters.echo_queued != counters.sent
+            || client_receiver.received != counters.sent)
+    {
+        return Err(format!(
+            "reliable bidirectional drain incomplete: sent={} server_received={} echo_queued={} client_received={}",
+            counters.sent,
+            server_receiver.received,
+            counters.echo_queued,
+            client_receiver.received
+        )
+        .into());
+    }
+    report(
+        &config,
+        &runtime,
+        &counters,
+        &server_receiver,
+        &client_receiver,
+        "completed",
+    )?;
     runtime.stop(Duration::ZERO)?;
     Ok(())
 }
@@ -197,13 +249,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn poll_messages(
     runtime: &GameRuntime,
     listener: u64,
-    receiver: &mut ProbeReceiver,
+    server_receiver: &mut ProbeReceiver,
+    client_receiver: &mut ProbeReceiver,
     sent_counts: &[u64],
+    counters: &mut SoakCounters,
 ) -> Result<(), Box<dyn std::error::Error>> {
     for event in runtime.poll(4096, Duration::ZERO) {
         match event {
             GameEvent::Message(message) if message.endpoint == listener => {
-                receiver.observe(&message.payload, sent_counts)?;
+                server_receiver.observe(&message.payload, sent_counts)?;
+                match runtime.send(message.session, &message.payload) {
+                    Ok(()) => {
+                        counters.echo_queued = counters.echo_queued.saturating_add(1);
+                    }
+                    Err(error) if error.code() == ErrorCode::WouldBlock => {
+                        counters.echo_would_block = counters.echo_would_block.saturating_add(1);
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            GameEvent::Message(message) => {
+                client_receiver.observe(&message.payload, sent_counts)?;
             }
             GameEvent::SessionClosed { .. }
             | GameEvent::ProtocolViolation { .. }
@@ -220,11 +286,30 @@ fn report(
     config: &Config,
     runtime: &GameRuntime,
     counters: &SoakCounters,
-    receiver: &ProbeReceiver,
+    server_receiver: &ProbeReceiver,
+    client_receiver: &ProbeReceiver,
     status: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let metrics = runtime.metrics_snapshot();
     let heartbeat = runtime.heartbeat_metrics_snapshot();
+    let scheduled = runtime.scheduled_queue_snapshot();
+    let realtime = runtime.realtime_queue_snapshot();
+    let latencies = runtime.latency_snapshot();
+    let send_queue = latencies
+        .iter()
+        .find(|metric| metric.kind == LatencyKind::SendQueue)
+        .map(|metric| metric.latency)
+        .unwrap_or_default();
+    let event_queue = latencies
+        .iter()
+        .find(|metric| metric.kind == LatencyKind::EventQueue)
+        .map(|metric| metric.latency)
+        .unwrap_or_default();
+    let closed_sessions_total = metrics
+        .session_closed_by_reason
+        .iter()
+        .copied()
+        .fold(0_u64, u64::saturating_add);
     let transport = match config.transport {
         Transport::Tcp => "tcp",
         Transport::Udp => "udp",
@@ -247,11 +332,27 @@ fn report(
         })
         .unwrap_or(0.0);
     println!(
-        "status={status} transport={transport} elapsed_seconds={:.3} clients={} payload_bytes={} rate_per_client={} sent={} received={} duplicates={} reordered={} too_old={} would_block={} rtt_samples={} rtt_p95_us={} rtt_p99_us={} heartbeat_timeouts={} event_drops={} protocol_errors={} cpu_percent={cpu_percent:.1} rss_kib={}",
-        counters.started.elapsed().as_secs_f64(), config.clients, config.payload_bytes, config.rate, counters.sent, counters.received,
-        receiver.duplicates, receiver.reordered, receiver.too_old,
-        counters.would_block, heartbeat.rtt.sample_count, heartbeat.rtt.p95_us, heartbeat.rtt.p99_us,
-        heartbeat.timeouts, metrics.events_dropped, metrics.protocol_errors, rss_kib().unwrap_or(0),
+        "status={status} transport={transport} elapsed_seconds={:.3} clients={} payload_bytes={} rate_per_client={} origin_sent={} server_received={} server_duplicates={} server_reordered={} server_too_old={} origin_would_block={} echo_queued={} echo_would_block={} client_received={} client_duplicates={} client_reordered={} client_too_old={} rtt_samples={} rtt_p95_us={} rtt_p99_us={} rtt_p999_us={} rtt_max_us={} heartbeat_timeouts={} scheduled_queue_messages={} scheduled_queue_bytes={} scheduled_admission_rejected={} scheduled_expired={} scheduled_send_failed={} scheduled_backpressure_requeued={} scheduled_queue_delay_samples={} scheduled_queue_delay_p95_us={} scheduled_queue_delay_p99_us={} scheduled_queue_delay_p999_us={} scheduled_queue_delay_max_us={} realtime_queue_messages={} realtime_queue_bytes={} realtime_admission_rejected={} realtime_replaced={} realtime_backpressure_dropped={} realtime_send_failed={} send_queue_samples={} send_queue_p95_us={} send_queue_p99_us={} send_queue_p999_us={} send_queue_max_us={} event_queue_samples={} event_queue_p95_us={} event_queue_p99_us={} event_queue_p999_us={} event_queue_max_us={} transport_queued_send_bytes={} transport_peak_queued_send_bytes={} transport_queued_event_bytes={} current_sessions={} pending_handshakes={} closed_sessions_total={} closed_sessions_by_reason={:?} event_drops={} protocol_errors={} lifecycle_events_rejected={} cpu_percent={cpu_percent:.1} rss_kib={}",
+        counters.started.elapsed().as_secs_f64(), config.clients, config.payload_bytes, config.rate,
+        counters.sent, server_receiver.received, server_receiver.duplicates,
+        server_receiver.reordered, server_receiver.too_old, counters.would_block,
+        counters.echo_queued, counters.echo_would_block, client_receiver.received,
+        client_receiver.duplicates, client_receiver.reordered, client_receiver.too_old,
+        heartbeat.rtt.sample_count, heartbeat.rtt.p95_us, heartbeat.rtt.p99_us,
+        heartbeat.rtt.p999_us, heartbeat.rtt.max_us, heartbeat.timeouts,
+        scheduled.queued_messages, scheduled.queued_bytes, scheduled.admission_rejected,
+        scheduled.expired_dropped, scheduled.send_failed, scheduled.backpressure_requeued,
+        scheduled.queue_delay.sample_count, scheduled.queue_delay.p95_us,
+        scheduled.queue_delay.p99_us, scheduled.queue_delay.p999_us,
+        scheduled.queue_delay.max_us, realtime.queued_messages, realtime.queued_bytes,
+        realtime.admission_rejected, realtime.replaced, realtime.backpressure_dropped,
+        realtime.send_failed, send_queue.sample_count, send_queue.p95_us, send_queue.p99_us,
+        send_queue.p999_us, send_queue.max_us, event_queue.sample_count, event_queue.p95_us,
+        event_queue.p99_us, event_queue.p999_us, event_queue.max_us,
+        metrics.queued_send_bytes, metrics.peak_queued_send_bytes, metrics.queued_event_bytes,
+        metrics.current_sessions, metrics.pending_handshakes, closed_sessions_total,
+        metrics.session_closed_by_reason, metrics.events_dropped, metrics.protocol_errors,
+        metrics.lifecycle_events_rejected, rss_kib().unwrap_or(0),
     );
     std::io::stdout().flush()?;
     Ok(())

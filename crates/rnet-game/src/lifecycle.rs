@@ -2,7 +2,6 @@
 
 use crate::runtime::GameRuntime;
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 impl GameRuntime {
@@ -27,7 +26,7 @@ impl GameRuntime {
         })?;
         // Reject new queue admission before taking the poll lock. Existing admitted work is then
         // either drained within the deadline or counted as a shutdown drop during queue cleanup.
-        self.stopping.store(true, Ordering::Release);
+        self.admission.begin_stop();
         let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
         while (self.scheduled_queue_snapshot().queued_messages != 0
             || self.realtime_queue_snapshot().queued_messages != 0)
@@ -50,10 +49,7 @@ impl GameRuntime {
             .lock()
             .expect("clock table poisoned")
             .clear();
-        self.ready_sessions
-            .write()
-            .expect("game ready table poisoned")
-            .clear();
+        self.admission.clear();
         self.udp_sessions
             .lock()
             .expect("UDP quality table poisoned")

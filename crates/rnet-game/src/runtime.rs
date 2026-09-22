@@ -1,5 +1,6 @@
 //! Game facade orchestration over the transport runtime.
 
+use crate::admission::SendAdmission;
 use crate::clock_sync::ClockSyncTracker;
 use crate::clock_sync_runtime::ClockSyncMetrics;
 use crate::config::{
@@ -21,10 +22,10 @@ use rnet_protocol::control::SecurityMode;
 use rnet_transport::{
     ClientConfig, ClientSecurity, HostClientConfig, NetworkRuntime, SecurityChange, ServerConfig,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -56,7 +57,7 @@ pub struct GameRuntime {
     pub(crate) clock_trackers: Mutex<HashMap<Handle, ClockSyncTracker>>,
     pub(crate) clock_next_scan: Mutex<Instant>,
     pub(crate) clock_metrics: ClockSyncMetrics,
-    pub(crate) ready_sessions: RwLock<HashSet<Handle>>,
+    pub(crate) admission: SendAdmission,
     pub(crate) heartbeat_metrics: HeartbeatMetrics,
     pub(crate) resume_metrics: ResumeMetrics,
     pub(crate) protocol_metrics: ProtocolMetrics,
@@ -69,8 +70,6 @@ pub struct GameRuntime {
     pub(crate) scheduled_flush_batch: usize,
     pub(crate) allow_plaintext_business_data: bool,
     pub(crate) diagnostics: GameDiagnostics,
-    /// Closes send admission before shutdown starts draining the bounded queues.
-    pub(crate) stopping: AtomicBool,
     pub(crate) poll_guard: Mutex<()>,
 }
 
@@ -132,7 +131,7 @@ impl GameRuntime {
             clock_trackers: Mutex::new(HashMap::new()),
             clock_next_scan: Mutex::new(clock_origin),
             clock_metrics: ClockSyncMetrics::default(),
-            ready_sessions: RwLock::new(HashSet::new()),
+            admission: SendAdmission::new(),
             heartbeat_metrics: HeartbeatMetrics::default(),
             resume_metrics: ResumeMetrics::default(),
             protocol_metrics: ProtocolMetrics::default(),
@@ -148,7 +147,6 @@ impl GameRuntime {
             scheduled_flush_batch,
             allow_plaintext_business_data,
             diagnostics: GameDiagnostics::new(),
-            stopping: AtomicBool::new(false),
             poll_guard: Mutex::new(()),
         })
     }
@@ -353,12 +351,7 @@ impl GameRuntime {
 
     /// A completed transport handshake is insufficient until the facade has published Ready.
     pub(crate) fn ensure_game_ready(&self, session: Handle) -> Result<()> {
-        if self
-            .ready_sessions
-            .read()
-            .expect("game ready table poisoned")
-            .contains(&session)
-        {
+        if self.admission.contains(session) {
             Ok(())
         } else {
             // Distinguish a genuinely pending game session from a stale/closed handle. Callers
@@ -372,10 +365,7 @@ impl GameRuntime {
     }
 
     pub(crate) fn forget_game_ready(&self, session: Handle) {
-        self.ready_sessions
-            .write()
-            .expect("game ready table poisoned")
-            .remove(&session);
+        self.admission.remove(session);
     }
 
     pub(crate) fn forget_ready_session(&self, session: Handle) {
@@ -528,19 +518,13 @@ impl GameRuntime {
                     }
                     // Ready publication and the final revocation check share this lock.
                     // A concurrent kick cannot observe a half-published takeover.
-                    self.ready_sessions
-                        .write()
-                        .expect("game ready table poisoned")
-                        .insert(event.session);
+                    self.admission.publish(event.session);
                     state.inflight_server.remove(&old);
                     self.resume_metrics
                         .sessions_resumed
                         .fetch_add(1, Ordering::Relaxed);
                 } else {
-                    self.ready_sessions
-                        .write()
-                        .expect("game ready table poisoned")
-                        .insert(event.session);
+                    self.admission.publish(event.session);
                 }
                 drop(transports);
                 if let Some(old_session) = old_session {

@@ -21,6 +21,6 @@
 
 - The workspace declares Rust 1.85 as its MSRV, and CI pins 1.85.0 for a locked, all-target compilation gate.
 - The final local production gate recorded in the qualification reports used TencentOS Rust 1.96.0. Formatting and Clippy do not replace the system compiler or PATH.
-- The latest dependency gate scanned 83 locked packages with `cargo audit` and reported no advisory. `cargo deny check` passed advisories, licenses, bans, and sources; duplicate-version warnings remain explicitly visible.
+- The latest dependency gate scanned 104 locked packages, including the optional test-only Loom graph, with `cargo audit` and reported no advisory. `cargo deny check` passed advisories, licenses, bans, and sources; duplicate-version warnings remain explicitly visible.
 
 The exact repository results, unavailable sanitizer/Miri rationale, short transport probe, and final external gates are recorded in [game-production-qualification.md](game-production-qualification.md).

@@ -1,5 +1,6 @@
 //! Game-oriented session and messaging facade over RNet's transport runtime.
 
+mod admission;
 mod clock_sync;
 mod clock_sync_runtime;
 mod config;

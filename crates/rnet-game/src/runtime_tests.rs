@@ -701,7 +701,7 @@ fn invalid_stop_deadline_does_not_close_game_send_admission() {
             .code(),
         ErrorCode::InvalidArgument
     );
-    assert!(!runtime.stopping.load(Ordering::Acquire));
+    assert!(!runtime.admission.is_stopping());
 
     runtime.stop(Duration::ZERO).expect("valid stop");
 }

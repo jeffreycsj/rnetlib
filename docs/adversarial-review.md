@@ -16,7 +16,7 @@
 ## 测试盲区与后续阶段
 
 - 当时仅提供了 `cargo-fuzz` 入口，未进行长时 fuzz campaign；Production v1 阶段已经安装工具并完成全部 target 编译验证。
-- 尚未进行 `tc netem` 丢包/乱序/抖动矩阵、24–72 小时 soak、内存故障注入、Miri/loom 或 sanitizer 运行。
+- 尚未进行 `tc netem` 丢包/乱序/抖动矩阵、24–72 小时 soak、内存故障注入、Miri 或 sanitizer 运行；关键发送准入竞态已有 Loom 模型。
 - 当时的 TencentOS Rust 工具链不包含 rustfmt/clippy；当前 Production v1 环境已实际通过 fmt 与严格 Clippy。
 - KCP、cookie/session 防伪造、每 IP 准入限制和加密在当时属于 Phase 2；这些能力现已实现，只有旧的不安全兼容 KCP 入口仍显式返回 `NOT_SUPPORTED`。
 
@@ -55,7 +55,7 @@
 | 4 | 中 | FFI logger callback | callback panic 被异步 logger 捕获，但线程局部的 callback 标记会因 unwind 跳过复位，污染该日志线程后续状态。 | 使用 RAII guard 在正常返回和 unwind 时统一复位。 |
 | 5 | 中 | UDP peer route | 单 session 关闭后 peer map 仍指向已删除 handle，下一数据报可能沿用陈旧 session。 | 收包时校验 session table，删除陈旧映射并按正常顺序建立新 session；测试覆盖 open-before-message。 |
 
-本轮还核验了 C ABI 增量兼容、C++11 最终链接、Go/cgo、KCP ACK RTT、KCP update delay、UDP/KCP 握手/认证计时和异步 logger callback 计时。公开 API 的功能链路已覆盖；长期弱网、soak、sanitizer/Miri/loom 与第三方密码审计仍属于外部生产准入工作。
+本轮还核验了 C ABI 增量兼容、C++11 最终链接、Go/cgo、KCP ACK RTT、KCP update delay、UDP/KCP 握手/认证计时和异步 logger callback 计时。公开 API 的功能链路已覆盖；关键发送准入竞态已有 Loom 模型，长期弱网、soak、sanitizer/Miri 与第三方密码审计仍属于外部生产准入工作。
 
 ## 透明安全与通用接口复审
 
@@ -141,7 +141,9 @@
 | 4 | 高 | KCP 非可信 ACK | fuzz 生成来自未来半个串号空间的 ACK timestamp，可在 cargo-fuzz 强制检查算术时触发上游 signed subtraction panic。 | 在依赖调用前拒绝未来或超过 60 秒安全窗口的 ACK timestamp；崩溃样本已固化，合法跨 `0x7fffffff/0x80000000` 边界仍通过。 |
 | 5 | 中 | Go 高级发送 | 正的亚毫秒 expiry 经 `Duration.Milliseconds()` 截断为 0，意外变成“永不过期”。 | Go 转换改为正数向上取整到毫秒，负数拒绝，0 仍表示未配置，并补边界测试。 |
 | 6 | 中 | FFI/C++/Go 模块结构 | 新 ABI 与遥测使单文件超过结构门禁，降低查找和审查可用性。 | Rust ABI 拆为配置、控制、轮询、遥测和队列布局模块；C++/Go 公共类型拆到独立文件，旧 umbrella include/package API 不变。 |
+| 7 | 高 | 游戏长稳 probe | 原探针只覆盖客户端到服务端，尾部可靠消息也可能在报告前尚未排空；现有报告无法证明回程可用。 | 改为客户端→服务端→客户端 echo，可靠传输在十秒有界排空后要求三段计数完全一致；UDP 保留 200 ms 接收宽限并单独记录双向乱序/重复。 |
+| 8 | 中 | 生产资格发布包 | 部署文档引用的游戏 soak 脚本和二进制没有进入 SDK 包，目标主机拿到发布物后无法复现资格测试。 | 包内新增预编译 `bin/game_soak`、可直接运行的脚本和锁文件；报告记录探针与 lockfile SHA256，并通过脱离源码树的回环测试。 |
 
-调度器指标只使用固定 priority 标签，不把玩家、session 或 correlation ID 放进 Prometheus。异步失败日志保留 correlation ID 和稳定错误码但不记录 payload。恢复票据风暴、持续背压、公平性、队列预算、零容量 poll、tick 最大值、停止竞态和 KCP 串号边界均有确定性回归；三传输短时 probe 与全部六个非 sanitizer fuzz target 已通过。当前没有遗留的高置信代码阻塞项。
+调度器指标只使用固定 priority 标签，不把玩家、session 或 correlation ID 放进 Prometheus。异步失败日志保留 correlation ID 和稳定错误码但不记录 payload。恢复票据风暴、持续背压、公平性、队列预算、零容量 poll、tick 最大值、停止竞态和 KCP 串号边界均有确定性回归；三传输双向短时 probe 与全部六个非 sanitizer fuzz target 已通过。当前没有遗留的高置信代码阻塞项。
 
-ASan 与 Miri 在本机稳定版、无 rustup 的 Rust 工具链上不可执行；loom 尚未建模。目标环境 24–72 小时弱网长稳和独立 Noise/依赖审计仍是外部生产准入项，不能由本地门禁替代。详细命令、短时数据和边界见 [game-production-qualification.md](game-production-qualification.md)。
+ASan 与 Miri 在本机稳定版、无 rustup 的 Rust 工具链上不可执行。发送准入门现已通过 Loom 穷举 send/close 与 send/stop 交错并进入 CI。目标环境 24–72 小时弱网长稳和独立 Noise/依赖审计仍是外部生产准入项，不能由本地门禁替代。详细命令、短时数据和边界见 [game-production-qualification.md](game-production-qualification.md)。

@@ -42,21 +42,27 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  concurrency-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: make loom-test
+
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz --locked
-      - run: cargo fuzz run frame_parser -- -max_total_time=10 -max_len=1048576
-      - run: cargo fuzz run control_parser -- -max_total_time=10 -max_len=131072
-      - run: cargo fuzz run datagram_preflight -- -max_total_time=10 -max_len=2048
-      - run: cargo fuzz run kcp_engine -- -max_total_time=10 -max_len=65535
-      - run: cargo fuzz run game_wire -- -max_total_time=10 -max_len=65535
-      - run: cargo fuzz run ffi_config -- -max_total_time=10 -max_len=64
+      - run: cargo fuzz run -s address frame_parser -- -max_total_time=10 -max_len=1048576 -rss_limit_mb=2048
+      - run: cargo fuzz run -s address control_parser -- -max_total_time=10 -max_len=131072 -rss_limit_mb=2048
+      - run: cargo fuzz run -s address datagram_preflight -- -max_total_time=10 -max_len=2048 -rss_limit_mb=2048
+      - run: cargo fuzz run -s address kcp_engine -- -max_total_time=10 -max_len=65535 -rss_limit_mb=2048
+      - run: cargo fuzz run -s address game_wire -- -max_total_time=10 -max_len=65535 -rss_limit_mb=2048
+      - run: cargo fuzz run -s address ffi_config -- -max_total_time=10 -max_len=64 -rss_limit_mb=2048
 
   miri:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

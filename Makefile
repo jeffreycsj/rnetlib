@@ -1,4 +1,4 @@
-.PHONY: abi-check build check cpp-test go-test package structure-check test
+.PHONY: abi-check build check cpp-test go-test loom-test package structure-check test
 
 build:
 	cargo build -p rnet-ffi --release
@@ -23,11 +23,15 @@ go-test:
 	cp target/debug/librnet.a lib/librnet.a
 	GOTOOLCHAIN=local CGO_ENABLED=1 go test ./go/rnet
 
+loom-test:
+	cargo test -p rnet-game --features loom admission::tests -- --test-threads=1
+
 check:
 	$(MAKE) structure-check
 	cargo fmt --check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
+	$(MAKE) loom-test
 	$(MAKE) abi-check
 	$(MAKE) cpp-test
 	$(MAKE) go-test

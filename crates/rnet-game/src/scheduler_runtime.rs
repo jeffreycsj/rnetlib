@@ -4,7 +4,6 @@ use crate::runtime::{GameRuntime, GameSendOptions};
 use crate::scheduler::{ScheduledMessage, ScheduledQueueSnapshot};
 use bytes::Bytes;
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 impl GameRuntime {
@@ -14,7 +13,7 @@ impl GameRuntime {
         payload: &[u8],
         options: GameSendOptions,
     ) -> Result<()> {
-        if self.stopping.load(Ordering::Acquire) {
+        if self.admission.is_stopping() {
             return Err(RnetError::new(
                 ErrorCode::InvalidState,
                 "game runtime is stopping",
@@ -43,28 +42,27 @@ impl GameRuntime {
             .transpose()?;
         // Keep readiness stable through admission. Session cleanup takes the write side before
         // removing queued messages, so it cannot miss an enqueue that already passed validation.
-        let ready = self
-            .ready_sessions
-            .read()
-            .expect("game ready table poisoned");
-        if !ready.contains(&session) || self.stopping.load(Ordering::Acquire) {
-            return Err(RnetError::new(
-                ErrorCode::InvalidHandle,
-                "game session closed during scheduled-send admission",
-            ));
-        }
-        self.scheduled
-            .lock()
-            .expect("scheduled queue poisoned")
-            .enqueue(ScheduledMessage {
-                session,
-                payload: Bytes::copy_from_slice(payload),
-                sequence: options.sequence,
-                tick: options.tick,
-                correlation_id: options.correlation_id,
-                priority: options.priority,
-                enqueued_at: Instant::now(),
-                expires_at,
+        self.admission
+            .with_ready(session, || {
+                self.scheduled
+                    .lock()
+                    .expect("scheduled queue poisoned")
+                    .enqueue(ScheduledMessage {
+                        session,
+                        payload: Bytes::copy_from_slice(payload),
+                        sequence: options.sequence,
+                        tick: options.tick,
+                        correlation_id: options.correlation_id,
+                        priority: options.priority,
+                        enqueued_at: Instant::now(),
+                        expires_at,
+                    })
+            })
+            .unwrap_or_else(|| {
+                Err(RnetError::new(
+                    ErrorCode::InvalidHandle,
+                    "game session closed during scheduled-send admission",
+                ))
             })
     }
 

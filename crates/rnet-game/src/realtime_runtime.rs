@@ -5,7 +5,6 @@ use crate::runtime::GameRuntime;
 use bytes::Bytes;
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
 use rnet_transport::LatestTransportSnapshot;
-use std::sync::atomic::Ordering;
 
 impl GameRuntime {
     /// Stages a replaceable snapshot. The key is scoped to the session; ordinary `send` remains
@@ -23,7 +22,7 @@ impl GameRuntime {
         payload: &[u8],
         tick: Option<u32>,
     ) -> Result<()> {
-        if self.stopping.load(Ordering::Acquire) {
+        if self.admission.is_stopping() {
             return Err(RnetError::new(
                 ErrorCode::InvalidState,
                 "game runtime is stopping",
@@ -45,21 +44,20 @@ impl GameRuntime {
         // Closing a session removes its ready marker before clearing pending snapshots.
         // Keep that marker read-locked through insertion so a racing close cannot leave a
         // snapshot behind after its cleanup has completed.
-        let ready = self
-            .ready_sessions
-            .read()
-            .expect("game ready table poisoned");
-        if !ready.contains(&session) || self.stopping.load(Ordering::Acquire) {
-            return Err(RnetError::new(
-                ErrorCode::InvalidHandle,
-                "game session closed during snapshot admission",
-            ));
-        }
-        self.realtime
-            .lock()
-            .expect("realtime queue poisoned")
-            .enqueue(session, key, Bytes::copy_from_slice(payload), tick)?;
-        Ok(())
+        self.admission
+            .with_ready(session, || {
+                self.realtime
+                    .lock()
+                    .expect("realtime queue poisoned")
+                    .enqueue(session, key, Bytes::copy_from_slice(payload), tick)
+                    .map(|_| ())
+            })
+            .unwrap_or_else(|| {
+                Err(RnetError::new(
+                    ErrorCode::InvalidHandle,
+                    "game session closed during snapshot admission",
+                ))
+            })
     }
 
     /// Non-blockingly forwards at most `capacity` staged snapshots in fair key order.

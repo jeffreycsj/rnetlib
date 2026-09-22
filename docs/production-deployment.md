@@ -11,7 +11,7 @@ make check
 cargo check --locked --manifest-path fuzz/Cargo.toml --bins
 ```
 
-CI additionally runs RustSec, cargo-deny, six libFuzzer smoke campaigns, and an optional Miri job. Do not waive an advisory, license, yanked crate, or unknown source without a dated owner and expiry recorded in `deny.toml` or the security review.
+`make check` includes the Loom send-admission model. CI additionally runs RustSec, cargo-deny, six explicit AddressSanitizer libFuzzer smoke campaigns, the same concurrency model, and Miri for the pure core/protocol crates. Do not waive an advisory, license, yanked crate, or unknown source without a dated owner and expiry recorded in `deny.toml` or the security review.
 
 ## Runtime policy
 
@@ -57,15 +57,20 @@ client (the examples below run 24 hours):
 ./scripts/run-game-soak.sh kcp 86400 128 256 20 /var/tmp/rnet-game-soak
 ```
 
-The game probe reports completion, successful sends/receives, backpressure, heartbeat RTT P95/P99,
-timeouts, protocol/event errors, process CPU, and RSS every 60 seconds. It keeps client and server
-endpoints in one process on loopback, so it is a reproducible facade regression and local soak,
-not a substitute for a distributed target-environment capacity test. An exit status of zero means
-the probe completed without an unexpected session failure; apply deployment-specific SLOs to the
-report before accepting a release. Reports mark whether the source tree was dirty; a commit ID from
-a dirty run does not identify the exact tested source. The script refuses to start below 15 GiB
-`MemAvailable`. The `game_soak` cargo smoke test treats only that exact resource-guard refusal as
-an explicit skip on smaller CI runners; a green test run with this skip is **not** soak evidence.
+The game probe verifies a client → server → client echo path and reports completion, both receive
+counts, backpressure, heartbeat RTT P95/P99/P99.9/max, scheduled and real-time queue state,
+transport send/event queue tail latency, close-reason counters, process CPU, and RSS every 60
+seconds. Reliable transports fail the run if the final bidirectional drain is incomplete. It keeps
+client and server endpoints in one process on loopback, so it is a reproducible facade regression
+and local soak, not a substitute for a distributed target-environment capacity test. An exit status
+of zero means the probe completed without an unexpected session failure; apply deployment-specific
+SLOs to the report before accepting a release. In a source tree the runner builds with `--locked`
+before timing; the SDK package carries the same runner plus a prebuilt `bin/game_soak`, so target
+hosts do not need a Rust toolchain. Both modes record the exact probe binary and `Cargo.lock`
+SHA256 hashes. Reports also mark whether the source tree was dirty; a commit ID from a dirty run
+does not identify the exact tested source. The script refuses to start below 15 GiB `MemAvailable`.
+The `game_soak` cargo smoke test treats only that exact resource-guard refusal as an explicit skip
+on smaller CI runners; a green test run with this skip is **not** soak evidence.
 
 Repeat with production-sized connection counts and the application consumer. Add a `tc netem` matrix covering expected and failure-envelope RTT, jitter, loss, duplication, and reordering. A release passes only if its documented SLO is met, RSS reaches a stable plateau, queues recover after bursts, no close reason is unexplained, and no peer starves another. Archive the raw report with kernel, CPU, memory, toolchain, commit/package hash, and configuration.
 

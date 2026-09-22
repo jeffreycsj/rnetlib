@@ -22,6 +22,14 @@ fn is_memory_guard_refusal(stderr: &str) -> bool {
         .is_some_and(|available| available < MIN_AVAILABLE_KIB)
 }
 
+fn report_counter(line: &str, name: &str) -> u64 {
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix(name))
+        .unwrap_or_else(|| panic!("missing report field {name}: {line}"))
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid report field {name}: {line}"))
+}
+
 #[test]
 fn only_a_real_memory_guard_refusal_is_skippable() {
     assert!(is_memory_guard_refusal(
@@ -61,6 +69,25 @@ fn game_soak_smoke_covers_all_transports_when_memory_available() {
         assert!(stdout.contains("status=completed"), "{transport}: {stdout}");
         assert!(stdout.contains(&format!("transport={transport}")));
         assert!(stdout.contains("rtt_samples="));
+        assert!(stdout.contains("rtt_p999_us="));
+        assert!(stdout.contains("server_received="));
+        assert!(stdout.contains("client_received="));
+        assert!(stdout.contains("echo_queued="));
+        assert!(stdout.contains("scheduled_queue_messages="));
+        assert!(stdout.contains("scheduled_queue_delay_p999_us="));
+        assert!(stdout.contains("realtime_queue_messages="));
+        assert!(stdout.contains("send_queue_p999_us="));
+        assert!(stdout.contains("event_queue_p999_us="));
+        assert!(stdout.contains("closed_sessions_total="));
         assert!(stdout.contains("cpu_percent="));
+        let completed = stdout
+            .lines()
+            .find(|line| line.starts_with("status=completed"))
+            .expect("completed report line");
+        let sent = report_counter(completed, "origin_sent=");
+        assert_eq!(report_counter(completed, "server_received="), sent);
+        assert_eq!(report_counter(completed, "echo_queued="), sent);
+        assert_eq!(report_counter(completed, "client_received="), sent);
+        assert_eq!(report_counter(completed, "closed_sessions_total="), 0);
     }
 }

@@ -6,18 +6,22 @@ architecture="$(uname -m)"
 destination="${project_dir}/dist/linux-${architecture}"
 
 cd "${project_dir}"
-cargo build -p rnet-ffi --release
+cargo build --locked -p rnet-ffi --release
+cargo build --locked -p rnet-game --bin game_soak --release
 case "${destination}" in
   "${project_dir}"/dist/linux-*) ;;
   *) echo "refusing to replace unexpected package path: ${destination}" >&2; exit 1 ;;
 esac
 rm -rf -- "${destination}"
 mkdir -p "${destination}/include" "${destination}/lib" "${destination}/cpp" \
-  "${destination}/go" "${destination}/proto" "${destination}/examples/cpp"
+  "${destination}/go" "${destination}/proto" "${destination}/examples/cpp" \
+  "${destination}/bin" "${destination}/scripts"
 mkdir -p "${destination}/cpp/rnet"
 mkdir -p "${destination}/docs"
 install -m 0644 target/release/librnet.a "${destination}/lib/librnet.a"
 install -m 0755 target/release/librnet.so "${destination}/lib/librnet.so"
+install -m 0755 target/release/game_soak "${destination}/bin/game_soak"
+install -m 0755 scripts/run-game-soak.sh "${destination}/scripts/run-game-soak.sh"
 install -m 0644 include/rnet.h "${destination}/include/rnet.h"
 install -m 0644 cpp/rnet.hpp "${destination}/cpp/rnet.hpp"
 install -m 0644 cpp/rnet/*.hpp "${destination}/cpp/rnet/"
@@ -33,7 +37,7 @@ install -m 0644 docs/game-production-qualification.md "${destination}/docs/game-
 install -m 0644 docs/getting-started.md "${destination}/docs/getting-started.md"
 install -m 0644 docs/game-networking.md "${destination}/docs/game-networking.md"
 install -m 0644 docs/production-deployment.md "${destination}/docs/production-deployment.md"
-install -m 0644 LICENSE README.md SECURITY.md go.mod "${destination}/"
+install -m 0644 Cargo.lock LICENSE README.md SECURITY.md go.mod "${destination}/"
 
 (
   cd "${destination}"
