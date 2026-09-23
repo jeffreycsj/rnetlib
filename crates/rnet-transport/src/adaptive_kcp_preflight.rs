@@ -58,10 +58,16 @@ pub(crate) async fn handle_preflight(
                         .metrics
                         .record_admission_rejected(AdmissionRejectReason::KcpPeerLimit);
                 }
-            } else {
-                socket
-                    .send_to(&encode_challenge(conv, &cookie.issue(peer)), peer)
-                    .await?;
+            } else if socket
+                .send_to(&encode_challenge(conv, &cookie.issue(peer)), peer)
+                .await
+                .is_err()
+            {
+                // An unverified source owns no session. A failed challenge must not
+                // terminate the shared listener or produce attacker-controlled log volume.
+                shared
+                    .metrics
+                    .record_admission_rejected(AdmissionRejectReason::Unauthenticated);
             }
             Ok(true)
         }
@@ -92,5 +98,75 @@ pub(crate) async fn handle_preflight(
                 .record_admission_rejected(AdmissionRejectReason::Unauthenticated);
             Ok(true)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        handle_preflight, AdmissionController, CookieGuard, DatagramWire, EndpointSecurity,
+    };
+    use crate::kcp_preflight::{encode_challenge, encode_hello};
+    use crate::{NetworkRuntime, RuntimeConfig};
+    use rnet_core::{ErrorCode, Transport};
+    use rnet_protocol::control::SecurityMode;
+    use rnet_security::Keypair;
+    use std::collections::HashMap;
+    use std::time::Duration;
+    use tokio::net::UdpSocket;
+
+    #[test]
+    fn preflight_send_failure_is_isolated_on_server_but_reported_on_client() {
+        let runtime = NetworkRuntime::new(RuntimeConfig::production()).unwrap();
+        runtime.poll_events(8, Duration::ZERO);
+        runtime.runtime.block_on(async {
+            let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            // Exercise a real OS send failure without raw sockets or external traffic.
+            let peer = "[::1]:9".parse().unwrap();
+            let cookie = CookieGuard::new().unwrap();
+            let admission = AdmissionController::new(8, 8, 8, 8, 64);
+            let mut wire = DatagramWire::new(Transport::Kcp, 1200, 8);
+            let (mut permits, mut authorized) = (HashMap::new(), HashMap::new());
+            let server = EndpointSecurity::AdaptiveServer {
+                local_key: Keypair::generate().unwrap(),
+                initial_mode: SecurityMode::Encrypted,
+            };
+            let client = EndpointSecurity::AdaptiveClient {
+                join_payload: Vec::new(),
+            };
+            for (security, packet) in [
+                (&server, encode_hello(37, &[])),
+                (&client, encode_challenge(37, &cookie.issue(peer))),
+            ] {
+                let result = handle_preflight(
+                    &runtime.shared,
+                    &socket,
+                    &mut wire,
+                    Transport::Kcp,
+                    security,
+                    Some(peer),
+                    &cookie,
+                    &admission,
+                    &mut permits,
+                    &mut authorized,
+                    peer,
+                    &packet,
+                )
+                .await;
+                if matches!(security, EndpointSecurity::AdaptiveServer { .. }) {
+                    assert!(
+                        result.unwrap(),
+                        "failed challenge must not terminate the listener"
+                    );
+                } else {
+                    assert_eq!(result.unwrap_err().code(), ErrorCode::IoError);
+                }
+                assert!(permits.is_empty() && authorized.is_empty());
+                assert!(!wire.has_peer(peer));
+            }
+            assert_eq!(runtime.metrics_snapshot().admission_rejected, 1);
+            assert!(runtime.poll_events(8, Duration::ZERO).is_empty());
+        });
+        runtime.stop(Duration::ZERO).unwrap();
     }
 }
