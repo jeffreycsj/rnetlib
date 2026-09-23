@@ -183,6 +183,16 @@ let runtime = GameRuntime::new(GameRuntimeConfig::production())?.with_logger(log
 
 The example writes to stderr for clarity; use a nonblocking structured sink in a deployment and alert on logger drops or sink panics.
 
+Established unified TCP failures additionally preserve a stable diagnostic phase (`tcp_read`,
+`tcp_framing`, `tcp_decode`, `tcp_inbound`, `tcp_write`, `tcp_security_write`,
+`tcp_rekey_write`, or `tcp_security_transition`) and the available local cause in the
+`game_session_closed` log. EOF is explicitly identified as peer closure rather than invented
+OS error text. Detail is bounded to 1024 UTF-8 bytes and never includes peer payload/credentials.
+The transport close/join-failure event's diagnostic bytes are optional: under event-byte
+pressure they are discarded before they could cost lifecycle delivery or evict extra messages.
+The original status and handles remain authoritative; event-count exhaustion still follows the
+existing lifecycle rejection policy. Game event structs and wire formats are unchanged.
+
 With a logger configured, polling also emits `game_latency_summary` every 30 seconds by default. It includes cumulative count/P90/P95/P99/P99.9/max (microseconds) for heartbeat RTT, transport phases, scheduling and logger callbacks, plus queue gauges and logger failures. Zero samples are not evidence of zero latency. Change the period with `set_metrics_log_interval(Duration)` in Rust, `rnet_game_metrics_log_interval_set(runtime, milliseconds)` in C, `set_metrics_log_interval(milliseconds)` in C++11, or `SetMetricsLogInterval(time.Duration)` in Go; zero disables the summary. Lifecycle errors preserve available library-generated causes, but credentials and application bytes never become diagnostics. Already-established close events may contain only their stable reason code.
 
 The [C# SDK guide](csharp.md) covers the same game lifecycle through .NET 8 on Linux x64, including complete send/receive loops, injected loggers, dynamic encryption and managed/native ownership. Its `SetMetricsLogInterval(milliseconds)` and `PrometheusSnapshot()` require the matching native library from the same package.

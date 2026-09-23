@@ -5,10 +5,10 @@ use crate::auto_rekey::AutoRekey;
 use crate::event::{completed_operation, security_changed_event, SecurityOperation};
 use crate::metrics::LatencyKind;
 use crate::record_reader::RecordReader;
+use crate::session_close::remove_session_with_error;
 use crate::state::{
     game_control_event, message_event_with_integrity, push_tcp_event, receive_security_command,
-    remove_session_with_reason, session_active, wait_for_deadline, Outbound, OutboundKind,
-    SecurityCommand, Shared,
+    session_active, wait_for_deadline, Outbound, OutboundKind, SecurityCommand, Shared,
 };
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
 use rnet_protocol::control::{
@@ -45,14 +45,14 @@ pub(crate) async fn run_adaptive_session(
         shared.config.security_policy.rekey_after_bytes,
         Instant::now(),
     );
-    let reason = loop {
+    let (phase, error) = loop {
         // Drain complete records before polling again; an outbound wakeup cannot discard a
         // partially received length prefix or body from the previous read.
         match records.take() {
             Ok(Some(encoded)) => {
                 let record = match decode_record(&encoded, max_payload + 64) {
                     Ok(record) => record,
-                    Err(error) => break error.code(),
+                    Err(error) => break ("tcp_decode", error),
                 };
                 if let Err(error) = process_inbound(
                     &shared,
@@ -70,7 +70,7 @@ pub(crate) async fn run_adaptive_session(
                         .metrics
                         .protocol_errors
                         .fetch_add(1, Ordering::Relaxed);
-                    break error.code();
+                    break ("tcp_inbound", error);
                 }
                 if !controller.is_transitioning() {
                     transition_deadline = None;
@@ -78,7 +78,7 @@ pub(crate) async fn run_adaptive_session(
                 continue;
             }
             Ok(None) => {}
-            Err(error) => break error.code(),
+            Err(error) => break ("tcp_framing", error),
         }
         let automatic_deadline = if server_authoritative
             && controller.mode() == SecurityMode::Encrypted
@@ -98,15 +98,15 @@ pub(crate) async fn run_adaptive_session(
         tokio::select! {
             inbound = stream.read_buf(records.buffer_mut()) => {
                 match inbound {
-                    Ok(0) => break ErrorCode::IoError,
+                    Ok(0) => break ("tcp_read", RnetError::new(ErrorCode::IoError, "peer closed TCP stream")),
                     Ok(_) => {}
-                    Err(_) => break ErrorCode::IoError,
+                    Err(error) => break ("tcp_read", error.into()),
                 }
             }
             outbound = receiver.recv(), if !controller.is_transitioning() => {
-                let Some(outbound) = outbound else { break ErrorCode::Cancelled };
+                let Some(outbound) = outbound else { break ("tcp_write", RnetError::new(ErrorCode::Cancelled, "outbound queue closed")) };
                 let Some(outbound) = outbound.resolve_latest() else { continue };
-                if !session_active(&shared, session) { break ErrorCode::Cancelled; }
+                if !session_active(&shared, session) { break ("tcp_write", RnetError::new(ErrorCode::Cancelled, "session no longer active")); }
                 shared.latencies.record(LatencyKind::SendQueue, outbound.queued_at.elapsed());
                 let result = match outbound.kind {
                     OutboundKind::GameControl => write_protected(
@@ -123,7 +123,7 @@ pub(crate) async fn run_adaptive_session(
                         max_payload,
                     ).await,
                 };
-                if let Err(error) = result { break error.code(); }
+                if let Err(error) = result { break ("tcp_write", error); }
                 shared.metrics.bytes_sent.fetch_add(outbound.bytes.len() as u64, Ordering::Relaxed);
                 if controller.mode() == SecurityMode::Encrypted || outbound.kind == OutboundKind::GameControl {
                     automatic_rekey.record_encrypted_bytes(outbound.bytes.len());
@@ -139,9 +139,9 @@ pub(crate) async fn run_adaptive_session(
                     }
                 };
                 let Ok(control) = control else { continue };
-                if write_control(
+                if let Err(error) = write_control(
                     &mut stream, &mut transport, controller.epoch(), control, max_payload,
-                ).await.is_err() { break ErrorCode::IoError; }
+                ).await { break ("tcp_security_write", RnetError::new(ErrorCode::IoError, error.to_string())); }
                 transition_deadline = Some(
                     tokio::time::Instant::now() + shared.config.handshake_timeout,
                 );
@@ -149,19 +149,19 @@ pub(crate) async fn run_adaptive_session(
             _ = wait_for_deadline(automatic_deadline), if automatic_deadline.is_some() => {
                 let Ok(control) = controller.begin_rekey() else { continue };
                 automatic_rekey.mark_started(Instant::now());
-                if write_control(
+                if let Err(error) = write_control(
                     &mut stream, &mut transport, controller.epoch(), control, max_payload,
-                ).await.is_err() { break ErrorCode::IoError; }
+                ).await { break ("tcp_rekey_write", RnetError::new(ErrorCode::IoError, error.to_string())); }
                 transition_deadline = Some(
                     tokio::time::Instant::now() + shared.config.handshake_timeout,
                 );
             }
             _ = wait_for_deadline(transition_deadline), if transition_deadline.is_some() => {
-                break ErrorCode::Timeout;
+                break ("tcp_security_transition", RnetError::new(ErrorCode::Timeout, "security transition acknowledgement timed out"));
             },
         }
     };
-    remove_session_with_reason(&shared, endpoint, session, reason);
+    remove_session_with_error(&shared, session, phase, error);
 }
 
 #[allow(clippy::too_many_arguments)]

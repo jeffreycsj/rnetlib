@@ -426,31 +426,7 @@ pub(crate) fn retarget_datagram_endpoint(
     Ok(())
 }
 
-pub(crate) fn remove_session(shared: &Arc<Shared>, endpoint: Handle, session: Handle) {
-    remove_session_with_reason(shared, endpoint, session, ErrorCode::Ok);
-}
-
-pub(crate) fn remove_session_with_reason(
-    shared: &Arc<Shared>,
-    _endpoint: Handle,
-    session: Handle,
-    reason: ErrorCode,
-) {
-    if let Some(route) = shared
-        .sessions
-        .lock()
-        .expect("session table poisoned")
-        .remove(session)
-    {
-        shared.latest.forget_session(session);
-        release_pending_session(shared, &route);
-        shared.metrics.record_session_closed(reason);
-        route.target.request_cleanup(session);
-        let mut event = session_event(EventType::SessionClosed, route.endpoint, session);
-        event.status = reason;
-        publish_lifecycle(shared, event);
-    }
-}
+pub(crate) use crate::session_close::{remove_session, remove_session_with_reason};
 
 /// Publishes a bounded lifecycle notification, preferring it over stale data notifications.
 pub(crate) fn publish_lifecycle(shared: &Arc<Shared>, event: Event) {

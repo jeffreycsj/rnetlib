@@ -27,7 +27,8 @@ go-test:
 	cargo build -p rnet-ffi
 	mkdir -p lib
 	cp target/debug/librnet.a lib/librnet.a
-	GOTOOLCHAIN=local CGO_ENABLED=1 go test ./go/rnet
+	# Go's cache does not track changes to the externally linked native archive.
+	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 ./go/rnet
 
 csharp-test:
 	cargo build -p rnet-ffi

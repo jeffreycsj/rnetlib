@@ -39,6 +39,7 @@ mod secure_datagram;
 mod secure_kcp;
 mod secure_tcp;
 mod session;
+mod session_close;
 mod state;
 mod tcp;
 mod tcp_socket;

@@ -248,7 +248,8 @@ impl EventQueue {
     /// When the queue is full, an older data/writability notification is evicted first. If the
     /// queue contains only state transitions, the new transition is rejected so an already
     /// published lifecycle history is never rewritten. The return value reports whether a data
-    /// notification was evicted.
+    /// notification was evicted. Optional local diagnostics on SessionClosed/JoinFailed are
+    /// discarded before they would consume unavailable bytes; their status/identity survive.
     pub fn push_priority(&self, mut event: Event) -> Result<bool> {
         let mut queue = self.0.queue.lock().expect("event queue poisoned");
         let mut queued_bytes = self
@@ -256,6 +257,17 @@ impl EventQueue {
             .queued_bytes
             .lock()
             .expect("event queue byte counter poisoned");
+        // Details must not lose a transition or evict extra messages solely for logging.
+        // Authentication and other lifecycle payloads are semantic and must never be stripped.
+        if matches!(
+            event.event_type,
+            EventType::SessionClosed | EventType::JoinFailed
+        ) && queued_bytes
+            .checked_add(event.data.len())
+            .is_none_or(|total| total > self.0.byte_capacity)
+        {
+            event.data = Vec::new();
+        }
         if event.data.len() > self.0.byte_capacity {
             return Err(RnetError::new(
                 ErrorCode::WouldBlock,

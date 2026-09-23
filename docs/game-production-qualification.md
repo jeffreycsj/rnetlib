@@ -6,6 +6,14 @@ gate on the release commit and archive the resulting package hash before deploym
 
 ## Repository gates
 
+- The subsequent established-TCP diagnostics increment preserves local close phase/cause without
+  changing status codes or the game ABI. Tests cover real EOF, corrupted framing and lost rekey
+  acknowledgements, concurrent close winners, bounded UTF-8 allocations, and byte-budget fallback
+  that preserves lifecycle identity/status. Final serial workspace/Clippy gates pass, as do the
+  three new queue tests under pinned Miri. Go/cgo verification now forces rebuild/test execution
+  (`-a -p 1 -count=1`), including race, because Go does not track external native archives in its
+  build cache. This change does not replace the final target soak.
+
 - The 2026-09-23 game SDK review added a Linux x86_64 / .NET 8 C# facade and poll-driven game
   latency summaries, and fixed native/Go logger teardown deadlocks and Go native-TLS diagnostics.
   Strict Clippy, serial workspace tests, C++11, Go/race, Loom, ABI checks and C# checks pass locally.

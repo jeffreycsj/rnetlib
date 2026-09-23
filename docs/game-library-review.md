@@ -35,7 +35,7 @@
 5. **日志不是无限审计仓库。** 回调必须迅速返回；满队列允许丢弃并计数。摘要是累计直方图，不是滑动窗口，不记录每个包；TCP/KCP 本地 pickup 不是送达。已建立连接的部分关闭事件只有稳定 reason code，不能从它恢复不存在的 OS 细节。
 6. **恢复和撤回边界不扩大。** 按用户要求不做跨实例恢复；已进 socket/KCP 缓存的数据无法撤回。玩家身份/权限/重放策略仍属业务层，指标不自动按玩家高基数切分。
 
-具体接入见 [游戏指南](game-networking.md) 与 [C# 指南](csharp.md)。验证命令：`make check`、`go test -race ./go/rnet`、`make package`，目标长稳最后单独执行。
+具体接入见 [游戏指南](game-networking.md) 与 [C# 指南](csharp.md)。验证命令：`make check`、`go test -a -p 1 -count=1 -race ./go/rnet`、`make package`，目标长稳最后单独执行。外部 native archive 不纳入 Go build cache 依赖，native 更新后的验收必须强制重建，而不只清测试结果缓存。
 
 ## 本轮验证结果
 
@@ -44,3 +44,12 @@
 - 四个 C++11 最终链接示例、Go 全套与 race、两个 Loom 发送准入模型、release ABI 导出比对通过。
 - C# 三传输收发、动态加密/rekey、LatestOnly、空包与 metadata、恢复、版本协商、真实质量/时钟采样、公钥 pin 拒绝、GC、日志异常/查询重入、非法配置和并发 Dispose 通过。发布包中的 `RNet.dll` 与 `librnet.so` 也完成同一测试；managed 构建零 warning。
 - CI 已加入 C#、Go race、ABI 和 SDK 打包验收，但这里报告的是本机执行结果，**未声称远端 CI 已运行成功**。本轮没有重新执行历史 ASan/Miri campaign，也没有运行目标环境长稳。
+
+## 后续增量：建立后的 TCP 关闭诊断
+
+- 统一 TCP 已建立会话不再只保留错误码：read/EOF、framing/decode、受保护处理、write、安全控制写入和切换超时保留阶段及本地原因；既有 status 和游戏事件 ABI 不变。
+- 关闭清理拆入 `session_close.rs`，诊断最多 1024 字节且不会切断 UTF-8 字符，截断后释放多余分配容量。并发失败与重复关闭只能发布一次事件、计数一次。
+- 对抗性复查发现诊断数据会挤占事件字节预算。现对 `SessionClosed` / `JoinFailed` 优先丢可选详情，保留状态/句柄；不剥离认证语义数据，不为了详情额外淘汰业务事件。条目数量本身耗尽时仍按原有策略拒绝并计数，不能保证任意满队列下无损。
+- 新增真实 TCP 代理用例覆盖远端 EOF、非法长度前缀和屏蔽 rekey ACK 后的超时；同时检查凭据/payload 不进入日志。队列测试覆盖有余量、字节满、认证数据不可剥离，关闭单元测试覆盖 UTF-8 和并发赢家。
+- 覆盖边界：这不是全部平台的 OS 故障注入；UDP/KCP 已建立关闭路径以及主动关闭中只给出 reason code 的情形没有伪造补全。目标长稳仍留到最后。
+- 增量验证：最终全库串行测试与严格 Clippy 通过；C++11/C# 回归通过；Go 普通/race 均使用 `-a -p 1 -count=1` 实际重建重跑通过；新增三个纯事件队列测试通过固定 nightly 下的 Miri。这不是重新执行全部历史 fuzz/Miri campaign。

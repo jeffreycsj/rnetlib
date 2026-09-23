@@ -131,7 +131,7 @@ impl GameRuntime {
             // and authentication tickets. Preserve the cause before typed conversion drops it.
             let detail = (matches!(
                 event.event_type,
-                EventType::EndpointError | EventType::JoinFailed
+                EventType::EndpointError | EventType::JoinFailed | EventType::SessionClosed
             ) && !event.data.is_empty())
             .then(|| String::from_utf8_lossy(&event.data).into_owned());
             match self.convert_event(event) {
