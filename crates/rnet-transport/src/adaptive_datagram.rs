@@ -16,10 +16,10 @@ use crate::auto_rekey::AutoRekey;
 use crate::config::{ClientSecurity, EndpointSecurity};
 use crate::cookie::{CookieGuard, COOKIE_LEN};
 use crate::kcp_preflight::{encode_hello, random_conv};
+use crate::session_close::remove_session_with_error;
 use crate::state::{
-    fail_secure_session, push_endpoint_error, remove_session_with_reason,
-    retarget_datagram_endpoint, retarget_datagram_session, session_active, DatagramCleanup,
-    Outbound, OutboundKind, Shared,
+    fail_secure_session, push_endpoint_error, retarget_datagram_endpoint,
+    retarget_datagram_session, session_active, DatagramCleanup, Outbound, OutboundKind, Shared,
 };
 use rnet_core::{ErrorCode, Handle, Result, RnetError, Transport};
 use rnet_protocol::control::{decode_record, ProtectedKind, Record, RecordKind, SecurityMode};
@@ -190,11 +190,11 @@ pub(crate) async fn run_adaptive_datagram(
                                 if remote == Some(peer) {
                                     fail_secure_session(&shared, endpoint, session, error);
                                 } else {
-                                    remove_session_with_reason(
+                                    remove_session_with_error(
                                         &shared,
-                                        endpoint,
                                         session,
-                                        error.code(),
+                                        "datagram_handshake",
+                                        error,
                                     );
                                 }
                             }
@@ -238,11 +238,11 @@ pub(crate) async fn run_adaptive_datagram(
                             Ok(record) => record,
                             Err(error) => {
                                 shared.metrics.protocol_errors.fetch_add(1, Ordering::Relaxed);
-                                remove_session_with_reason(
+                                remove_session_with_error(
                                     &shared,
-                                    endpoint,
                                     *session,
-                                    error.code(),
+                                    "datagram_encode",
+                                    error,
                                 );
                                 continue;
                             }
@@ -264,11 +264,11 @@ pub(crate) async fn run_adaptive_datagram(
                                 continue;
                             }
                             Err(error) => {
-                                remove_session_with_reason(
+                                remove_session_with_error(
                                     &shared,
-                                    endpoint,
                                     *session,
-                                    error.code(),
+                                    "datagram_write",
+                                    error,
                                 );
                                 continue;
                             }
@@ -450,11 +450,11 @@ pub(crate) async fn run_adaptive_datagram(
                                 RnetError::new(ErrorCode::Timeout, "datagram handshake timed out"),
                             );
                         } else {
-                            remove_session_with_reason(
+                            remove_session_with_error(
                                 &shared,
-                                endpoint,
                                 session,
-                                ErrorCode::Timeout,
+                                "datagram_control_retry",
+                                RnetError::new(ErrorCode::Timeout, "datagram control retry limit reached"),
                             );
                         }
                     }

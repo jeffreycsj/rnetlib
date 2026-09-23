@@ -4,11 +4,12 @@ use crate::adaptive_datagram_session::send_protected;
 use crate::adaptive_peer::{Peer, INITIAL_EPOCH};
 use crate::adaptive_wire::DatagramWire;
 use crate::auto_rekey::AutoRekey;
+use crate::session_close::remove_session_with_error;
 use crate::state::{
     mark_session_established, remove_session_with_reason, session_event, try_push_session_event,
     Outbound, SecurityCommand, Shared,
 };
-use rnet_core::{ErrorCode, EventType, Handle};
+use rnet_core::{ErrorCode, EventType, Handle, RnetError};
 use rnet_protocol::control::{encode_control, ProtectedKind};
 use rnet_security::transition::{Role, SecurityController};
 use std::collections::{HashMap, VecDeque};
@@ -78,7 +79,12 @@ pub(crate) async fn drive_server(
             | Peer::ClientResponse {
                 session, started, ..
             } if allow_client_timeout && started.elapsed() >= shared.config.handshake_timeout => {
-                remove_session_with_reason(shared, endpoint, session, ErrorCode::Timeout);
+                remove_session_with_error(
+                    shared,
+                    session,
+                    "datagram_handshake",
+                    RnetError::new(ErrorCode::Timeout, "datagram handshake timed out"),
+                );
                 wire.remove_peer(peer);
                 continue;
             }
@@ -89,7 +95,15 @@ pub(crate) async fn drive_server(
             } if allow_client_timeout
                 && auth_started.elapsed() >= shared.config.handshake_timeout =>
             {
-                remove_session_with_reason(shared, endpoint, session, ErrorCode::Timeout);
+                remove_session_with_error(
+                    shared,
+                    session,
+                    "datagram_auth_wait",
+                    RnetError::new(
+                        ErrorCode::Timeout,
+                        "server authorization response timed out",
+                    ),
+                );
                 wire.remove_peer(peer);
                 continue;
             }
@@ -98,7 +112,15 @@ pub(crate) async fn drive_server(
                 auth_started,
                 ..
             } if auth_started.elapsed() >= shared.config.handshake_timeout => {
-                remove_session_with_reason(shared, endpoint, session, ErrorCode::Timeout);
+                remove_session_with_error(
+                    shared,
+                    session,
+                    "datagram_auth_wait",
+                    RnetError::new(
+                        ErrorCode::Timeout,
+                        "application authorization decision timed out",
+                    ),
+                );
                 wire.remove_peer(peer);
                 continue;
             }
@@ -127,7 +149,7 @@ pub(crate) async fn drive_server(
                     )
                     .await;
                     if let Err(error) = sent {
-                        remove_session_with_reason(shared, endpoint, session, error.code());
+                        remove_session_with_error(shared, session, "datagram_auth_write", error);
                         continue;
                     }
                     if accepted && mark_session_established(shared, session).is_ok() {
@@ -180,7 +202,12 @@ pub(crate) async fn drive_server(
                 last_activity,
                 ..
             } if last_activity.elapsed() >= shared.config.datagram_idle_timeout => {
-                remove_session_with_reason(shared, endpoint, session, ErrorCode::Timeout);
+                remove_session_with_error(
+                    shared,
+                    session,
+                    "datagram_idle",
+                    RnetError::new(ErrorCode::Timeout, "datagram session idle timeout"),
+                );
                 wire.remove_peer(peer);
                 continue;
             }
@@ -189,7 +216,12 @@ pub(crate) async fn drive_server(
                 transition_deadline: Some(deadline),
                 ..
             } if Instant::now() >= deadline => {
-                remove_session_with_reason(shared, endpoint, session, ErrorCode::Timeout);
+                remove_session_with_error(
+                    shared,
+                    session,
+                    "datagram_security_transition",
+                    RnetError::new(ErrorCode::Timeout, "security acknowledgement timed out"),
+                );
                 wire.remove_peer(peer);
                 continue;
             }
@@ -244,7 +276,12 @@ pub(crate) async fn drive_server(
                     )
                     .await;
                     if let Err(error) = sent {
-                        remove_session_with_reason(shared, endpoint, session, error.code());
+                        remove_session_with_error(
+                            shared,
+                            session,
+                            "datagram_security_write",
+                            error,
+                        );
                         continue;
                     }
                     transition_deadline = Some(Instant::now() + shared.config.handshake_timeout);

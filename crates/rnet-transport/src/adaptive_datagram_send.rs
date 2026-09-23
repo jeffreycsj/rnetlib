@@ -4,7 +4,8 @@ use crate::adaptive_codec::{data_record, protected_record};
 use crate::adaptive_peer::Peer;
 use crate::adaptive_wire::DatagramWire;
 use crate::auto_rekey::AutoRekey;
-use crate::state::{remove_session_with_reason, session_active, Outbound, OutboundKind, Shared};
+use crate::session_close::remove_session_with_error;
+use crate::state::{session_active, Outbound, OutboundKind, Shared};
 use rnet_protocol::control::ProtectedKind;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
@@ -66,11 +67,11 @@ pub(crate) async fn flush_deferred(
             ),
         };
         let result = match record {
-            Ok(record) => {
-                wire.send(socket, peer, &record, shared.config.max_datagram_size)
-                    .await
-            }
-            Err(error) => Err(error),
+            Ok(record) => wire
+                .send(socket, peer, &record, shared.config.max_datagram_size)
+                .await
+                .map_err(|error| ("datagram_deferred_write", error)),
+            Err(error) => Err(("datagram_deferred_encode", error)),
         };
         match result {
             Ok(()) => {
@@ -91,19 +92,18 @@ pub(crate) async fn flush_deferred(
                 }
                 *last_activity = Instant::now();
             }
-            Err(error) if error.code() == rnet_core::ErrorCode::WouldBlock => {
+            Err((_, error)) if error.code() == rnet_core::ErrorCode::WouldBlock => {
                 deferred.entry(peer).or_default().push_front(outbound);
                 *deferred_count += 1;
                 continue;
             }
-            Err(error) => {
+            Err((phase, error)) => {
                 shared
                     .metrics
                     .protocol_errors
                     .fetch_add(1, Ordering::Relaxed);
                 let session = *session;
-                let reason = error.code();
-                remove_session_with_reason(shared, 0, session, reason);
+                remove_session_with_error(shared, session, phase, error);
                 peers.remove(&peer);
                 wire.remove_peer(peer);
                 if let Some(queued) = deferred.remove(&peer) {
@@ -117,3 +117,7 @@ pub(crate) async fn flush_deferred(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "adaptive_datagram_send_tests.rs"]
+mod tests;
