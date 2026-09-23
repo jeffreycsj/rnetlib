@@ -8,6 +8,7 @@ destination="${project_dir}/dist/linux-${architecture}"
 cd "${project_dir}"
 cargo build --locked -p rnet-ffi --release
 cargo build --locked -p rnet-game --bin game_soak --release
+"${DOTNET:-dotnet}" build csharp/RNet/RNet.csproj -c Release
 case "${destination}" in
   "${project_dir}"/dist/linux-*) ;;
   *) echo "refusing to replace unexpected package path: ${destination}" >&2; exit 1 ;;
@@ -18,6 +19,10 @@ mkdir -p "${destination}/include" "${destination}/lib" "${destination}/cpp" \
   "${destination}/bin" "${destination}/scripts"
 mkdir -p "${destination}/cpp/rnet"
 mkdir -p "${destination}/docs"
+mkdir -p "${destination}/csharp/RNet" "${destination}/csharp/RNet.Smoke"
+install -m 0644 csharp/RNet/*.cs csharp/RNet/*.csproj "${destination}/csharp/RNet/"
+install -m 0644 csharp/RNet.Smoke/*.cs csharp/RNet.Smoke/*.csproj "${destination}/csharp/RNet.Smoke/"
+install -m 0644 csharp/RNet/bin/Release/net8.0/RNet.dll "${destination}/lib/RNet.dll"
 install -m 0644 target/release/librnet.a "${destination}/lib/librnet.a"
 install -m 0755 target/release/librnet.so "${destination}/lib/librnet.so"
 install -m 0755 target/release/game_soak "${destination}/bin/game_soak"
@@ -35,6 +40,7 @@ install -m 0644 docs/adversarial-review.md "${destination}/docs/adversarial-revi
 install -m 0644 docs/dependency-review.md "${destination}/docs/dependency-review.md"
 install -m 0644 docs/game-production-qualification.md "${destination}/docs/game-production-qualification.md"
 install -m 0644 docs/getting-started.md "${destination}/docs/getting-started.md"
+install -m 0644 docs/csharp.md docs/game-library-review.md "${destination}/docs/"
 install -m 0644 docs/game-networking.md "${destination}/docs/game-networking.md"
 install -m 0644 docs/production-deployment.md "${destination}/docs/production-deployment.md"
 install -m 0644 Cargo.lock LICENSE README.md SECURITY.md go.mod "${destination}/"

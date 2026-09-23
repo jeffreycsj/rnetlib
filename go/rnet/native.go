@@ -9,6 +9,7 @@ import "C"
 
 import (
 	"fmt"
+	"runtime"
 	"time"
 	"unsafe"
 )
@@ -23,6 +24,13 @@ func (e StatusError) Error() string {
 		return e.Message
 	}
 	return fmt.Sprintf("rnet status %d", e.Code)
+}
+
+// Error text belongs to native OS-thread-local storage. Keep the failing C call
+// and the subsequent string copy on that same thread, including across preemption.
+func lockNativeThread() func() {
+	runtime.LockOSThread()
+	return runtime.UnlockOSThread
 }
 
 func statusError(status C.int32_t) error {

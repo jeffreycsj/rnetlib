@@ -19,6 +19,7 @@ type GameRuntime struct {
 	mu         sync.RWMutex
 	handle     C.rnet_runtime_t
 	stopped    bool
+	closing    bool
 	logger     cgo.Handle
 	loggerSink *gameLoggerSink
 }
@@ -26,6 +27,7 @@ type GameRuntime struct {
 // NewGameRuntime creates a production-default game runtime. Pass nil for a
 // server-only runtime; clients pin one expected server public key.
 func NewGameRuntime(security *ClientSecurity, configs ...GameConfig) (*GameRuntime, error) {
+	defer lockNativeThread()()
 	if len(configs) > 1 {
 		return nil, fmt.Errorf("rnet: NewGameRuntime accepts at most one config")
 	}
@@ -105,6 +107,7 @@ func (r *GameRuntime) handleValue() (C.rnet_runtime_t, error) {
 }
 
 func (r *GameRuntime) Listen(config GameServerConfig) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -128,6 +131,7 @@ func (r *GameRuntime) Listen(config GameServerConfig) (Endpoint, error) {
 }
 
 func (r *GameRuntime) Connect(config GameClientConfig) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -147,6 +151,7 @@ func (r *GameRuntime) Connect(config GameClientConfig) (Endpoint, error) {
 
 // ConnectResume performs a new handshake; a server ResumeRequest still requires AuthDecide.
 func (r *GameRuntime) ConnectResume(config GameClientConfig, oldSession Session, ticket []byte) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -169,6 +174,7 @@ func (r *GameRuntime) ConnectResume(config GameClientConfig, oldSession Session,
 // IssueResumeTicket sends a one-use, server-authoritative ticket to the ready client.
 // Identity is opaque to RNet and must not be logged.
 func (r *GameRuntime) IssueResumeTicket(session Session, identity []byte) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -180,6 +186,7 @@ func (r *GameRuntime) IssueResumeTicket(session Session, identity []byte) error 
 }
 
 func (r *GameRuntime) LocalPort(endpoint Endpoint) (uint16, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -190,6 +197,7 @@ func (r *GameRuntime) LocalPort(endpoint Endpoint) (uint16, error) {
 }
 
 func (r *GameRuntime) AuthDecide(session Session, accept bool) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -202,6 +210,7 @@ func (r *GameRuntime) AuthDecide(session Session, accept bool) error {
 }
 
 func (r *GameRuntime) Send(session Session, payload []byte) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -213,6 +222,7 @@ func (r *GameRuntime) Send(session Session, payload []byte) error {
 }
 
 func (r *GameRuntime) SendWithOptions(session Session, payload []byte, options GameSendOptions) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -259,6 +269,7 @@ func gameExpiryMilliseconds(expiry time.Duration) (uint64, error) {
 // be replaced while waiting in a transport-pending slot; worker-owned data
 // already handed to a socket or KCP cannot be withdrawn.
 func (r *GameRuntime) SendLatest(session Session, key uint64, payload []byte) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -270,6 +281,7 @@ func (r *GameRuntime) SendLatest(session Session, key uint64, payload []byte) er
 }
 
 func (r *GameRuntime) CloseSession(session Session) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -278,6 +290,7 @@ func (r *GameRuntime) CloseSession(session Session) error {
 }
 
 func (r *GameRuntime) CloseEndpoint(endpoint Endpoint) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -286,6 +299,7 @@ func (r *GameRuntime) CloseEndpoint(endpoint Endpoint) error {
 }
 
 func (r *GameRuntime) Rekey(session Session) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -294,6 +308,7 @@ func (r *GameRuntime) Rekey(session Session) error {
 }
 
 func (r *GameRuntime) SetEncryption(session Session, enabled bool) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -306,6 +321,7 @@ func (r *GameRuntime) SetEncryption(session Session, enabled bool) error {
 }
 
 func (r *GameRuntime) NetworkQuality(session Session) (GameQuality, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return GameQuality{}, err
@@ -329,6 +345,7 @@ func (r *GameRuntime) NetworkQuality(session Session) (GameQuality, error) {
 
 // ClockMicros returns microseconds since this runtime's monotonic origin.
 func (r *GameRuntime) ClockMicros() (uint64, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -342,6 +359,7 @@ func (r *GameRuntime) ClockMicros() (uint64, error) {
 
 // ClockSyncSnapshot returns the latest client-side four-timestamp sample.
 func (r *GameRuntime) ClockSyncSnapshot(session Session) (GameClockSync, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return GameClockSync{}, err
@@ -360,6 +378,7 @@ func (r *GameRuntime) ClockSyncSnapshot(session Session) (GameClockSync, error) 
 
 // PrometheusSnapshot returns an owned text copy without per-player labels.
 func (r *GameRuntime) PrometheusSnapshot() (string, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return "", err
@@ -383,6 +402,7 @@ func (r *GameRuntime) PrometheusSnapshot() (string, error) {
 }
 
 func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEvent, err error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return nil, err
@@ -463,6 +483,7 @@ func gameCopyBytes(pointer *C.uint8_t, length C.size_t) ([]byte, error) {
 }
 
 func (r *GameRuntime) Stop(timeout time.Duration) error {
+	defer lockNativeThread()()
 	r.mu.RLock()
 	handle, stopped := r.handle, r.stopped
 	r.mu.RUnlock()
@@ -485,18 +506,32 @@ func (r *GameRuntime) Stop(timeout time.Duration) error {
 }
 
 func (r *GameRuntime) Close() error {
+	defer lockNativeThread()()
 	if err := r.Stop(0); err != nil {
 		return err
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	if r.closing {
+		r.mu.Unlock()
+		return StatusError{Code: int32(C.RNET_E_WOULD_BLOCK), Message: "game runtime is closing"}
+	}
 	if r.handle == 0 {
+		r.mu.Unlock()
 		return nil
 	}
-	if err := statusError(C.rnet_game_runtime_destroy(r.handle)); err != nil {
+	handle := r.handle
+	r.handle, r.closing = 0, true
+	r.mu.Unlock()
+	// Native destruction joins the logger. A pending callback must be able to query
+	// this wrapper and receive a closed-handle error instead of waiting on our mutex.
+	err := statusError(C.rnet_game_runtime_destroy(handle))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closing = false
+	if err != nil {
+		r.handle = handle
 		return err
 	}
-	r.handle = 0
 	if r.logger != 0 {
 		r.logger.Delete()
 		r.logger = 0

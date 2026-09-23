@@ -9,9 +9,15 @@ Run these from a clean source package:
 ```sh
 make check
 cargo check --locked --manifest-path fuzz/Cargo.toml --bins
+make fuzz-asan-smoke
+make miri-test
 ```
 
-`make check` includes the Loom send-admission model. CI additionally runs RustSec, cargo-deny, six explicit AddressSanitizer libFuzzer smoke campaigns, the same concurrency model, and Miri for the pure core/protocol crates. Do not waive an advisory, license, yanked crate, or unknown source without a dated owner and expiry recorded in `deny.toml` or the security review.
+The sanitizer and Miri targets require rustup toolchain `nightly-2026-09-21`, its Miri component,
+and cargo-fuzz 0.13.2. `make check` includes the Loom send-admission model. CI additionally runs
+RustSec, cargo-deny, the same six AddressSanitizer campaigns, concurrency model, and Miri suites.
+Do not waive an advisory, license, yanked crate, or unknown source without a dated owner and expiry
+recorded in `deny.toml` or the security review.
 
 ## Runtime policy
 

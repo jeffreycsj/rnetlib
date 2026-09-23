@@ -308,6 +308,10 @@ class GameRuntime {
     return value;
   }
 
+  void set_metrics_log_interval(uint64_t interval_ms) const {
+    check(rnet_game_metrics_log_interval_set(handle_, interval_ms));
+  }
+
   GameRealtimeQueue realtime_queue_snapshot() const {
     rnet_game_realtime_queue_t raw{};
     check(rnet_game_realtime_queue_snapshot(handle_, &raw));

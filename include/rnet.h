@@ -934,6 +934,8 @@ int32_t rnet_game_clock_sync_snapshot(rnet_runtime_t runtime,
                                       rnet_game_clock_sync_t *out);
 int32_t rnet_game_metrics_snapshot(rnet_runtime_t runtime,
                                    rnet_game_metrics_t *out);
+/* Poll-driven cumulative latency logs; default 30000 ms, zero disables. */
+int32_t rnet_game_metrics_log_interval_set(rnet_runtime_t runtime, uint64_t interval_ms);
 int32_t rnet_game_realtime_queue_snapshot(
     rnet_runtime_t runtime, rnet_game_realtime_queue_t *out);
 int32_t rnet_game_scheduled_queue_snapshot(

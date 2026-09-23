@@ -67,6 +67,7 @@ func (config GameRangeClientConfig) String() string {
 func (config GameRangeClientConfig) GoString() string { return config.String() }
 
 func (r *GameRuntime) ListenRange(config GameRangeServerConfig) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -91,6 +92,7 @@ func (r *GameRuntime) ListenRange(config GameRangeServerConfig) (Endpoint, error
 }
 
 func (r *GameRuntime) ConnectRange(config GameRangeClientConfig) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -110,6 +112,7 @@ func (r *GameRuntime) ConnectRange(config GameRangeClientConfig) (Endpoint, erro
 }
 
 func (r *GameRuntime) ConnectRangeResume(config GameRangeClientConfig, oldSession Session, ticket []byte) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -131,6 +134,7 @@ func (r *GameRuntime) ConnectRangeResume(config GameRangeClientConfig, oldSessio
 }
 
 func (r *GameRuntime) SelectedProtocolVersion(session Session) (uint32, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -141,6 +145,7 @@ func (r *GameRuntime) SelectedProtocolVersion(session Session) (uint32, error) {
 }
 
 func (r *GameRuntime) TransportLatestReplacements() (uint64, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -151,6 +156,7 @@ func (r *GameRuntime) TransportLatestReplacements() (uint64, error) {
 }
 
 func (r *GameRuntime) TransportLatestSnapshot() (GameTransportLatest, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return GameTransportLatest{}, err

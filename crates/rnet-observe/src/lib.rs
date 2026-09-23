@@ -40,6 +40,8 @@ impl Default for LatencyHistogram {
 
 impl LatencyHistogram {
     /// Records a latency using fixed power-of-two microsecond buckets.
+    // `try_update` is the future spelling, but it is unavailable on the declared Rust 1.85 MSRV.
+    #[allow(deprecated)]
     pub fn record(&self, duration: Duration) {
         let micros = duration.as_micros().min(u128::from(u64::MAX)) as u64;
         let bucket = latency_bucket(micros);

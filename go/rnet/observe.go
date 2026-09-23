@@ -46,6 +46,7 @@ type LatencyMetric struct {
 }
 
 func (r *Runtime) Metrics() (Metrics, error) {
+	defer lockNativeThread()()
 	var result Metrics
 	handle, err := r.handleValue()
 	if err != nil {
@@ -91,6 +92,7 @@ func (r *Runtime) DrainLatencyMetrics() ([]LatencyMetric, error) {
 }
 
 func (r *Runtime) latencyMetrics(drain bool) ([]LatencyMetric, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return nil, err
@@ -124,6 +126,7 @@ func (r *Runtime) latencyMetrics(drain bool) ([]LatencyMetric, error) {
 }
 
 func (r *Runtime) SetMetricsLogInterval(interval time.Duration) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err

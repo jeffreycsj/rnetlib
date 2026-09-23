@@ -393,7 +393,9 @@ pub extern "C" fn rnet_runtime_destroy(runtime: u64) -> i32 {
                 "runtime still has active API calls",
             ));
         }
-        table.remove(runtime);
+        let removed = table.remove(runtime);
+        drop(table);
+        drop(removed);
         Ok(())
     })
 }

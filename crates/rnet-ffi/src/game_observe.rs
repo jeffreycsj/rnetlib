@@ -5,6 +5,16 @@ use crate::game_queue_abi::{RnetGameRealtimeQueue, RnetGameScheduledQueue};
 use crate::game_registry;
 use crate::registry::{ffi_status, invalid_argument};
 
+/// Changes poll-driven cumulative game latency logs; zero disables them.
+#[no_mangle]
+pub extern "C" fn rnet_game_metrics_log_interval_set(runtime: u64, interval_ms: u64) -> i32 {
+    ffi_status(|| {
+        game_registry::lease(runtime)?
+            .runtime
+            .set_metrics_log_interval(std::time::Duration::from_millis(interval_ms))
+    })
+}
+
 #[no_mangle]
 /// # Safety
 /// `out` must point to writable storage for one `RnetGameQuality`.

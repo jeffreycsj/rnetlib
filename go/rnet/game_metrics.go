@@ -82,6 +82,7 @@ type GameLoggerMetrics struct {
 
 // MetricsSnapshot exposes the same cumulative game counters as the Rust facade.
 func (r *GameRuntime) MetricsSnapshot() (GameMetrics, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return GameMetrics{}, err
@@ -127,6 +128,7 @@ func (r *GameRuntime) MetricsSnapshot() (GameMetrics, error) {
 }
 
 func (r *GameRuntime) RealtimeQueueSnapshot() (GameRealtimeQueue, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return GameRealtimeQueue{}, err
@@ -144,6 +146,7 @@ func (r *GameRuntime) RealtimeQueueSnapshot() (GameRealtimeQueue, error) {
 }
 
 func (r *GameRuntime) ScheduledQueueSnapshot() (GameScheduledQueue, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return GameScheduledQueue{}, err
@@ -173,6 +176,7 @@ func (r *GameRuntime) ScheduledQueueSnapshot() (GameScheduledQueue, error) {
 
 // RangeBufferSnapshot returns low-cardinality wire-v4 early-data capacity telemetry.
 func (r *GameRuntime) RangeBufferSnapshot() (GameRangeBuffer, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return GameRangeBuffer{}, err

@@ -5,6 +5,7 @@ mod clock_sync;
 mod clock_sync_runtime;
 mod config;
 mod diagnostics;
+mod diagnostics_summary;
 mod envelope;
 mod event;
 #[cfg(feature = "fuzzing")]

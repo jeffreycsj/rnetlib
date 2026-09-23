@@ -52,6 +52,7 @@ check_max_lines 600 \
   crates/rnet-transport/src/*.rs crates/rnet-ffi/src/*.rs \
   cpp/rnet/*.hpp go/rnet/*.go go/rnet/native.h
 check_max_lines 800 crates/rnet-game/src/*.rs
+check_max_lines 400 csharp/RNet/*.cs
 
 for forbidden in common helpers misc utils; do
   if find "${project_dir}/crates/rnet-transport/src" \

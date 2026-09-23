@@ -377,6 +377,8 @@ pub(crate) fn fail_secure_session(
     let reason = error.code();
     let mut event = session_event(EventType::JoinFailed, endpoint, session);
     event.status = reason;
+    // Only library-generated diagnostics belong here, never handshake credentials.
+    event.data = error.to_string().into_bytes();
     publish_lifecycle(shared, event);
     remove_session_with_reason(shared, endpoint, session, reason);
 }

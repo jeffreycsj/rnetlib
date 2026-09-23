@@ -75,6 +75,11 @@ fn optional_game_logger_records_auth_and_denial_without_credentials() {
                 names.push(record.event_name);
             } else if record.event_name == "game_join_failed" && record.endpoint == client {
                 assert_eq!(record.error_code, ErrorCode::AuthRejected);
+                assert!(
+                    record.message.contains("authentication rejected"),
+                    "lost handshake error detail: {}",
+                    record.message
+                );
                 names.push(record.event_name);
             }
         }
@@ -99,6 +104,63 @@ fn logger_remains_optional_for_a_normal_game_runtime() {
     assert!(runtime
         .prometheus_snapshot()
         .contains("rnet_game_logger_enabled 0"));
+    runtime.stop(Duration::ZERO).unwrap();
+}
+
+#[test]
+fn game_poll_logs_bounded_cumulative_latency_summaries_and_can_disable_them() {
+    let (sender, receiver) = mpsc::channel();
+    let logger = BoundedLogger::new(LoggerConfig::default(), move |record| {
+        let _ = sender.send(record);
+    })
+    .unwrap();
+    let runtime = GameRuntime::new(GameRuntimeConfig::production())
+        .unwrap()
+        .with_logger(logger);
+    runtime
+        .set_metrics_log_interval(Duration::from_millis(1))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(5));
+    runtime.poll(0, Duration::ZERO);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let summary = loop {
+        let record = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        if record.event_name == "game_latency_summary" {
+            break record;
+        }
+    };
+    for field in [
+        "scope=cumulative",
+        "kind=heartbeat_rtt",
+        "kind=send_queue",
+        "kind=scheduled_queue",
+        "count=",
+        "p95_us=",
+        "p99_us=",
+        "p999_us=",
+        "logger_dropped=",
+    ] {
+        assert!(
+            summary.message.contains(field),
+            "missing {field}: {}",
+            summary.message
+        );
+    }
+    runtime.set_metrics_log_interval(Duration::ZERO).unwrap();
+    std::thread::sleep(Duration::from_millis(5));
+    runtime.poll(0, Duration::ZERO);
+    while let Ok(record) = receiver.recv_timeout(Duration::from_millis(30)) {
+        assert_ne!(record.event_name, "game_latency_summary");
+    }
+    assert_eq!(
+        runtime
+            .set_metrics_log_interval(Duration::MAX)
+            .unwrap_err()
+            .code(),
+        ErrorCode::InvalidArgument
+    );
     runtime.stop(Duration::ZERO).unwrap();
 }
 

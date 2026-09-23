@@ -15,6 +15,7 @@ impl GameRuntime {
         // Game controls are handled by the same event queue as lifecycle changes. Serializing
         // polls preserves their order and keeps challenge state single-writer.
         let _guard = self.poll_guard.lock().expect("game poll lock poisoned");
+        self.maybe_log_metrics();
         self.flush_scheduled_inner(self.scheduled_flush_batch);
         self.flush_realtime_inner(self.realtime_flush_batch);
         let mut carried = Vec::new();
@@ -126,9 +127,16 @@ impl GameRuntime {
             let session = event.session;
             let is_business_message = event.event_type == EventType::Message;
             let integrity_verified = event.integrity_verified;
+            // These lifecycle payloads are local diagnostics, unlike opaque application bytes
+            // and authentication tickets. Preserve the cause before typed conversion drops it.
+            let detail = (matches!(
+                event.event_type,
+                EventType::EndpointError | EventType::JoinFailed
+            ) && !event.data.is_empty())
+            .then(|| String::from_utf8_lossy(&event.data).into_owned());
             match self.convert_event(event) {
                 Ok(Some(event)) => {
-                    self.log_game_event(&event);
+                    self.log_game_event_detail(&event, detail.as_deref());
                     deferred_public |= self
                         .range
                         .lock()
@@ -136,7 +144,7 @@ impl GameRuntime {
                         .queue_public(event, output, capacity);
                 }
                 Ok(None) => {}
-                Err(_) => {
+                Err(error) => {
                     let unverified_plaintext = self.allow_plaintext_business_data
                         && is_business_message
                         && !integrity_verified;
@@ -153,7 +161,7 @@ impl GameRuntime {
                                 .close_session(session, ErrorCode::ProtocolError);
                         }
                         let violation = GameEvent::ProtocolViolation { endpoint, session };
-                        self.log_game_event(&violation);
+                        self.log_game_event_detail(&violation, Some(&error.to_string()));
                         deferred_public |= self
                             .range
                             .lock()

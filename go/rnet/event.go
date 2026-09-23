@@ -60,6 +60,7 @@ func (e Event) SecurityChange() (SecurityChange, error) {
 }
 
 func (r *Runtime) Poll(capacity int, timeout time.Duration) ([]Event, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return nil, err

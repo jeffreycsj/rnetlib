@@ -12,6 +12,7 @@ type SendOptions struct {
 }
 
 func (r *Runtime) AuthDecide(session Session, accept bool) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -26,6 +27,7 @@ func (r *Runtime) AuthDecide(session Session, accept bool) error {
 // SetSecurity asks the server side of a session to change its data protection mode.
 // The connected client follows the authenticated transition automatically.
 func (r *Runtime) SetSecurity(session Session, mode SecurityMode) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -35,6 +37,7 @@ func (r *Runtime) SetSecurity(session Session, mode SecurityMode) error {
 }
 
 func (r *Runtime) Rekey(session Session) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -43,6 +46,7 @@ func (r *Runtime) Rekey(session Session) error {
 }
 
 func (r *Runtime) Send(session Session, messageType uint32, payload []byte) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -59,6 +63,7 @@ func (r *Runtime) Send(session Session, messageType uint32, payload []byte) erro
 }
 
 func (r *Runtime) SendWithOptions(session Session, messageType uint32, payload []byte, options SendOptions) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -72,6 +77,7 @@ func (r *Runtime) SendWithOptions(session Session, messageType uint32, payload [
 }
 
 func (r *Runtime) SendLegacy(session Session, messageType, streamID uint32, requestID uint64, payload []byte) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
@@ -85,6 +91,7 @@ func (r *Runtime) SendLegacy(session Session, messageType, streamID uint32, requ
 }
 
 func (r *Runtime) CloseSession(session Session, reason int32) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err

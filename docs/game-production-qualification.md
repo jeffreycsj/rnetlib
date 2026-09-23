@@ -1,10 +1,19 @@
 # Game production qualification record
 
 This record separates repository qualification from target-environment certification. It was
-updated on 2026-09-22 against the dirty development tree shown by the commands below; rerun every
+updated on 2026-09-23 against the dirty development tree shown by the commands below; rerun every
 gate on the release commit and archive the resulting package hash before deployment.
 
 ## Repository gates
+
+- The 2026-09-23 game SDK review added a Linux x86_64 / .NET 8 C# facade and poll-driven game
+  latency summaries, and fixed native/Go logger teardown deadlocks and Go native-TLS diagnostics.
+  Strict Clippy, serial workspace tests, C++11, Go/race, Loom, ABI checks and C# checks pass locally.
+  C# also passes against the actual packaged managed/native binaries, including all three
+  transports, live security changes, recovery, version selection, sampled telemetry, wrong-key
+  rejection, logger reentry and managed ownership. See [the review](game-library-review.md) for
+  remaining limitations. ASan/Miri and short traffic measurements below are retained evidence
+  from the preceding qualification, not campaigns repeated for this SDK change.
 
 - Rust formatting, strict workspace Clippy, all workspace targets, structure limits, release ABI
   exports, C++11 final-link smoke tests, Go/cgo tests, and Go race tests pass.
@@ -14,8 +23,15 @@ gate on the release commit and archive the resulting package hash before deploym
   the source tree, plus the game guide and this qualification record.
 - All six fuzz targets (`control_parser`, `datagram_preflight`, `ffi_config`, `frame_parser`,
   `game_wire`, and `kcp_engine`) completed five-second, one-job, 1 GiB RSS-limited smoke campaigns
-  with release arithmetic and no sanitizer. A newly found impossible future KCP ACK timestamp was
-  preserved as a regression and is rejected before entering the pinned dependency.
+  with release arithmetic and AddressSanitizer on pinned `nightly-2026-09-21` / cargo-fuzz 0.13.2.
+  The local sandbox forbids LeakSanitizer's ptrace operation, so this local run used
+  `ASAN_OPTIONS=detect_leaks=0`; CI deliberately keeps the default leak check enabled. A newly
+  found impossible future KCP ACK timestamp was preserved as a regression and is rejected before
+  entering the pinned dependency.
+- Miri executed all 26 tests in the pure `rnet-core` and `rnet-protocol` suites on the same pinned
+  nightly with no undefined-behavior report. Nightly deprecation diagnostics also identified five
+  atomic update calls. The future rename is suppressed at their narrow function boundaries because
+  the replacement API would violate the declared Rust 1.85 MSRV.
 - `cargo audit` scanned 104 locked dependencies without a reported advisory. `cargo deny check`
   passed advisories, licenses, bans, and sources; the known duplicate `getrandom`, `syn`, and
   `windows-sys` versions remain visible warnings.
@@ -30,14 +46,15 @@ gate on the release commit and archive the resulting package hash before deploym
   emits P99.9/max and bounded-queue/close-reason telemetry, and records the exact release probe and
   lockfile hashes.
 
-## Tooling limits
+## Tooling qualification and limits
 
-- Local ASan fuzzing cannot run with the installed stable-only Rust 1.96 toolchain: cargo-fuzz
-  requires nightly `-Zsanitizer`, and this host has no `rustup` toolchain manager. CI now installs
-  nightly and explicitly runs every fuzz target with AddressSanitizer and a 2 GiB per-process RSS
-  limit; non-sanitized local coverage and saved-crash replay also pass.
-- Miri is not installed locally. CI installs the nightly Miri component and runs the pure core and
-  protocol crates on every push and pull request.
+- The host system toolchain remains unchanged. An isolated rustup installation under `/data/tmp`
+  supplied pinned `nightly-2026-09-21`, Miri, rust-src, and cargo-fuzz 0.13.2 for the local evidence
+  above. `make fuzz-asan-smoke` and `make miri-test` reproduce the repository commands on any host
+  with that rustup toolchain and components installed.
+- CI uses the same dated nightly and cargo-fuzz version. Its fuzz smoke retains the default
+  AddressSanitizer leak detection and a 2 GiB per-process RSS limit; the local ptrace restriction is
+  not encoded into repository defaults.
 - The production send-admission gate is exercised with Loom across racing send/session-close and
   send/runtime-stop interleavings. `make loom-test` runs the same bounded model locally and in CI;
   deterministic concurrency regressions and Go race coverage remain enabled as separate layers.

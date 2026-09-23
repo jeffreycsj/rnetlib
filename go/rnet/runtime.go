@@ -33,6 +33,7 @@ func NewRuntime(configs ...Config) (*Runtime, error) {
 }
 
 func NewRuntimeWithConfig(config Config) (*Runtime, error) {
+	defer lockNativeThread()()
 	var native C.rnet_config_v5_t
 	if err := statusError(C.rnet_config_v5_init(&native)); err != nil {
 		return nil, err
@@ -104,6 +105,7 @@ func NewRuntimeWithConfig(config Config) (*Runtime, error) {
 }
 
 func (r *Runtime) Stop(timeout time.Duration) error {
+	defer lockNativeThread()()
 	r.mu.Lock()
 	if r.handle == 0 || r.stopped {
 		r.mu.Unlock()
@@ -127,6 +129,7 @@ func (r *Runtime) Stop(timeout time.Duration) error {
 }
 
 func (r *Runtime) Close() error {
+	defer lockNativeThread()()
 	if err := r.Stop(0); err != nil {
 		return err
 	}

@@ -4,7 +4,7 @@ RNet is a bounded, event-driven networking foundation for client/server games. T
 
 The game facade is a production candidate, **not yet target-environment certified**. It provides authenticated wire-v3 exact-version joins and opt-in wire-v4 server-selected version-range joins, a no-`msg_type` send/receive API, numeric-IP and hostname connections, server-led encryption changes, authenticated heartbeat/quality/clock measurements, bounded `LatestOnly` staging with TCP/KCP transport-pending replacement, priority/expiry scheduling, correlation/tick metadata, and single-runtime one-use reconnect tickets. Game-level C/C++11/Go facades cover the same flow and telemetry. Cross-instance/rolling-restart recovery is intentionally out of scope; 24–72 hour target-environment soak and independent security review remain release gates.
 
-See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, and Go entry points and their security boundaries.
+See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, and Go entry points and their security boundaries, and the [C# game SDK guide](docs/csharp.md) for .NET 8+ on Linux x86_64. The [seven-requirement review](docs/game-library-review.md) records fixes, evidence and remaining release gates.
 
 ## Implemented capabilities
 
@@ -79,6 +79,7 @@ Advanced sends remain optional. `send_with_options` adds a fair local priority, 
 | C | `rnet_game_send(...)` | `rnet_game_poll_events(...)` → `RNET_GAME_MESSAGE` |
 | C++11 | `runtime.send(session, payload)` | `runtime.poll(...)` → `RNET_GAME_MESSAGE` |
 | Go | `runtime.Send(session, payload)` | `runtime.Poll(...)` → `GameMessage` |
+| C# (.NET 8+) | `runtime.Send(session, payload)` | `runtime.Poll(...)` → `GameEventType.Message` |
 
 The [game networking guide](docs/game-networking.md#sending-and-receiving) contains complete event-loop snippets for all four languages, including C buffer-token release.
 
@@ -102,14 +103,16 @@ See [Getting started](docs/getting-started.md) for transport-level Rust, C, C++1
 
 ## Build and test
 
-Requirements are Rust 1.85 or newer, a C++11 compiler, Go 1.22 or newer, and a Linux-like linker.
+Requirements are Rust 1.85 or newer, a C++11 compiler, Go 1.22 or newer, .NET SDK 8+ for the C# checks/package, and a Linux-like linker.
 
 ```sh
 cargo build -p rnet-ffi --release
 make check
 ```
 
-`make check` runs formatting, Clippy, Rust tests, ABI export checks, and the C++11 and Go smoke tests. Formatting and Clippy require the matching rustfmt/clippy components for the active Rust toolchain.
+`make check` runs structure checks, formatting, Clippy, Rust/Loom tests, ABI export checks, and the C++11, Go and C# smoke tests. `make csharp-test DOTNET=/path/to/dotnet` selects an SDK installed outside PATH. Formatting and Clippy require the matching rustfmt/clippy components for the active Rust toolchain.
+
+Game loggers default to a poll-driven 30-second `game_latency_summary`, with cumulative sample counts, P90/P95/P99/P99.9/max in microseconds and queue/logger counters. Configure or disable it with `set_metrics_log_interval` (Rust/C++), `rnet_game_metrics_log_interval_set` (C), or `SetMetricsLogInterval` (Go/C#); zero disables summaries. Supply your own callback at runtime creation. Callbacks must return promptly and must not stop/destroy their runtime; no business payload or credential is logged. See the language guides for ownership rules.
 
 ## C lifecycle
 
@@ -156,6 +159,8 @@ Raw UDP is intentionally unreliable and unordered. KCP is reliable and ordered b
 - `cpp`: a small `rnet.hpp` umbrella over typed C++11 headers in `cpp/rnet`.
 - `go/rnet`: Go SDK split by config, runtime, endpoint, session, event,
   observation, and keypair responsibilities; `native.h` owns the cgo shims.
+- `csharp/RNet`: .NET 8 game SDK split by configuration, endpoints, events, metrics,
+  keys and native lifetimes; `csharp/RNet.Smoke` exercises the actual shared library.
 - `fuzz`: frame, security-control, cookie/preflight, KCP, game-wire, and FFI configuration fuzz targets.
 
 See [Production deployment](docs/production-deployment.md), the current [game qualification record](docs/game-production-qualification.md), [SECURITY.md](SECURITY.md), [dependency-review.md](docs/dependency-review.md), and [adversarial-review.md](docs/adversarial-review.md) before production exposure.

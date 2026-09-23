@@ -1,6 +1,6 @@
 # 对抗性审查报告
 
-本文按时间保留各轮审查结论。前面的 Phase 1/Phase 2 段落是历史快照，后续实现已替代其中关于工具链、KCP 支持状态和固定 peer 上限的描述；当前结论以最后的 Production v1 复审为准。
+本文按时间保留各轮审查结论。前面的 Phase 1/Phase 2 段落是历史快照，后续实现已替代其中关于工具链、KCP 支持状态和固定 peer 上限的描述；最新七项要求、logger 生命周期修复和 C# 验证见 [游戏库复审](game-library-review.md)，生产边界以该报告和 qualification record 为准。
 
 ## 发现的问题
 
@@ -55,7 +55,7 @@
 | 4 | 中 | FFI logger callback | callback panic 被异步 logger 捕获，但线程局部的 callback 标记会因 unwind 跳过复位，污染该日志线程后续状态。 | 使用 RAII guard 在正常返回和 unwind 时统一复位。 |
 | 5 | 中 | UDP peer route | 单 session 关闭后 peer map 仍指向已删除 handle，下一数据报可能沿用陈旧 session。 | 收包时校验 session table，删除陈旧映射并按正常顺序建立新 session；测试覆盖 open-before-message。 |
 
-本轮还核验了 C ABI 增量兼容、C++11 最终链接、Go/cgo、KCP ACK RTT、KCP update delay、UDP/KCP 握手/认证计时和异步 logger callback 计时。公开 API 的功能链路已覆盖；关键发送准入竞态已有 Loom 模型，长期弱网、soak、sanitizer/Miri 与第三方密码审计仍属于外部生产准入工作。
+本轮还核验了 C ABI 增量兼容、C++11 最终链接、Go/cgo、KCP ACK RTT、KCP update delay、UDP/KCP 握手/认证计时和异步 logger callback 计时。公开 API 的功能链路已覆盖；关键发送准入竞态已有 Loom 模型，长期弱网、soak、长时间 sanitizer/fuzz 与第三方密码审计仍属于外部生产准入工作。
 
 ## 透明安全与通用接口复审
 
@@ -144,6 +144,6 @@
 | 7 | 高 | 游戏长稳 probe | 原探针只覆盖客户端到服务端，尾部可靠消息也可能在报告前尚未排空；现有报告无法证明回程可用。 | 改为客户端→服务端→客户端 echo，可靠传输在十秒有界排空后要求三段计数完全一致；UDP 保留 200 ms 接收宽限并单独记录双向乱序/重复。 |
 | 8 | 中 | 生产资格发布包 | 部署文档引用的游戏 soak 脚本和二进制没有进入 SDK 包，目标主机拿到发布物后无法复现资格测试。 | 包内新增预编译 `bin/game_soak`、可直接运行的脚本和锁文件；报告记录探针与 lockfile SHA256，并通过脱离源码树的回环测试。 |
 
-调度器指标只使用固定 priority 标签，不把玩家、session 或 correlation ID 放进 Prometheus。异步失败日志保留 correlation ID 和稳定错误码但不记录 payload。恢复票据风暴、持续背压、公平性、队列预算、零容量 poll、tick 最大值、停止竞态和 KCP 串号边界均有确定性回归；三传输双向短时 probe 与全部六个非 sanitizer fuzz target 已通过。当前没有遗留的高置信代码阻塞项。
+调度器指标只使用固定 priority 标签，不把玩家、session 或 correlation ID 放进 Prometheus。异步失败日志保留 correlation ID 和稳定错误码但不记录 payload。恢复票据风暴、持续背压、公平性、队列预算、零容量 poll、tick 最大值、停止竞态和 KCP 串号边界均有确定性回归；三传输双向短时 probe、全部六个 AddressSanitizer fuzz target 和纯 core/protocol Miri 套件已通过。当前没有遗留的高置信代码阻塞项。
 
-ASan 与 Miri 在本机稳定版、无 rustup 的 Rust 工具链上不可执行。发送准入门现已通过 Loom 穷举 send/close 与 send/stop 交错并进入 CI。目标环境 24–72 小时弱网长稳和独立 Noise/依赖审计仍是外部生产准入项，不能由本地门禁替代。详细命令、短时数据和边界见 [game-production-qualification.md](game-production-qualification.md)。
+本机使用隔离的固定 nightly 实际执行了短时 ASan 与 Miri；由于沙箱禁止 ptrace，本地 ASan 关闭 leak 检测，CI 保留默认 leak 检测。发送准入门也已通过 Loom 穷举 send/close 与 send/stop 交错并进入 CI。目标环境 24–72 小时弱网长稳、长时间 fuzz 和独立 Noise/依赖审计仍是外部生产准入项，不能由本地门禁替代。详细命令、短时数据和边界见 [game-production-qualification.md](game-production-qualification.md)。

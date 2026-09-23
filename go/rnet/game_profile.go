@@ -16,6 +16,7 @@ const (
 
 // GameProfileDefaults returns the immutable transport and server security default.
 func GameProfileDefaults(profile GameProfile) (Transport, SecurityMode, error) {
+	defer lockNativeThread()()
 	var transport C.uint32_t
 	var encrypted C.uint32_t
 	if err := statusError(C.rnet_game_profile_defaults(C.uint32_t(profile), &transport, &encrypted)); err != nil {

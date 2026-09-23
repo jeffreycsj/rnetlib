@@ -2,10 +2,11 @@
 
 use crate::event::GameEvent;
 use crate::runtime::GameRuntime;
-use rnet_core::{ErrorCode, Handle};
+use rnet_core::{ErrorCode, Handle, RnetError};
 use rnet_observe::{BoundedLogger, LatencySnapshot, LogLevel, LogRecord};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -16,8 +17,9 @@ pub struct GameLoggerSnapshot {
 }
 
 pub(crate) struct GameDiagnostics {
-    runtime_id: Handle,
-    logger: Option<BoundedLogger>,
+    pub(crate) runtime_id: Handle,
+    pub(crate) logger: Option<BoundedLogger>,
+    pub(crate) summary: Mutex<(Duration, Instant)>,
 }
 
 impl GameDiagnostics {
@@ -25,10 +27,17 @@ impl GameDiagnostics {
         Self {
             runtime_id: NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
             logger: None,
+            summary: Mutex::new((Duration::from_secs(30), Instant::now())),
         }
     }
 
-    fn record(&self, event: &GameEvent, transport: u32, protocol: Option<(u64, u32)>) {
+    fn record(
+        &self,
+        event: &GameEvent,
+        transport: u32,
+        protocol: Option<(u64, u32)>,
+        detail: Option<&str>,
+    ) {
         let Some(logger) = self.logger.as_ref() else {
             return;
         };
@@ -45,7 +54,13 @@ impl GameDiagnostics {
             level,
             event_name: name.into(),
             target: "rnet.game".into(),
-            message,
+            message: if let Some(error) = detail {
+                error.to_string()
+            } else if message.is_empty() && status != ErrorCode::Ok {
+                format!("reason={status:?}")
+            } else {
+                message
+            },
             runtime: self.runtime_id,
             endpoint,
             session,
@@ -60,7 +75,7 @@ impl GameDiagnostics {
         endpoint: Handle,
         session: Handle,
         transport: u32,
-        status: ErrorCode,
+        error: &RnetError,
         correlation_id: u64,
     ) {
         let Some(logger) = self.logger.as_ref() else {
@@ -75,12 +90,12 @@ impl GameDiagnostics {
             level: LogLevel::Warn,
             event_name: "game_scheduled_send_failed".into(),
             target: "rnet.game".into(),
-            message: String::new(),
+            message: format!("phase=scheduled_send {error}"),
             runtime: self.runtime_id,
             endpoint,
             session,
             transport,
-            error_code: status,
+            error_code: error.code(),
             correlation_id,
         });
     }
@@ -114,7 +129,7 @@ impl GameRuntime {
             .map(BoundedLogger::callback_latency)
     }
 
-    pub(crate) fn log_game_event(&self, event: &GameEvent) {
+    pub(crate) fn log_game_event_detail(&self, event: &GameEvent, detail: Option<&str>) {
         if self.diagnostics.logger.is_none()
             || matches!(event, GameEvent::Message(_) | GameEvent::Writable { .. })
         {
@@ -133,13 +148,13 @@ impl GameRuntime {
             .expect("game protocol table poisoned")
             .get(&endpoint)
             .map(|protocol| (protocol.protocol_id, protocol.version));
-        self.diagnostics.record(event, transport, protocol);
+        self.diagnostics.record(event, transport, protocol, detail);
     }
 
     pub(crate) fn log_scheduled_send_failure(
         &self,
         session: Handle,
-        status: ErrorCode,
+        error: &RnetError,
         correlation_id: u64,
     ) {
         let endpoint = self
@@ -156,7 +171,7 @@ impl GameRuntime {
             .get(&endpoint)
             .map_or(0, |transport| *transport as u32);
         self.diagnostics
-            .record_send_failure(endpoint, session, transport, status, correlation_id);
+            .record_send_failure(endpoint, session, transport, error, correlation_id);
     }
 }
 

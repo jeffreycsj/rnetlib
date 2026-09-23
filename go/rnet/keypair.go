@@ -16,6 +16,7 @@ type Keypair struct {
 }
 
 func GenerateKeypair() (Keypair, error) {
+	defer lockNativeThread()()
 	var keypair Keypair
 	err := statusError(C.rnet_go_keypair_generate(
 		(*C.uint8_t)(unsafe.Pointer(&keypair.Private[0])),
@@ -25,6 +26,7 @@ func GenerateKeypair() (Keypair, error) {
 }
 
 func KeypairFromPrivate(private []byte) (Keypair, error) {
+	defer lockNativeThread()()
 	var keypair Keypair
 	if len(private) != len(keypair.Private) {
 		return keypair, StatusError{Code: int32(C.RNET_E_INVALID_ARGUMENT), Message: "private key must contain exactly 32 bytes"}

@@ -105,7 +105,7 @@ impl GameRuntime {
                     drop(queue);
                     self.log_scheduled_send_failure(
                         message.session,
-                        error.code(),
+                        &error,
                         message.correlation_id,
                     );
                 }

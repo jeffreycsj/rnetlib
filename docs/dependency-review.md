@@ -15,7 +15,10 @@
 - The adapter has deterministic loss/reordering recovery coverage. End-to-end KCP additionally passes Noise handshake, explicit application authorization, 4096-byte message transfer, and shutdown tests.
 - Each connection negotiates a random nonzero conversation in the authenticated-cookie preflight. RNet rejects stale conversations and impossible future/older-than-60-second ACK timestamps before they enter the dependency; saved fuzz input and signed-wrap boundary regressions cover both cases.
 - KCP alone is built with wrapping arithmetic because its sequence calculations require modulo-2^32 behavior; overflow checks remain enabled for RNet workspace code.
-- Residual qualification gaps are long-duration soak, broad `tc netem` matrices, sanitizer/Miri coverage of dependencies, and production tuning against target latency/bandwidth profiles.
+- Residual qualification gaps are long-duration sanitizer/fuzz campaigns, broad `tc netem`
+  matrices, independent dependency review, and production tuning against target latency/bandwidth
+  profiles. Short ASan campaigns exercise all six fuzz boundaries, while Miri covers the pure core
+  and protocol crates rather than the complete Noise/KCP stack.
 
 ## Toolchain
 
@@ -23,4 +26,5 @@
 - The final local production gate recorded in the qualification reports used TencentOS Rust 1.96.0. Formatting and Clippy do not replace the system compiler or PATH.
 - The latest dependency gate scanned 104 locked packages, including the optional test-only Loom graph, with `cargo audit` and reported no advisory. `cargo deny check` passed advisories, licenses, bans, and sources; duplicate-version warnings remain explicitly visible.
 
-The exact repository results, unavailable sanitizer/Miri rationale, short transport probe, and final external gates are recorded in [game-production-qualification.md](game-production-qualification.md).
+The exact repository results, sanitizer/Miri scope, short transport probe, and final external gates
+are recorded in [game-production-qualification.md](game-production-qualification.md).

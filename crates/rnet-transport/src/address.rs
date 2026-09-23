@@ -13,6 +13,8 @@ static ACTIVE_RESOLVERS: AtomicUsize = AtomicUsize::new(0);
 struct ResolverPermit;
 
 impl ResolverPermit {
+    // `try_update` is the future spelling, but it is unavailable on the declared Rust 1.85 MSRV.
+    #[allow(deprecated)]
     fn acquire() -> Result<Self> {
         ACTIVE_RESOLVERS
             .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |active| {

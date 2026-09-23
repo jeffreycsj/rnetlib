@@ -12,6 +12,7 @@ import (
 
 // Listen opens a server endpoint. The transport is selected by config, not by the method name.
 func (r *Runtime) Listen(config ServerConfig) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -29,6 +30,7 @@ func (r *Runtime) Listen(config ServerConfig) (Endpoint, error) {
 
 // Connect starts a client connection; encryption is negotiated and handled internally.
 func (r *Runtime) Connect(config ClientConfig) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -69,6 +71,7 @@ func (r *Runtime) OpenSecureKCPListener(host string, port uint16, keypair Keypai
 }
 
 func (r *Runtime) openSecureListener(transport C.uint32_t, host string, port uint16, keypair Keypair) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -97,6 +100,7 @@ func (r *Runtime) JoinSecureKCP(host string, port uint16, localKey Keypair, serv
 }
 
 func (r *Runtime) joinSecure(transport C.uint32_t, host string, port uint16, localKey Keypair, serverPublicKey, payload []byte) (Endpoint, error) {
+	defer lockNativeThread()()
 	if len(serverPublicKey) != 32 {
 		return 0, StatusError{Code: int32(C.RNET_E_INVALID_ARGUMENT), Message: "invalid endpoint configuration"}
 	}
@@ -119,6 +123,7 @@ func (r *Runtime) joinSecure(transport C.uint32_t, host string, port uint16, loc
 }
 
 func (r *Runtime) openEndpoint(transport, mode C.uint32_t, bindHost string, bindPort uint16, remoteHost string, remotePort uint16) (Endpoint, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -144,6 +149,7 @@ func (r *Runtime) openEndpoint(transport, mode C.uint32_t, bindHost string, bind
 }
 
 func (r *Runtime) LocalPort(endpoint Endpoint) (uint16, error) {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return 0, err
@@ -154,6 +160,7 @@ func (r *Runtime) LocalPort(endpoint Endpoint) (uint16, error) {
 }
 
 func (r *Runtime) CloseEndpoint(endpoint Endpoint) error {
+	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err

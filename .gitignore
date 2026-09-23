@@ -4,6 +4,8 @@
 /fuzz/corpus/
 /fuzz/target/
 /lib/
+/csharp/**/bin/
+/csharp/**/obj/
 
 # Local build, test, coverage, and profiling artifacts.
 *.test

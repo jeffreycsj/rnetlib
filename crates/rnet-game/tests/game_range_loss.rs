@@ -118,6 +118,8 @@ impl Drop for LossyUdpProxy {
     }
 }
 
+// `try_update` is the future spelling, but it is unavailable on the declared Rust 1.85 MSRV.
+#[allow(deprecated)]
 fn consume_drop(counter: &AtomicUsize) -> bool {
     matches!(
         counter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
@@ -133,6 +135,8 @@ fn consume_drop(counter: &AtomicUsize) -> bool {
     )
 }
 
+// `try_update` is the future spelling, but it is unavailable on the declared Rust 1.85 MSRV.
+#[allow(deprecated)]
 fn consume_forward_budget(counter: &AtomicUsize) -> bool {
     counter
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {

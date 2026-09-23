@@ -186,6 +186,8 @@ impl Metrics {
         self.admission_rejected_by_reason[reason as usize].fetch_add(1, Ordering::Relaxed);
     }
 
+    // `try_update` is the future spelling, but it is unavailable on the declared Rust 1.85 MSRV.
+    #[allow(deprecated)]
     pub(crate) fn try_reserve_pending_handshake(&self, limit: usize) -> bool {
         let reserved =
             self.pending_handshakes

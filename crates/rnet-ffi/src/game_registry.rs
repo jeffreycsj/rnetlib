@@ -125,6 +125,72 @@ pub(crate) fn destroy(handle: u64) -> Result<()> {
             "game runtime has active calls",
         ));
     }
-    guard.remove(handle & !GAME_HANDLE_TAG);
+    let removed = guard.remove(handle & !GAME_HANDLE_TAG);
+    // Dropping the runtime joins its logger. User callbacks may query another runtime (or the
+    // just-removed handle), so neither the join nor user code may run under the registry mutex.
+    drop(guard);
+    drop(removed);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{destroy, lease, register, table, GAME_HANDLE_TAG};
+    use rnet_game::{BoundedLogger, GameRuntime, GameRuntimeConfig, LoggerConfig};
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn destroy_drops_the_logger_outside_the_global_registry_lock() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (query_tx, query_rx) = mpsc::channel();
+        let other = register(GameRuntime::new(GameRuntimeConfig::production()).unwrap());
+        let logger = BoundedLogger::new(LoggerConfig::default(), move |_| {
+            let _ = started_tx.send(());
+            if query_rx.recv().is_ok() {
+                assert!(lease(other).is_ok());
+            }
+        })
+        .unwrap();
+        let handle = register(
+            GameRuntime::new(GameRuntimeConfig::production())
+                .unwrap()
+                .with_logger(logger),
+        );
+        {
+            let entry = lease(handle).unwrap();
+            entry.runtime.poll(1, Duration::ZERO);
+        }
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        {
+            let entry = lease(handle).unwrap();
+            entry.runtime.stop(Duration::ZERO).unwrap();
+            entry.stopped.store(true, Ordering::Release);
+        }
+        let worker = std::thread::spawn(move || destroy(handle));
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let mut removed_without_lock = false;
+        while Instant::now() < deadline {
+            if let Ok(guard) = table().try_lock() {
+                if guard.get(handle & !GAME_HANDLE_TAG).is_none() {
+                    removed_without_lock = true;
+                    break;
+                }
+            }
+            std::thread::yield_now();
+        }
+        assert!(
+            removed_without_lock,
+            "registry mutex held while joining a user callback"
+        );
+        query_tx.send(()).unwrap();
+        worker.join().unwrap().unwrap();
+        {
+            let entry = lease(other).unwrap();
+            entry.runtime.stop(Duration::ZERO).unwrap();
+            entry.stopped.store(true, Ordering::Release);
+        }
+        destroy(other).unwrap();
+    }
 }

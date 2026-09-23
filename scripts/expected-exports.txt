@@ -22,6 +22,7 @@ rnet_game_config_v2_init
 rnet_game_endpoint_close
 rnet_game_endpoint_local_port
 rnet_game_issue_resume_ticket
+rnet_game_metrics_log_interval_set
 rnet_game_metrics_snapshot
 rnet_game_network_quality
 rnet_game_poll_events
