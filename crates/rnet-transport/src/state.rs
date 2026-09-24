@@ -370,17 +370,13 @@ pub(crate) fn map_security_error(error: SecurityError) -> RnetError {
 
 pub(crate) fn fail_secure_session(
     shared: &Arc<Shared>,
-    endpoint: Handle,
+    _endpoint: Handle,
     session: Handle,
     error: RnetError,
 ) {
-    let reason = error.code();
-    let mut event = session_event(EventType::JoinFailed, endpoint, session);
-    event.status = reason;
-    // Only library-generated diagnostics belong here, never handshake credentials.
-    event.data = error.to_string().into_bytes();
-    publish_lifecycle(shared, event);
-    remove_session_with_reason(shared, endpoint, session, reason);
+    // A listener failure may already have removed this route. The session removal winner,
+    // not the order in which async tasks finish, owns both diagnostics and close accounting.
+    crate::session_close::fail_endpoint_session(shared, session, "handshake", &error, true);
 }
 
 pub(crate) fn session_active(shared: &Arc<Shared>, session: Handle) -> bool {

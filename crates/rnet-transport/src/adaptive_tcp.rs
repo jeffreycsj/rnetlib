@@ -7,6 +7,7 @@
 use crate::adaptive_tcp_session::run_adaptive_session;
 use crate::admission::AdmissionController;
 use crate::config::ClientSecurity;
+use crate::endpoint_failure::fail_endpoint;
 use crate::metrics::AdmissionRejectReason;
 use crate::metrics::LatencyKind;
 use crate::state::{
@@ -28,10 +29,16 @@ use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 const INITIAL_EPOCH: u64 = 1;
 const SERVER_HELLO_LEN: usize = 33;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "adaptive_tcp_exit_tests.rs"]
+mod exit_tests;
+
 pub(crate) async fn run_adaptive_tcp_listener(
     shared: Arc<Shared>,
     endpoint: Handle,
@@ -47,9 +54,23 @@ pub(crate) async fn run_adaptive_tcp_listener(
         shared.config.max_sessions_per_endpoint.saturating_mul(2),
         shared.config.ipv6_admission_prefix_bits,
     );
-    while shared.state.load() == Lifecycle::Running {
-        match listener.accept().await {
+    // The listener owns every accepted task, including silent peers still in their first read.
+    // Dropping the owner cancels these tasks; drain completions to bound retained task metadata.
+    let mut sessions = JoinSet::new();
+    loop {
+        let accepted = tokio::select! {
+            biased;
+            _ = sessions.join_next(), if !sessions.is_empty() => continue,
+            result = listener.accept(), if shared.state.load() == Lifecycle::Running => result,
+            // Draining is not a listener failure: keep existing tasks until stop's deadline
+            // closes the endpoint and aborts this owner, rather than cutting the grace period.
+            else => std::future::pending().await,
+        };
+        match accepted {
             Ok((stream, remote)) => {
+                if shared.state.load() != Lifecycle::Running {
+                    continue;
+                }
                 if let Err(error) = configure_tokio_tcp(&stream, &shared.config) {
                     push_endpoint_error(&shared, endpoint, error.code(), error.to_string());
                     continue;
@@ -76,27 +97,35 @@ pub(crate) async fn run_adaptive_tcp_listener(
                 let (sender, receiver) = mpsc::channel(shared.config.write_queue_capacity);
                 let (auth_sender, auth_receiver) = oneshot::channel();
                 let (security_sender, security_receiver) = mpsc::channel(1);
-                let session = match insert_session_route(
-                    &shared,
-                    SessionRoute {
-                        endpoint,
-                        target: SessionTarget::Tcp(sender),
-                        established: false,
-                        auth_decision: Some(auth_sender),
-                        security_commands: Some(security_sender),
-                        allows_game_controls: true,
-                        queued_bytes: ByteBudget::new(shared.config.max_session_queued_bytes),
-                    },
-                ) {
-                    Ok(session) => session,
-                    Err(_) => {
-                        drop(stream);
-                        continue;
+                let session = {
+                    // Serialize admission with endpoint removal: close must not miss a route
+                    // inserted by an accept which completed just before cancellation.
+                    let endpoints = shared.endpoints.lock().expect("endpoint table poisoned");
+                    if endpoints.get(endpoint).is_none() {
+                        break;
+                    }
+                    match insert_session_route(
+                        &shared,
+                        SessionRoute {
+                            endpoint,
+                            target: SessionTarget::Tcp(sender),
+                            established: false,
+                            auth_decision: Some(auth_sender),
+                            security_commands: Some(security_sender),
+                            allows_game_controls: true,
+                            queued_bytes: ByteBudget::new(shared.config.max_session_queued_bytes),
+                        },
+                    ) {
+                        Ok(session) => session,
+                        Err(_) => {
+                            drop(stream);
+                            continue;
+                        }
                     }
                 };
                 let session_shared = Arc::clone(&shared);
                 let session_key = local_key.clone();
-                tokio::spawn(async move {
+                sessions.spawn(async move {
                     let _permit = permit;
                     let _ip_permit = ip_permit;
                     let result = adaptive_server_flow(
@@ -117,7 +146,7 @@ pub(crate) async fn run_adaptive_tcp_listener(
                 });
             }
             Err(error) => {
-                push_endpoint_error(&shared, endpoint, ErrorCode::IoError, error.to_string());
+                fail_endpoint(&shared, endpoint, None, "tcp_accept", error.into());
                 break;
             }
         }

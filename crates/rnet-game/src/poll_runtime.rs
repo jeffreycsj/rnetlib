@@ -15,6 +15,7 @@ impl GameRuntime {
         // Game controls are handled by the same event queue as lifecycle changes. Serializing
         // polls preserves their order and keeps challenge state single-writer.
         let _guard = self.poll_guard.lock().expect("game poll lock poisoned");
+        self.reap_closed_endpoints();
         self.maybe_log_metrics();
         self.flush_scheduled_inner(self.scheduled_flush_batch);
         self.flush_realtime_inner(self.realtime_flush_batch);
@@ -73,6 +74,7 @@ impl GameRuntime {
                 remaining.min(Duration::from_millis(50))
             };
             let events = self.network.poll_events(capacity, wait);
+            self.reap_closed_endpoints();
             internal_events = internal_events.saturating_add(events.len());
             let mut output = Vec::new();
             self.convert_events_into(events, &mut output, capacity);

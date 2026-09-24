@@ -15,11 +15,12 @@ use crate::admission::{AdmissionController, AdmissionPermit};
 use crate::auto_rekey::AutoRekey;
 use crate::config::{ClientSecurity, EndpointSecurity};
 use crate::cookie::{CookieGuard, COOKIE_LEN};
+use crate::endpoint_failure::fail_endpoint;
 use crate::kcp_preflight::{encode_hello, random_conv};
 use crate::session_close::remove_session_with_error;
 use crate::state::{
-    fail_secure_session, push_endpoint_error, retarget_datagram_endpoint,
-    retarget_datagram_session, session_active, DatagramCleanup, Outbound, OutboundKind, Shared,
+    push_endpoint_error, retarget_datagram_endpoint, retarget_datagram_session, session_active,
+    DatagramCleanup, Outbound, OutboundKind, Shared,
 };
 use rnet_core::{ErrorCode, Handle, Result, RnetError, Transport};
 use rnet_protocol::control::{decode_record, ProtectedKind, Record, RecordKind, SecurityMode};
@@ -30,6 +31,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "adaptive_datagram_exit_tests.rs"]
+mod exit_tests;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_adaptive_datagram(
@@ -53,7 +58,10 @@ pub(crate) async fn run_adaptive_datagram(
     let mut remote_candidates = VecDeque::from(remote_candidates);
     let cookie = match CookieGuard::new() {
         Ok(value) => value,
-        Err(_) => return,
+        Err(error) => {
+            fail_endpoint(&shared, endpoint, initial_session, "datagram_cookie", error);
+            return;
+        }
     };
     let mut peers = HashMap::new();
     let mut deferred = HashMap::<SocketAddr, VecDeque<Outbound>>::new();
@@ -80,7 +88,7 @@ pub(crate) async fn run_adaptive_datagram(
     if let (Some(peer), Some(session)) = (remote, initial_session) {
         let started = send_client_hello(&socket, &mut wire, transport_kind, peer).await;
         if let Err(error) = started {
-            fail_secure_session(&shared, endpoint, session, error);
+            fail_endpoint(&shared, endpoint, Some(session), "datagram_hello", error);
             return;
         }
         peers.insert(
@@ -96,7 +104,13 @@ pub(crate) async fn run_adaptive_datagram(
     loop {
         tokio::select! {
             inbound = socket.recv_from(&mut buffer) => {
-                let (length, peer) = match inbound { Ok(v) => v, Err(_) => break };
+                let (length, peer) = match inbound {
+                    Ok(value) => value,
+                    Err(error) => {
+                        fail_endpoint(&shared, endpoint, initial_session, "datagram_receive", error.into());
+                        break;
+                    }
+                };
                 // Cheap cookie/admission checks precede KCP allocation and authenticated record
                 // parsing. This is the DoS boundary for unknown datagram sources.
                 match handle_preflight(
@@ -107,9 +121,7 @@ pub(crate) async fn run_adaptive_datagram(
                     Ok(true) => continue,
                     Ok(false) => {}
                     Err(error) => {
-                        if let Some(session) = initial_session {
-                            fail_secure_session(&shared, endpoint, session, error);
-                        }
+                        fail_endpoint(&shared, endpoint, initial_session, "datagram_preflight", error);
                         return;
                     }
                 }
@@ -160,6 +172,7 @@ pub(crate) async fn run_adaptive_datagram(
                         }
                     }
                     let prior_session = peers.get(&peer).and_then(Peer::session);
+                    let joining = peers.get(&peer).is_some_and(|state| !state.is_established());
                     let processed = process(&shared, endpoint, &socket, &mut wire, &sender, &security, client_security.as_ref(),
                         &cleanup_sender, transport_kind, &cookie, &mut peers, peer, record).await;
                     let success = processed.is_ok();
@@ -186,17 +199,14 @@ pub(crate) async fn run_adaptive_datagram(
                             let session = prior_session.or_else(|| {
                                 (remote == Some(peer)).then_some(initial_session).flatten()
                             });
+                            // Notification overload can remove the session inside process().
+                            // The failed connection still owns an endpoint even without a route.
+                            if remote == Some(peer) && joining {
+                                fail_endpoint(&shared, endpoint, session, "datagram_handshake", error);
+                                return;
+                            }
                             if let Some(session) = session.filter(|session| session_active(&shared, *session)) {
-                                if remote == Some(peer) {
-                                    fail_secure_session(&shared, endpoint, session, error);
-                                } else {
-                                    remove_session_with_error(
-                                        &shared,
-                                        session,
-                                        "datagram_handshake",
-                                        error,
-                                    );
-                                }
+                                remove_session_with_error(&shared, session, "datagram_handshake", error);
                             }
                             if let Some(queued) = deferred.remove(&peer) {
                                 deferred_count = deferred_count.saturating_sub(queued.len());
@@ -306,19 +316,22 @@ pub(crate) async fn run_adaptive_datagram(
             scheduled = tick.tick() => {
                 let now = Instant::now();
                 if let Some(current) = remote {
-                    if connect_deadline.is_some_and(|deadline| now >= deadline)
+                    let final_timeout = remote_candidates.is_empty() && peers.get(&current)
+                        .is_some_and(|state| final_client_timeout(state, shared.config.handshake_timeout));
+                    if (connect_deadline.is_some_and(|deadline| now >= deadline) || final_timeout)
                         && peers
                             .get(&current)
                             .is_some_and(|state| !state.is_established())
                     {
                         if let Some(session) = peers.get(&current).and_then(Peer::session) {
-                            fail_secure_session(
+                            fail_endpoint(
                                 &shared,
                                 endpoint,
-                                session,
+                                Some(session),
+                                "datagram_connect",
                                 RnetError::new(
                                     ErrorCode::Timeout,
-                                    "datagram multi-address connection deadline expired",
+                                    "datagram connection or final handshake deadline expired",
                                 ),
                             );
                         }
@@ -351,10 +364,11 @@ pub(crate) async fn run_adaptive_datagram(
                                     let local_addr = match rebound.local_addr() {
                                         Ok(local_addr) => local_addr,
                                         Err(error) => {
-                                            fail_secure_session(
+                                            fail_endpoint(
                                                 &shared,
                                                 endpoint,
-                                                session,
+                                                Some(session),
+                                                "datagram_rebind_address",
                                                 error.into(),
                                             );
                                             return;
@@ -365,16 +379,17 @@ pub(crate) async fn run_adaptive_datagram(
                                         endpoint,
                                         local_addr,
                                     ) {
-                                        fail_secure_session(&shared, endpoint, session, error);
+                                        fail_endpoint(&shared, endpoint, Some(session), "datagram_retarget_endpoint", error);
                                         return;
                                     }
                                     socket = Arc::new(rebound);
                                 }
                                 Err(error) => {
-                                    fail_secure_session(
+                                    fail_endpoint(
                                         &shared,
                                         endpoint,
-                                        session,
+                                        Some(session),
+                                        "datagram_rebind",
                                         error.into(),
                                     );
                                     return;
@@ -382,13 +397,13 @@ pub(crate) async fn run_adaptive_datagram(
                             }
                         }
                         if let Err(error) = retarget_datagram_session(&shared, session, next) {
-                            fail_secure_session(&shared, endpoint, session, error);
+                            fail_endpoint(&shared, endpoint, Some(session), "datagram_retarget_session", error);
                             return;
                         }
                         if let Err(error) =
                             send_client_hello(&socket, &mut wire, transport_kind, next).await
                         {
-                            fail_secure_session(&shared, endpoint, session, error);
+                            fail_endpoint(&shared, endpoint, Some(session), "datagram_hello", error);
                             return;
                         }
                         remote = Some(next);
@@ -424,7 +439,6 @@ pub(crate) async fn run_adaptive_datagram(
                     &mut peers,
                     &mut deferred_peers,
                     &mut automatic_rekeys,
-                    remote_candidates.is_empty(),
                 )
                 .await;
                 admission_permits.retain(|peer, _| {
@@ -443,12 +457,14 @@ pub(crate) async fn run_adaptive_datagram(
                     }
                     if let Some(session) = state.session() {
                         if remote == Some(peer) && !state.is_established() {
-                            fail_secure_session(
+                            fail_endpoint(
                                 &shared,
                                 endpoint,
-                                session,
+                                Some(session),
+                                "datagram_control_retry",
                                 RnetError::new(ErrorCode::Timeout, "datagram handshake timed out"),
                             );
+                            return;
                         } else {
                             remove_session_with_error(
                                 &shared,
@@ -509,6 +525,15 @@ fn pending_client_timeout(state: &Peer, timeout: Duration) -> Option<Handle> {
             ..
         } if connect_started.elapsed() >= timeout => Some(*session),
         _ => None,
+    }
+}
+
+fn final_client_timeout(state: &Peer, timeout: Duration) -> bool {
+    // The final candidate keeps the existing per-phase authorization allowance. Endpoint
+    // cleanup must precede maintenance removing the route, or JoinFailed loses its owner.
+    match state {
+        Peer::ClientAuth { auth_started, .. } => auth_started.elapsed() >= timeout,
+        _ => pending_client_timeout(state, timeout).is_some(),
     }
 }
 

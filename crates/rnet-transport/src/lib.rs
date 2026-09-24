@@ -21,6 +21,7 @@ mod admission;
 mod auto_rekey;
 mod config;
 mod cookie;
+mod endpoint_failure;
 mod event;
 #[cfg(feature = "fuzzing")]
 pub mod fuzz_support;

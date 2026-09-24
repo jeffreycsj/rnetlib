@@ -6,6 +6,9 @@ mod clock_sync_runtime;
 mod config;
 mod diagnostics;
 mod diagnostics_summary;
+mod endpoint_lifecycle;
+#[cfg(test)]
+mod endpoint_lifecycle_tests;
 mod envelope;
 mod event;
 #[cfg(feature = "fuzzing")]

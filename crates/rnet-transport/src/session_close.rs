@@ -14,7 +14,7 @@ pub(crate) fn remove_session_with_reason(
     session: Handle,
     reason: ErrorCode,
 ) {
-    close(shared, session, reason, None);
+    close(shared, session, reason, None, false);
 }
 
 /// Errors must be generated locally by the library, never copied from peer/application payloads.
@@ -25,14 +25,25 @@ pub(crate) fn remove_session_with_error(
     phase: &'static str,
     error: RnetError,
 ) {
-    close(shared, session, error.code(), Some((phase, error)));
+    close(shared, session, error.code(), Some((phase, &error)), false);
+}
+
+pub(crate) fn fail_endpoint_session(
+    shared: &Arc<Shared>,
+    session: Handle,
+    phase: &'static str,
+    error: &RnetError,
+    joining: bool,
+) {
+    close(shared, session, error.code(), Some((phase, error)), joining);
 }
 
 fn close(
     shared: &Arc<Shared>,
     session: Handle,
     reason: ErrorCode,
-    detail: Option<(&'static str, RnetError)>,
+    detail: Option<(&'static str, &RnetError)>,
+    joining: bool,
 ) {
     if let Some(route) = shared
         .sessions
@@ -46,16 +57,24 @@ fn close(
         release_pending_session(shared, &route);
         shared.metrics.record_session_closed(reason);
         route.target.request_cleanup(session);
+        if joining && !route.established {
+            let mut event = session_event(EventType::JoinFailed, route.endpoint, session);
+            event.status = reason;
+            if let Some((phase, error)) = detail {
+                event.data = diagnostic_bytes(phase, error);
+            }
+            publish_lifecycle(shared, event);
+        }
         let mut event = session_event(EventType::SessionClosed, route.endpoint, session);
         event.status = reason;
         if let Some((phase, error)) = detail {
-            event.data = diagnostic_bytes(phase, &error);
+            event.data = diagnostic_bytes(phase, error);
         }
         publish_lifecycle(shared, event);
     }
 }
 
-fn diagnostic_bytes(phase: &str, error: &RnetError) -> Vec<u8> {
+pub(crate) fn diagnostic_bytes(phase: &str, error: &RnetError) -> Vec<u8> {
     let mut text = format!("phase={phase} {error}");
     let mut limit = text.len().min(1024);
     while !text.is_char_boundary(limit) {
@@ -112,6 +131,44 @@ mod tests {
         assert_eq!(metrics.closed_sessions(ErrorCode::Cancelled), 0);
         assert_eq!(metrics.current_sessions, 0);
         runtime.stop(Duration::ZERO).unwrap();
+    }
+
+    #[test]
+    fn late_handshake_error_does_not_publish_after_endpoint_cleanup() {
+        let runtime = NetworkRuntime::new(RuntimeConfig::production()).unwrap();
+        runtime.poll_events(8, Duration::ZERO);
+        let endpoint = runtime
+            .insert_endpoint("127.0.0.1:0".parse().unwrap(), rnet_core::Transport::Tcp)
+            .unwrap();
+        let (tx, _rx) = mpsc::channel(1);
+        let session = runtime
+            .insert_pending_session(endpoint, SessionTarget::Tcp(tx), None, true)
+            .unwrap();
+        crate::endpoint_failure::fail_endpoint(
+            &runtime.shared,
+            endpoint,
+            None,
+            "tcp_accept",
+            RnetError::new(ErrorCode::IoError, "listener failed"),
+        );
+        runtime.poll_events(8, Duration::ZERO);
+        crate::state::fail_secure_session(
+            &runtime.shared,
+            endpoint,
+            session,
+            RnetError::new(ErrorCode::Cancelled, "authorization sender dropped"),
+        );
+        assert!(
+            runtime.poll_events(8, Duration::ZERO).is_empty(),
+            "late handshake emitted a duplicate failure"
+        );
+        assert_eq!(
+            runtime
+                .metrics_snapshot()
+                .closed_sessions(ErrorCode::IoError),
+            1
+        );
+        assert_eq!(runtime.metrics_snapshot().pending_handshakes, 0);
     }
 
     #[test]

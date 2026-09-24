@@ -3,7 +3,11 @@ use std::time::Duration;
 
 #[test]
 fn optional_failure_details_never_cost_lifecycle_delivery_or_extra_data_evictions() {
-    for failure in [EventType::SessionClosed, EventType::JoinFailed] {
+    for failure in [
+        EventType::SessionClosed,
+        EventType::JoinFailed,
+        EventType::EndpointError,
+    ] {
         for existing in [EventType::AuthRequest, EventType::Message] {
             let queue = EventQueue::new_with_limits(2, 4).unwrap();
             let mut prior = Event::simple(existing);

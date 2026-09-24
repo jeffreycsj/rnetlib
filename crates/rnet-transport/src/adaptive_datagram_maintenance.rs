@@ -52,8 +52,9 @@ pub(crate) async fn drive_server(
     peers: &mut HashMap<SocketAddr, Peer>,
     scratch_peers: &mut Vec<SocketAddr>,
     automatic_rekeys: &mut HashMap<SocketAddr, AutoRekey>,
-    allow_client_timeout: bool,
 ) {
+    // Client setup deadlines belong exclusively to the endpoint owner: a second timeout
+    // check here could remove its route between the owner's deadline check and cleanup.
     scratch_peers.clear();
     scratch_peers.extend(peers.keys().copied());
     for &peer in scratch_peers.iter() {
@@ -72,38 +73,6 @@ pub(crate) async fn drive_server(
             Peer::ServerFirst { started, .. } | Peer::ServerFinish { started, .. }
                 if started.elapsed() >= shared.config.handshake_timeout =>
             {
-                wire.remove_peer(peer);
-                continue;
-            }
-            Peer::ClientHello { session, started }
-            | Peer::ClientResponse {
-                session, started, ..
-            } if allow_client_timeout && started.elapsed() >= shared.config.handshake_timeout => {
-                remove_session_with_error(
-                    shared,
-                    session,
-                    "datagram_handshake",
-                    RnetError::new(ErrorCode::Timeout, "datagram handshake timed out"),
-                );
-                wire.remove_peer(peer);
-                continue;
-            }
-            Peer::ClientAuth {
-                session,
-                auth_started,
-                ..
-            } if allow_client_timeout
-                && auth_started.elapsed() >= shared.config.handshake_timeout =>
-            {
-                remove_session_with_error(
-                    shared,
-                    session,
-                    "datagram_auth_wait",
-                    RnetError::new(
-                        ErrorCode::Timeout,
-                        "server authorization response timed out",
-                    ),
-                );
                 wire.remove_peer(peer);
                 continue;
             }

@@ -346,7 +346,7 @@ typedef struct rnet_event {
   int32_t status;
 } rnet_event_t;
 
-/* SESSION_CLOSED / JOIN_FAILED may carry optional local diagnostic UTF-8 text.
+/* SESSION_CLOSED / JOIN_FAILED / ENDPOINT_ERROR may carry optional local diagnostic UTF-8 text.
  * Diagnostic bytes can be absent under event-byte pressure; status remains authoritative.
  * Release every nonzero buffer_token, including on non-message events. */
 

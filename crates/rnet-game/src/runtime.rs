@@ -275,53 +275,6 @@ impl GameRuntime {
         Ok(endpoint)
     }
 
-    /// Closes an endpoint and releases its game protocol policy.
-    pub fn close_endpoint(&self, endpoint: Handle) -> Result<()> {
-        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
-        // Keep listener policy and transport registration locked in the same order as listen.
-        // SessionOpened conversion holds the transport lock through game-ready registration, so
-        // an in-flight poll cannot recreate game state after this cleanup has taken its snapshot.
-        let mut protocols = self
-            .server_protocols
-            .lock()
-            .expect("game protocol table poisoned");
-        let mut transports = self
-            .endpoint_transports
-            .lock()
-            .expect("game endpoint table poisoned");
-        self.network.close_endpoint(endpoint)?;
-        self.resume
-            .lock()
-            .expect("resume state poisoned")
-            .tickets
-            .revoke_endpoint(endpoint);
-        // Transport closure invalidates routes immediately. Do not keep game heartbeat or
-        // replaceable-send state alive until the caller happens to poll close notifications.
-        let sessions: Vec<_> = self
-            .session_endpoints
-            .lock()
-            .expect("game session table poisoned")
-            .iter()
-            .filter_map(|(session, owner)| (*owner == endpoint).then_some(*session))
-            .collect();
-        for session in sessions {
-            self.revoke_resume_session(session);
-            self.forget_ready_session(session);
-        }
-        self.resume
-            .lock()
-            .expect("resume state poisoned")
-            .client_endpoints
-            .remove(&endpoint);
-        protocols.remove(&endpoint);
-        transports.remove(&endpoint);
-        self.range
-            .lock()
-            .expect("range state poisoned")
-            .forget_endpoint(endpoint);
-        Ok(())
-    }
-
     pub fn endpoint_local_addr(&self, endpoint: Handle) -> Result<SocketAddr> {
         self.network.endpoint_local_addr(endpoint)
     }
@@ -340,11 +293,7 @@ impl GameRuntime {
                     .authorization_denied
                     .fetch_add(1, Ordering::Relaxed);
             }
-            self.forget_resume_session(session);
-            self.range
-                .lock()
-                .expect("range state poisoned")
-                .forget_session(session);
+            self.forget_ready_session(session);
         }
         Ok(())
     }
@@ -434,13 +383,27 @@ impl GameRuntime {
             EventType::EndpointOpened => GameEvent::EndpointOpened {
                 endpoint: event.endpoint,
             },
-            EventType::EndpointError => GameEvent::EndpointError {
-                endpoint: event.endpoint,
-                status: event.status,
-            },
+            EventType::EndpointError => {
+                self.reap_closed_endpoints();
+                GameEvent::EndpointError {
+                    endpoint: event.endpoint,
+                    status: event.status,
+                }
+            }
             EventType::AuthRequest => {
                 let converted = self.convert_game_auth_request(&event);
                 event.data.zeroize();
+                // Pending business authorization owns resume metadata before SessionOpened.
+                // Track that ownership too, so losing a close event cannot leak pending state.
+                if matches!(
+                    &converted,
+                    Ok(GameEvent::AuthRequest { .. } | GameEvent::ResumeRequest { .. })
+                ) {
+                    self.session_endpoints
+                        .lock()
+                        .expect("game session table poisoned")
+                        .insert(event.session, event.endpoint);
+                }
                 converted?
             }
             EventType::SessionOpened => {

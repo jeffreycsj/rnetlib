@@ -12,7 +12,7 @@ use rnet_security::Keypair;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 impl NetworkRuntime {
     pub(crate) fn open_adaptive_datagram(
@@ -87,7 +87,13 @@ impl NetworkRuntime {
                     .checked_add(shared.config.connect_timeout)
                     .expect("validated connection timeout")
             });
+        let (start, ready) = oneshot::channel();
         let task = self.runtime.spawn(async move {
+            // Fatal startup/receive errors may remove the endpoint immediately. Registration
+            // must precede execution so the caller never tries to register an already-dead task.
+            if ready.await.is_err() {
+                return;
+            }
             run_adaptive_datagram(
                 shared,
                 endpoint,
@@ -107,6 +113,7 @@ impl NetworkRuntime {
             .await;
         });
         self.set_endpoint_abort(endpoint, task.abort_handle())?;
+        let _ = start.send(());
         Ok(endpoint)
     }
 
@@ -129,10 +136,15 @@ impl NetworkRuntime {
             return Err(error);
         }
         let shared = Arc::clone(&self.shared);
+        let (start, ready) = oneshot::channel();
         let task = self.runtime.spawn(async move {
+            if ready.await.is_err() {
+                return;
+            }
             run_adaptive_tcp_listener(shared, endpoint, listener, local_key, initial_mode).await;
         });
         self.set_endpoint_abort(endpoint, task.abort_handle())?;
+        let _ = start.send(());
         Ok(endpoint)
     }
 
