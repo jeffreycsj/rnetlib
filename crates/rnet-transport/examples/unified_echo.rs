@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         event.event_type == EventType::SessionOpened && event.endpoint == client
     })
     .ok_or("client session timed out")?;
-    runtime.send(client_open.session, 1001, b"hello")?;
+    runtime.send(client_open.session, b"hello")?;
 
     let message = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message

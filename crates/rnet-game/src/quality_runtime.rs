@@ -100,7 +100,7 @@ impl GameRuntime {
                 state.next_outbound_sequence,
                 self.maximum_envelope_len,
             )?;
-            self.network.send_payload_with_options(
+            self.network.send_with_options(
                 session,
                 &envelope,
                 SendOptions {
@@ -116,7 +116,7 @@ impl GameRuntime {
             options.tick,
             self.maximum_envelope_len,
         )?;
-        self.network.send_payload_with_options(
+        self.network.send_with_options(
             session,
             &envelope,
             SendOptions {

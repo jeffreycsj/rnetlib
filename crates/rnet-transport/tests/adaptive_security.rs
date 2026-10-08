@@ -93,9 +93,9 @@ fn numeric_datagram_clients_default_local_address_and_preserve_explicit_bind() {
                 server.auth_decide(auth.session, true).unwrap();
                 let server_session = poll_until(&server, EventType::SessionOpened).session;
                 let client_session = poll_until(&client, EventType::SessionOpened).session;
-                client.send_payload(client_session, b"request").unwrap();
+                client.send(client_session, b"request").unwrap();
                 assert_message(&server, b"request", "numeric request");
-                server.send_payload(server_session, b"response").unwrap();
+                server.send(server_session, b"response").unwrap();
                 assert_message(&client, b"response", "numeric response");
             }
         }
@@ -107,6 +107,47 @@ fn establish_pair(
     initial_security: SecurityMode,
 ) -> (NetworkRuntime, Handle, Handle, Handle) {
     establish_pair_with_config(transport, initial_security, RuntimeConfig::default())
+}
+
+#[test]
+fn opaque_send_preserves_empty_binary_and_full_width_correlation_on_all_transports() {
+    for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+        let (runtime, _, server, client) = establish_pair_with_config(
+            transport,
+            SecurityMode::Encrypted,
+            RuntimeConfig::production(),
+        );
+        for (payload, correlation_id) in [(&b""[..], 0), (&b"\0\xff\x80\0"[..], u64::MAX)] {
+            runtime
+                .send_with_options(
+                    client,
+                    payload,
+                    rnet_transport::SendOptions { correlation_id },
+                )
+                .unwrap();
+            let received = assert_message(&runtime, payload, "opaque request");
+            assert_eq!(received.session, server);
+            assert_eq!(received.request_id, correlation_id);
+            assert_eq!((received.msg_type, received.stream_id), (0, 0));
+            assert!(received.integrity_verified);
+
+            runtime.send(server, payload).unwrap();
+            let reply = assert_message(&runtime, payload, "opaque response");
+            assert_eq!(reply.session, client);
+            assert_eq!(reply.request_id, 0);
+            assert!(reply.integrity_verified);
+        }
+        runtime.close_session(client, ErrorCode::Cancelled).unwrap();
+        assert_eq!(
+            runtime.send(client, b"stale").unwrap_err().code(),
+            ErrorCode::InvalidHandle
+        );
+        runtime.stop(Duration::ZERO).unwrap();
+        assert_eq!(
+            runtime.send(server, b"stopped").unwrap_err().code(),
+            ErrorCode::InvalidState
+        );
+    }
 }
 
 fn establish_pair_with_config(
@@ -205,7 +246,7 @@ fn assert_transport_follows_server_security_changes(transport: Transport) {
     assert_ne!(server_session, 0);
     assert_ne!(client_session, 0);
 
-    runtime.send(client_session, 1, b"plain").unwrap();
+    runtime.send(client_session, b"plain").unwrap();
     assert!(!assert_message(&runtime, b"plain", "plain").integrity_verified);
 
     runtime
@@ -216,7 +257,7 @@ fn assert_transport_follows_server_security_changes(transport: Transport) {
         SecurityChange::from_event(&changed).unwrap().operation,
         SecurityOperation::ModeSwitch
     );
-    runtime.send(client_session, 1, b"encrypted").unwrap();
+    runtime.send(client_session, b"encrypted").unwrap();
     assert!(assert_message(&runtime, b"encrypted", "encrypted").integrity_verified);
 
     runtime
@@ -227,14 +268,14 @@ fn assert_transport_follows_server_security_changes(transport: Transport) {
     assert_eq!(change.operation, SecurityOperation::Rekey);
     assert_eq!(change.mode, SecurityMode::Encrypted);
     assert!(change.epoch >= 3);
-    runtime.send(client_session, 1, b"rekeyed").unwrap();
+    runtime.send(client_session, b"rekeyed").unwrap();
     assert!(assert_message(&runtime, b"rekeyed", "rekeyed").integrity_verified);
 
     runtime
         .set_security_mode(server_session, SecurityMode::Plaintext)
         .expect("request plaintext");
     poll_until(&runtime, EventType::SecurityChanged);
-    runtime.send(client_session, 1, b"plain-again").unwrap();
+    runtime.send(client_session, b"plain-again").unwrap();
     assert!(!assert_message(&runtime, b"plain-again", "plain-again").integrity_verified);
 }
 
@@ -253,7 +294,7 @@ fn server_automatically_rekeys_after_the_encrypted_byte_threshold() {
     let (runtime, _, server_session, _) =
         establish_pair_with_config(Transport::Tcp, SecurityMode::Encrypted, config);
 
-    runtime.send(server_session, 1, b"four").unwrap();
+    runtime.send(server_session, b"four").unwrap();
     assert_message(&runtime, b"four", "automatic rekey trigger message");
     let changed = poll_until(&runtime, EventType::SecurityChanged);
     let change = SecurityChange::from_event(&changed).unwrap();
@@ -271,7 +312,7 @@ fn datagram_servers_automatically_rekey_after_the_encrypted_byte_threshold() {
         let (runtime, _, server_session, _) =
             establish_pair_with_config(transport, SecurityMode::Encrypted, config);
 
-        runtime.send(server_session, 1, b"four").unwrap();
+        runtime.send(server_session, b"four").unwrap();
         assert_message(&runtime, b"four", "datagram automatic rekey trigger");
         let changed = poll_until(&runtime, EventType::SecurityChanged);
         assert_eq!(
@@ -287,7 +328,7 @@ fn adaptive_udp_rejects_payload_that_exceeds_the_encrypted_wire_mtu() {
     let payload = vec![7; 1_150];
 
     let error = runtime
-        .send(client_session, 7, &payload)
+        .send(client_session, &payload)
         .expect_err("wire-overhead overflow must be rejected before enqueue");
 
     assert_eq!(error.code(), ErrorCode::MessageTooLarge);
@@ -299,7 +340,7 @@ fn adaptive_kcp_fragments_messages_larger_than_one_datagram() {
     let payload = vec![0x5a; 16 * 1024];
 
     runtime
-        .send(client_session, 8, &payload)
+        .send(client_session, &payload)
         .expect("KCP must accept a message within max_body_len");
     assert_message(&runtime, &payload, "large KCP message");
 }
@@ -458,7 +499,7 @@ fn adaptive_client_rejects_oversized_join_payload_before_opening_endpoint() {
 #[test]
 fn adaptive_kcp_populates_enterprise_latency_and_traffic_metrics() {
     let (runtime, _, _, client_session) = establish_pair(Transport::Kcp, SecurityMode::Encrypted);
-    runtime.send(client_session, 9, b"metric-sample").unwrap();
+    runtime.send(client_session, b"metric-sample").unwrap();
     assert_message(&runtime, b"metric-sample", "metric sample");
 
     let snapshots = runtime.latency_snapshot();

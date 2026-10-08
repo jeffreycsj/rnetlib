@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut received = 0_u64;
     while received < messages && started.elapsed() < max_duration {
         while sent < messages {
-            match runtime.send(client_session, 1, &payload) {
+            match runtime.send(client_session, &payload) {
                 Ok(()) => sent += 1,
                 Err(error) if error.code() == ErrorCode::WouldBlock => break,
                 Err(error) => return Err(error.into()),

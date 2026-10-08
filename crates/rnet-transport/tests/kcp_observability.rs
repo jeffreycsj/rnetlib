@@ -61,7 +61,7 @@ fn kcp_send_queue_latency_counts_each_accepted_message_once() {
     let mut received = 0_u64;
     while received < MESSAGE_COUNT && Instant::now() < deadline {
         while accepted < MESSAGE_COUNT {
-            match runtime.send(client_session, 1, &payload) {
+            match runtime.send(client_session, &payload) {
                 Ok(()) => accepted += 1,
                 Err(error) if error.code() == ErrorCode::WouldBlock => break,
                 Err(error) => panic!("send failed: {error}"),

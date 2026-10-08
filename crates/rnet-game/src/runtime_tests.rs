@@ -405,7 +405,7 @@ fn malformed_plaintext_business_frame_does_not_close_a_ready_session() {
     let forged = encode_control(ControlKind::Heartbeat, b"", 1024).expect("control");
     runtime
         .network
-        .send(client_session, 0, &forged)
+        .send(client_session, &forged)
         .expect("send forged business frame");
     let deadline = Instant::now() + Duration::from_millis(200);
     while Instant::now() < deadline {
@@ -550,7 +550,7 @@ fn assert_encrypted_business_violation_closes(transport: Transport) {
     let forged = encode_control(ControlKind::Heartbeat, b"", 1024).expect("control");
     runtime
         .network
-        .send(client_session, 0, &forged)
+        .send(client_session, &forged)
         .expect("send authenticated business frame");
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {

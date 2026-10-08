@@ -58,4 +58,5 @@
 - 当前 ABI 判别值为 2，仅支持此值；这是拒绝旧布局的标识，不是保留两套实现。SDK 创建/密钥入口检查 ABI；输入配置先读公共头再验证精确尺寸。保护页测试覆盖短 runtime/game/security/logger/network/options 配置。
 - C/C++11/Go 底层发送改成 opaque payload；删除 rnet_send / SendLegacy / send_legacy，事件不再暴露 msg_type/stream_id，保留 correlation_id。游戏发送语义不变。
 - 有效功能测试迁移到现行接口；旧尺寸、错误 ABI、空 logger、错误 logger、poll 状态/数量、日志累计/窗口样本有覆盖。基线及阶段多语言联调已通过，最终验收以迁移记录为准。
-- **仍待做**：旧端点/无认证/旧 secure 执行分支及 Rust 旧发送接口清理；游戏 exact/range 配置与 wire 统一；最终发布包、全范围对抗性复查。现有旧 wire 暂时未删除，不代表最终要兼容旧 SDK。长稳压测仍后置。
+- Rust 底层发送已统一成 opaque `send` / `send_with_options`，移除旧 typed / legacy / payload 别名；游戏门面、FFI、示例及既有测试同步迁移。增加旧源码调用编译拒绝与现行三传输边界回归。
+- **仍待做**：旧端点/无认证/旧 secure 执行分支清理；游戏 exact/range 配置、wire 及历史帧字段统一；最终发布包、全范围对抗性复查。现有旧 wire 暂时未删除，不代表最终要兼容旧 SDK。长稳压测仍后置。

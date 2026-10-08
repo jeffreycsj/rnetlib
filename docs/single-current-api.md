@@ -9,8 +9,9 @@
 - 一套结构化 `rnet_logger_t`、完整 `rnet_metrics_t`、含 P99.9 的 `rnet_latency_metric_t`。延迟查询最后一个参数为 `drain_window`：0 查询累计，1 提取并轮转窗口；容量查询不消费窗口。
 - `rnet_server_listen` / `rnet_client_connect` 的配置以 transport 决定 TCP/UDP/KCP。
 - `rnet_poll_events` 和 `rnet_game_poll_events` 均返回状态码，通过 `out_count` 返回数量；零事件不再掩盖无效句柄或输出错误。
-- 单一游戏事件布局直接提供 `correlation_id`，没有嵌套旧事件前缀。底层事件也只保留 payload 和 correlation 元数据，不公开业务类型或流编号。
+- 单一游戏事件布局直接提供 `correlation_id`，没有嵌套旧事件前缀。C ABI 底层事件也只保留 payload 和 correlation 元数据，不公开业务类型或流编号；Rust 原始事件字段尚待 wire 阶段清理。
 - 底层发送为 `rnet_session_send(runtime, session, payload)`；带 correlation 使用 `rnet_session_send_ex(..., options)`。C++11 / Go 同步移除发送消息类型参数及 Legacy 发送方法。
+- Rust 底层同样只使用 `send(session, payload)` / `send_with_options(session, payload, options)`；删除 typed send、`send_legacy`、`send_payload` / `send_payload_with_options` 别名。传输类型在建连时固定，业务类型放入 payload，成功仅表示本地队列接受，不保证对端收到。
 
 ## 接入要求
 
@@ -33,7 +34,7 @@
 | 高，已修复 | FFI 配置读取 | 原先完整解引用后才检查大小；现先读公共头并严格验证布局，以 Linux 保护页测试短配置边界。 |
 | 中，已修复 | 延迟查询 | 合并时较新的传输查询会漏掉日志回调样本；累计与窗口各自记录，窗口轮转不清空累计，增加回归。 |
 | 中，已修复 | C++ SDK | ABI 检查仅放在初始创建/密钥入口，不在 noexcept 移动构造中调用可能抛异常的检查。 |
-| 未完成的需求 | 旧端点及游戏 wire | 仍有旧端点/Rust 发送入口和 exact/range wire 双路径；下一阶段必须迁移功能测试后删除，不能宣称全量去兼容已完成。 |
+| 未完成的需求 | 旧端点及游戏 wire | 仍有旧端点和 exact/range wire 双路径；必须迁移功能测试后删除，不能宣称全量去兼容已完成。Rust 旧发送入口已移除，但底层帧和 Rust 原始事件仍有历史字段，待 wire 收敛时一并清理。 |
 
 测试盲区：保护页场景目前只在 Linux 执行；Windows/移动平台、ASan fuzz、独立安全审计和目标环境长稳尚未验收。整体评价：接口布局这一阶段已形成单一现行布局，但整个库的 wire 与旧执行路径清理未完成。历史 ABI/多布局兼容承诺不再适用于本分支。
 
@@ -48,3 +49,11 @@
 - `cargo check --offline --locked --manifest-path fuzz/Cargo.toml --bin ffi_config`：通过；只验证 fuzz 入口可构建，未运行 ASan fuzz。
 
 没有生成本轮最终发布包，没有执行目标环境长稳。本记录不是生产认证或第三方安全审计证明。
+
+## 后续阶段：Rust 发送入口收敛
+
+旧调用形式的 5 个编译拒绝测试先在旧实现上失败，再在清理后通过；既有 TCP/UDP/KCP 收发、握手前禁止发送、超限、背压、安全切换测试迁移到现行发送接口，不通过删除失败路径覆盖实现迁移。
+
+对抗性复查发现原有 correlation 断言主要集中在旧端点路径，因此补充现行加密 TCP/UDP/KCP 的空消息、含零字节/非 UTF-8 消息、`u64::MAX` correlation、默认 correlation=0，以及关闭会话/停止 runtime 后的错误回归。本次不改变排队、控制加密和 wire 编码语义。
+
+本阶段重新通过 `cargo test --offline --workspace -- --test-threads=1`、严格 Clippy、格式/结构检查及 C++11 / Go（强制重建 native 链接）/ C# 联调。测试仍在 Linux 串行、15 GiB 可用内存保护下执行；没有执行目标环境长稳，也未重新运行 ASan fuzz 或独立安全审计。

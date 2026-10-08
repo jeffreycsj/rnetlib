@@ -25,7 +25,7 @@ fn fatal_endpoint_failure_preserves_other_endpoints_live_send_route() {
         "datagram_receive",
         RnetError::new(ErrorCode::IoError, "local receive failed"),
     );
-    runtime.send_payload(session, b"still live").unwrap();
+    runtime.send(session, b"still live").unwrap();
     assert!(receiver.try_recv().unwrap().bytes.ends_with(b"still live"));
     assert_eq!(runtime.metrics_snapshot().current_sessions, 1);
     assert_eq!(

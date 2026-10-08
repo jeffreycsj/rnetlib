@@ -74,11 +74,9 @@ pub unsafe extern "C" fn rnet_session_send_ex(
         let entry = runtime_entry(runtime)?;
         unsafe {
             with_borrowed_slice(payload, |payload| {
-                entry.network.send_payload_with_options(
-                    session,
-                    payload,
-                    SendOptions { correlation_id },
-                )
+                entry
+                    .network
+                    .send_with_options(session, payload, SendOptions { correlation_id })
             })
         }
     })

@@ -122,7 +122,7 @@ fn receive_failure_reclaims_only_its_endpoint_even_when_events_are_full() {
                     .insert_pending_session(endpoint, target(), None, true)
                     .unwrap();
                 runtime
-                    .send_payload(established, b"queued private payload")
+                    .send(established, b"queued private payload")
                     .unwrap();
                 assert!(runtime.metrics_snapshot().queued_send_bytes > 0);
                 let unused = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();

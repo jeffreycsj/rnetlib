@@ -131,10 +131,7 @@ fn established_client_exit_reclaims_capacity_without_closing_its_server_listener
                 assert_eq!(metrics.current_sessions, 0);
                 assert_eq!(metrics.pending_handshakes, 0);
                 assert_eq!(
-                    runtime
-                        .send_payload(client_session, b"stale")
-                        .unwrap_err()
-                        .code(),
+                    runtime.send(client_session, b"stale").unwrap_err().code(),
                     ErrorCode::InvalidHandle
                 );
                 let events = runtime.poll_events(64, Duration::ZERO);
@@ -230,7 +227,7 @@ fn fatal_accept_reclaims_routes_even_when_events_are_full_and_other_listener_sur
             Some(ErrorCode::InvalidHandle)
         );
         assert_eq!(
-            runtime.send_payload(session, b"closed").unwrap_err().code(),
+            runtime.send(session, b"closed").unwrap_err().code(),
             ErrorCode::InvalidHandle
         );
         assert_eq!(runtime.metrics_snapshot().pending_handshakes, 0);
@@ -263,9 +260,7 @@ fn fatal_accept_reclaims_routes_even_when_events_are_full_and_other_listener_sur
             0,
             "pending handshake socket was not dropped"
         );
-        runtime
-            .send_payload(other_client, b"other listener alive")
-            .unwrap();
+        runtime.send(other_client, b"other listener alive").unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut received = false;
         while !received && Instant::now() < deadline {

@@ -187,26 +187,35 @@ fn tcp_listener_and_client_exchange_framed_messages() {
     let (client_open, server_open) = poll_session_pair(&runtime, client, listener);
 
     runtime
-        .send_legacy(client_open.session, 7, 2, 41, b"from-client")
+        .send_with_options(
+            client_open.session,
+            b"from-client",
+            rnet_transport::SendOptions { correlation_id: 41 },
+        )
         .unwrap();
     let request = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message && event.session == server_open.session
     });
-    assert_eq!(request.msg_type, 7);
-    assert_eq!(request.stream_id, 2);
+    assert_eq!(request.msg_type, 0);
+    assert_eq!(request.stream_id, 0);
     assert_eq!(request.request_id, 41);
     assert_eq!(request.data, b"from-client");
 
     runtime
-        .send_legacy(server_open.session, 8, 2, 42, b"from-server")
+        .send_with_options(
+            server_open.session,
+            b"from-server",
+            rnet_transport::SendOptions { correlation_id: 42 },
+        )
         .unwrap();
     let response = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message && event.session == client_open.session
     });
     assert_eq!(response.data, b"from-server");
+    assert_eq!(response.request_id, 42);
 
     runtime
-        .send_payload(client_open.session, b"type-owned-by-payload")
+        .send(client_open.session, b"type-owned-by-payload")
         .unwrap();
     let payload_only = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message && event.session == server_open.session
@@ -237,20 +246,30 @@ fn udp_endpoints_exchange_one_frame_per_datagram() {
     });
 
     runtime
-        .send_legacy(client_open.session, 9, 0, 77, b"datagram")
+        .send_with_options(
+            client_open.session,
+            b"datagram",
+            rnet_transport::SendOptions { correlation_id: 77 },
+        )
         .unwrap();
     let server_message = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message && event.endpoint == server
     });
     assert_eq!(server_message.data, b"datagram");
+    assert_eq!(server_message.request_id, 77);
 
     runtime
-        .send_legacy(server_message.session, 10, 0, 78, b"reply")
+        .send_with_options(
+            server_message.session,
+            b"reply",
+            rnet_transport::SendOptions { correlation_id: 78 },
+        )
         .unwrap();
     let reply = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message && event.session == client_open.session
     });
     assert_eq!(reply.data, b"reply");
+    assert_eq!(reply.request_id, 78);
     runtime.stop(Duration::ZERO).unwrap();
 }
 
@@ -270,7 +289,7 @@ fn closing_a_udp_session_never_reuses_its_stale_peer_route() {
         event.event_type == EventType::SessionOpened && event.endpoint == client
     })
     .session;
-    runtime.send(client_session, 1, b"first").unwrap();
+    runtime.send(client_session, b"first").unwrap();
     let first = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message && event.endpoint == server
     });
@@ -283,7 +302,7 @@ fn closing_a_udp_session_never_reuses_its_stale_peer_route() {
     });
     assert_eq!(closed.status, ErrorCode::Cancelled);
 
-    runtime.send(client_session, 2, b"second").unwrap();
+    runtime.send(client_session, b"second").unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut reopened_session = None;
     let mut message_session = None;
@@ -318,7 +337,7 @@ fn oversized_message_is_rejected_before_enqueue() {
     })
     .session;
 
-    let error = runtime.send(session, 1, &[0; 1025]).unwrap_err();
+    let error = runtime.send(session, &[0; 1025]).unwrap_err();
     assert_eq!(error.code(), ErrorCode::MessageTooLarge);
     runtime.stop(Duration::ZERO).unwrap();
 }
@@ -345,7 +364,7 @@ fn send_rejects_a_frame_that_exceeds_runtime_or_session_byte_budget() {
     })
     .session;
 
-    let error = runtime.send(client_session, 1, b"x").unwrap_err();
+    let error = runtime.send(client_session, b"x").unwrap_err();
     assert_eq!(error.code(), ErrorCode::WouldBlock);
     assert_eq!(runtime.metrics_snapshot().queued_send_bytes, 0);
 }
@@ -421,12 +440,12 @@ fn udp_never_delivers_a_new_peer_message_before_session_open() {
     assert_eq!(opened[0].endpoint, client);
     let client_session = runtime.poll_events(1, Duration::from_secs(1))[0].session;
 
-    runtime.send(client_session, 1, b"first").unwrap();
+    runtime.send(client_session, b"first").unwrap();
     let server_open = runtime.poll_events(1, Duration::from_secs(1));
     assert_eq!(server_open[0].event_type, EventType::SessionOpened);
     assert_eq!(server_open[0].endpoint, server);
 
-    runtime.send(client_session, 1, b"second").unwrap();
+    runtime.send(client_session, b"second").unwrap();
     let deadline = Instant::now() + Duration::from_secs(1);
     let second = loop {
         assert!(
@@ -488,7 +507,7 @@ fn ipv6_tcp_and_udp_loopback_are_supported() {
         ))
         .unwrap();
     let (client_open, server_open) = poll_session_pair(&tcp, client, listener);
-    tcp.send(client_open.session, 1, b"ipv6-tcp").unwrap();
+    tcp.send(client_open.session, b"ipv6-tcp").unwrap();
     let message = poll_until(&tcp, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message && event.session == server_open.session
     });
@@ -509,7 +528,7 @@ fn ipv6_tcp_and_udp_loopback_are_supported() {
         event.event_type == EventType::SessionOpened && event.endpoint == client
     })
     .session;
-    udp.send(client_session, 2, b"ipv6-udp").unwrap();
+    udp.send(client_session, b"ipv6-udp").unwrap();
     let message = poll_until(&udp, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message && event.endpoint == server
     });

@@ -43,7 +43,7 @@ for event in runtime.poll_events(32, std::time::Duration::from_millis(50)) {
     match event.event_type {
         EventType::AuthRequest => runtime.auth_decide(event.session, true)?,
         EventType::SessionOpened if event.endpoint == client => {
-            runtime.send_payload(event.session, b"hello")?;
+            runtime.send(event.session, b"hello")?;
         }
         _ => {}
     }

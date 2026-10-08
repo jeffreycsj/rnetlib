@@ -84,10 +84,7 @@ fn secure_tcp_requires_server_auth_before_opening_and_exchanging_frames() {
     assert_eq!(&auth.data[..32], client_key.public.as_slice());
     assert_eq!(&auth.data[32..], b"account-ticket");
     assert_eq!(
-        runtime
-            .send(auth.session, 1, b"too-early")
-            .unwrap_err()
-            .code(),
+        runtime.send(auth.session, b"too-early").unwrap_err().code(),
         ErrorCode::HandshakeRequired
     );
     runtime
@@ -107,12 +104,17 @@ fn secure_tcp_requires_server_auth_before_opening_and_exchanging_frames() {
         ErrorCode::NotSupported
     );
     runtime
-        .send_legacy(client_session, 7, 1, 99, b"encrypted-frame")
+        .send_with_options(
+            client_session,
+            b"encrypted-frame",
+            rnet_transport::SendOptions { correlation_id: 99 },
+        )
         .expect("send encrypted frame");
     let message = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::Message && event.session == server_session
     });
     assert_eq!(message.data, b"encrypted-frame");
+    assert_eq!(message.request_id, 99);
     runtime.stop(Duration::ZERO).expect("stop");
 }
 
@@ -172,7 +174,6 @@ fn secure_udp_establishes_a_logical_session_before_delivering_datagrams() {
     runtime
         .send_with_options(
             client_session,
-            5,
             b"secure-datagram",
             rnet_transport::SendOptions { correlation_id: 1 },
         )
@@ -181,6 +182,7 @@ fn secure_udp_establishes_a_logical_session_before_delivering_datagrams() {
         event.event_type == EventType::Message && event.session == server_session
     });
     assert_eq!(message.data, b"secure-datagram");
+    assert_eq!(message.request_id, 1);
     runtime.stop(Duration::ZERO).expect("stop");
 }
 
@@ -214,7 +216,6 @@ fn secure_kcp_establishes_and_exchanges_a_reliable_message() {
     runtime
         .send_with_options(
             client_session,
-            8,
             &payload,
             rnet_transport::SendOptions { correlation_id: 2 },
         )
@@ -223,6 +224,7 @@ fn secure_kcp_establishes_and_exchanges_a_reliable_message() {
         event.event_type == EventType::Message && event.session == server_session
     });
     assert_eq!(message.data, payload);
+    assert_eq!(message.request_id, 2);
     let latencies = runtime.latency_snapshot();
     for kind in [LatencyKind::CryptoHandshake, LatencyKind::AuthWait] {
         assert!(

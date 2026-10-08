@@ -136,55 +136,51 @@ impl NetworkRuntime {
             .map_err(|_| RnetError::new(ErrorCode::InvalidState, "authentication request expired"))
     }
 
-    /// Enqueues opaque application bytes with all compatibility routing fields set to zero.
+    /// Enqueues opaque application bytes on the session's fixed TCP, UDP, or KCP transport.
+    /// Success means accepted by the local bounded queue, not delivered to the peer.
+    /// An unfinished handshake, closed session, oversized payload, or full queue returns an error.
     ///
-    /// This is the transport entry point used by the game facade. Business message types belong
-    /// inside the caller's payload schema; TCP, UDP, or KCP routing was already fixed when the
-    /// endpoint was created.
-    pub fn send_payload(&self, session: Handle, payload: &[u8]) -> Result<()> {
-        self.send_payload_with_options(session, payload, SendOptions::default())
-    }
-
-    /// Enqueues opaque game/application bytes with optional correlation metadata while keeping
-    /// transport routing and message typing internal.
-    pub fn send_payload_with_options(
-        &self,
-        session: Handle,
-        payload: &[u8],
-        options: SendOptions,
-    ) -> Result<()> {
-        self.send_legacy(session, 0, 0, options.correlation_id, payload)
-    }
-
-    /// Enqueues one application message. Transport stream selection is internal.
+    /// Business message types belong in the payload; typed and legacy sends are not supported.
     ///
-    /// The explicit message type is retained for source compatibility. New game-facing code uses
-    /// [`NetworkRuntime::send_payload`] and keeps business typing inside its serialized payload.
-    pub fn send(&self, session: Handle, msg_type: u32, payload: &[u8]) -> Result<()> {
-        self.send_with_options(session, msg_type, payload, SendOptions::default())
+    /// ```compile_fail,E0061
+    /// # fn old_send(runtime: &rnet_transport::NetworkRuntime) {
+    /// runtime.send(1, 7, b"payload").unwrap();
+    /// # }
+    /// ```
+    ///
+    /// ```compile_fail,E0061
+    /// # fn old_options(runtime: &rnet_transport::NetworkRuntime) {
+    /// runtime.send_with_options(1, 7, b"payload", Default::default()).unwrap();
+    /// # }
+    /// ```
+    ///
+    /// ```compile_fail,E0599
+    /// # fn old_legacy(runtime: &rnet_transport::NetworkRuntime) {
+    /// runtime.send_legacy(1, 7, 2, 99, b"payload").unwrap();
+    /// # }
+    /// ```
+    ///
+    /// ```compile_fail,E0599
+    /// # fn old_alias(runtime: &rnet_transport::NetworkRuntime) {
+    /// runtime.send_payload(1, b"payload").unwrap();
+    /// # }
+    /// ```
+    ///
+    /// ```compile_fail,E0599
+    /// # fn old_options_alias(runtime: &rnet_transport::NetworkRuntime) {
+    /// runtime.send_payload_with_options(1, b"payload", Default::default()).unwrap();
+    /// # }
+    /// ```
+    pub fn send(&self, session: Handle, payload: &[u8]) -> Result<()> {
+        self.send_with_options(session, payload, SendOptions::default())
     }
 
     /// Enqueues one application message with optional request/response correlation metadata.
     pub fn send_with_options(
         &self,
         session: Handle,
-        msg_type: u32,
         payload: &[u8],
         options: SendOptions,
-    ) -> Result<()> {
-        self.send_legacy(session, msg_type, 0, options.correlation_id, payload)
-    }
-
-    /// Compatibility entry point for the stable C ABI. New Rust code should use `send` or
-    /// `send_with_options`; stream identifiers are reserved for transport internals.
-    #[doc(hidden)]
-    pub fn send_legacy(
-        &self,
-        session: Handle,
-        msg_type: u32,
-        stream_id: u32,
-        request_id: u64,
-        payload: &[u8],
     ) -> Result<()> {
         if self.shared.state.load() != Lifecycle::Running {
             return Err(RnetError::new(
@@ -193,9 +189,9 @@ impl NetworkRuntime {
             ));
         }
         let frame = encode_frame(
-            msg_type,
-            stream_id,
-            request_id,
+            0,
+            0,
+            options.correlation_id,
             0,
             payload,
             self.shared.config.max_body_len,
@@ -204,7 +200,7 @@ impl NetworkRuntime {
     }
 
     /// Sends a game-library control through Noise even when business data is plaintext.
-    /// The game facade owns the control envelope; ordinary applications should use `send_payload`.
+    /// The game facade owns the control envelope; ordinary applications should use `send`.
     #[doc(hidden)]
     pub fn send_game_control(&self, session: Handle, payload: &[u8]) -> Result<()> {
         if self.shared.state.load() != Lifecycle::Running {
