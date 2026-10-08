@@ -401,7 +401,9 @@ pub(crate) async fn run_adaptive_tcp_client(
     }
     .await;
     if let Err(error) = result {
-        fail_secure_session(&shared, endpoint, session, error);
+        // Unlike an accepted server session, this task owns a single-use client endpoint.
+        // A failed handshake must release its slot even if lifecycle notifications are full.
+        fail_endpoint(&shared, endpoint, Some(session), "tcp_handshake", error);
     }
 }
 

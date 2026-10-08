@@ -205,7 +205,12 @@ impl NetworkRuntime {
             return Err(error);
         }
         let shared = Arc::clone(&self.shared);
+        let (start, ready) = oneshot::channel();
         let task = self.runtime.spawn(async move {
+            // A peer may reject immediately; register cancellation before it can remove the endpoint.
+            if ready.await.is_err() {
+                return;
+            }
             run_adaptive_tcp_client(
                 shared,
                 endpoint,
@@ -218,6 +223,7 @@ impl NetworkRuntime {
             .await;
         });
         self.set_endpoint_abort(endpoint, task.abort_handle())?;
+        let _ = start.send(());
         Ok(endpoint)
     }
 }

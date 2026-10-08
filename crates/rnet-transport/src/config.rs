@@ -243,7 +243,8 @@ pub struct ServerConfig {
 pub struct ClientConfig {
     /// TCP, UDP, or KCP; must match the server listener.
     pub transport: Transport,
-    /// Optional numeric local address. UDP and KCP normally use a wildcard address with port zero.
+    /// Optional numeric local address. For UDP/KCP, `None` selects a wildcard address matching
+    /// the remote IP family and an OS-assigned port; an explicit address is preserved.
     pub bind_addr: Option<SocketAddr>,
     /// Numeric server address.
     pub remote_addr: SocketAddr,
@@ -398,12 +399,25 @@ impl EndpointConfig {
     }
 
     /// Creates a unified client connection. Security is negotiated and verified automatically.
+    /// For UDP/KCP, an omitted bind address uses the remote IP family and an OS-assigned port.
     pub fn client(
         transport: Transport,
         bind_addr: Option<SocketAddr>,
         remote_addr: SocketAddr,
         join_payload: Vec<u8>,
     ) -> Self {
+        let bind_addr = bind_addr.or_else(|| {
+            (transport != Transport::Tcp).then(|| {
+                SocketAddr::new(
+                    if remote_addr.is_ipv4() {
+                        std::net::Ipv4Addr::UNSPECIFIED.into()
+                    } else {
+                        std::net::Ipv6Addr::UNSPECIFIED.into()
+                    },
+                    0,
+                )
+            })
+        });
         Self {
             transport,
             bind_addr,

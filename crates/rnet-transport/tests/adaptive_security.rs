@@ -49,6 +49,59 @@ fn assert_message(runtime: &NetworkRuntime, expected: &[u8], stage: &str) -> Eve
     event
 }
 
+#[test]
+fn numeric_datagram_clients_default_local_address_and_preserve_explicit_bind() {
+    for transport in [Transport::Udp, Transport::Kcp] {
+        for address in ["127.0.0.1:0", "[::1]:0"] {
+            let local: SocketAddr = address.parse().unwrap();
+            for bind_addr in [None, Some(local)] {
+                let key = Keypair::generate().unwrap();
+                let server = NetworkRuntime::new(RuntimeConfig::production()).unwrap();
+                let client = NetworkRuntime::new_with_client_security(
+                    RuntimeConfig::production(),
+                    Some(ClientSecurity::pinned(
+                        Keypair::generate().unwrap(),
+                        key.public.clone(),
+                    )),
+                )
+                .unwrap();
+                let listener = server
+                    .listen(ServerConfig {
+                        transport,
+                        bind_addr: local,
+                        local_key: key,
+                        initial_security: SecurityMode::Encrypted,
+                    })
+                    .unwrap();
+                let endpoint = client
+                    .connect(ClientConfig {
+                        transport,
+                        bind_addr,
+                        remote_addr: server.endpoint_local_addr(listener).unwrap(),
+                        join_payload: b"numeric-client".to_vec(),
+                    })
+                    .expect("local address is optional for a numeric client");
+                let bound = client.endpoint_local_addr(endpoint).unwrap();
+                assert_eq!(bound.is_ipv4(), local.is_ipv4());
+                assert_ne!(bound.port(), 0);
+                if bind_addr.is_some() {
+                    assert_eq!(bound.ip(), local.ip());
+                } else {
+                    assert!(bound.ip().is_unspecified());
+                }
+                let auth = poll_until(&server, EventType::AuthRequest);
+                server.auth_decide(auth.session, true).unwrap();
+                let server_session = poll_until(&server, EventType::SessionOpened).session;
+                let client_session = poll_until(&client, EventType::SessionOpened).session;
+                client.send_payload(client_session, b"request").unwrap();
+                assert_message(&server, b"request", "numeric request");
+                server.send_payload(server_session, b"response").unwrap();
+                assert_message(&client, b"response", "numeric response");
+            }
+        }
+    }
+}
+
 fn establish_pair(
     transport: Transport,
     initial_security: SecurityMode,

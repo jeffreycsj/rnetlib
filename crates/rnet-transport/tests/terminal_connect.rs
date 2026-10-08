@@ -1,11 +1,11 @@
 use rnet_core::{ErrorCode, EventType, Transport};
 use rnet_security::Keypair;
 use rnet_transport::{ClientSecurity, NetworkRuntime, ResolvedClientConfig, RuntimeConfig};
-use std::net::UdpSocket;
+use std::net::{TcpListener, UdpSocket};
 use std::time::{Duration, Instant};
 
-fn failed_attempts_release_capacity(single_candidate: bool) {
-    for transport in [Transport::Udp, Transport::Kcp] {
+fn failed_attempts_release_capacity(single_candidate: bool, transports: &[Transport]) {
+    for &transport in transports {
         let key = Keypair::generate().unwrap();
         let runtime = NetworkRuntime::new_with_client_security(
             RuntimeConfig {
@@ -24,12 +24,18 @@ fn failed_attempts_release_capacity(single_candidate: bool) {
         let blackholes: Vec<_> = (0..if single_candidate { 1 } else { 3 })
             .map(|_| UdpSocket::bind("127.0.0.1:0").unwrap())
             .collect();
+        // The TCP backlog accepts the connection, but no peer sends the application hello.
+        let tcp_blackhole = TcpListener::bind("127.0.0.1:0").unwrap();
         for _ in 0..3 {
             runtime.poll_events(64, Duration::ZERO);
             let endpoint = runtime
                 .connect_resolved(ResolvedClientConfig {
                     transport,
-                    remote_addrs: blackholes.iter().map(|s| s.local_addr().unwrap()).collect(),
+                    remote_addrs: if transport == Transport::Tcp {
+                        vec![tcp_blackhole.local_addr().unwrap()]
+                    } else {
+                        blackholes.iter().map(|s| s.local_addr().unwrap()).collect()
+                    },
                     join_payload: Vec::new(),
                 })
                 .expect("a failed attempt must return the sole endpoint slot");
@@ -88,10 +94,15 @@ fn failed_attempts_release_capacity(single_candidate: bool) {
 
 #[test]
 fn total_deadline_reclaims_endpoint_and_allows_repeated_connections() {
-    failed_attempts_release_capacity(false);
+    failed_attempts_release_capacity(false, &[Transport::Udp, Transport::Kcp]);
 }
 
 #[test]
 fn last_candidate_timeout_reclaims_endpoint_and_reports_join_failure() {
-    failed_attempts_release_capacity(true);
+    failed_attempts_release_capacity(true, &[Transport::Udp, Transport::Kcp]);
+}
+
+#[test]
+fn tcp_handshake_timeout_reclaims_endpoint_and_allows_repeated_connections() {
+    failed_attempts_release_capacity(true, &[Transport::Tcp]);
 }
