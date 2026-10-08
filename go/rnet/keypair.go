@@ -16,6 +16,9 @@ type Keypair struct {
 }
 
 func GenerateKeypair() (Keypair, error) {
+	if err := checkABI(); err != nil {
+		return Keypair{}, err
+	}
 	defer lockNativeThread()()
 	var keypair Keypair
 	err := statusError(C.rnet_go_keypair_generate(
@@ -26,6 +29,9 @@ func GenerateKeypair() (Keypair, error) {
 }
 
 func KeypairFromPrivate(private []byte) (Keypair, error) {
+	if err := checkABI(); err != nil {
+		return Keypair{}, err
+	}
 	defer lockNativeThread()()
 	var keypair Keypair
 	if len(private) != len(keypair.Private) {

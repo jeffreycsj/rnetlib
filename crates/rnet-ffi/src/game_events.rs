@@ -103,6 +103,7 @@ pub(crate) fn encode(event: GameEvent, buffers: &GameBuffers) -> RnetGameEvent {
             out.status = reason as i32;
         }
         GameEvent::Message(message) => {
+            out.correlation_id = message.correlation_id;
             out.event_type = RNET_GAME_MESSAGE;
             out.endpoint = message.endpoint;
             out.session = message.session;
@@ -167,17 +168,6 @@ pub(crate) fn encode(event: GameEvent, buffers: &GameBuffers) -> RnetGameEvent {
         GameEvent::RuntimeStopped => out.event_type = RNET_GAME_RUNTIME_STOPPED,
     }
     out
-}
-
-pub(crate) fn encode_v2(event: GameEvent, buffers: &GameBuffers) -> RnetGameEventV2 {
-    let correlation_id = match &event {
-        GameEvent::Message(message) => message.correlation_id,
-        _ => 0,
-    };
-    RnetGameEventV2 {
-        event: encode(event, buffers),
-        correlation_id,
-    }
 }
 
 fn put_data(out: &mut RnetGameEvent, buffers: &GameBuffers, data: Vec<u8>) {

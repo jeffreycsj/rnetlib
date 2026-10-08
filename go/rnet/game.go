@@ -27,12 +27,15 @@ type GameRuntime struct {
 // NewGameRuntime creates a production-default game runtime. Pass nil for a
 // server-only runtime; clients pin one expected server public key.
 func NewGameRuntime(security *ClientSecurity, configs ...GameConfig) (*GameRuntime, error) {
+	if err := checkABI(); err != nil {
+		return nil, err
+	}
 	defer lockNativeThread()()
 	if len(configs) > 1 {
 		return nil, fmt.Errorf("rnet: NewGameRuntime accepts at most one config")
 	}
-	var native C.rnet_game_config_v2_t
-	if err := statusError(C.rnet_game_config_v2_init(&native)); err != nil {
+	var native C.rnet_game_config_t
+	if err := statusError(C.rnet_game_config_init(&native)); err != nil {
 		return nil, err
 	}
 	if len(configs) == 1 {
@@ -57,8 +60,8 @@ func NewGameRuntime(security *ClientSecurity, configs ...GameConfig) (*GameRunti
 		native.scheduled_flush_batch = C.uint64_t(config.ScheduledQueue.FlushBatch)
 	}
 	var privateKey, serverKey *C.uint8_t
-	var network C.rnet_config_v5_t
-	var networkPtr *C.rnet_config_v5_t
+	var network C.rnet_config_t
+	var networkPtr *C.rnet_config_t
 	if len(configs) == 1 && configs[0].Network != nil {
 		configured, networkErr := gameNetworkConfig(*configs[0].Network)
 		if networkErr != nil {
@@ -413,8 +416,8 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 	if capacity > 65536 {
 		return nil, fmt.Errorf("rnet: game poll capacity is too large")
 	}
-	native := make([]C.rnet_game_event_v2_t, capacity)
-	var pointer *C.rnet_game_event_v2_t
+	native := make([]C.rnet_game_event_t, capacity)
+	var pointer *C.rnet_game_event_t
 	if capacity > 0 {
 		pointer = &native[0]
 	}
@@ -425,12 +428,12 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 		timeoutMS = math.MaxUint32
 	}
 	var count C.size_t
-	if err = statusError(C.rnet_game_poll_events_v2(handle, pointer, C.size_t(capacity), C.uint32_t(timeoutMS), &count)); err != nil {
+	if err = statusError(C.rnet_game_poll_events(handle, pointer, C.size_t(capacity), C.uint32_t(timeoutMS), &count)); err != nil {
 		return nil, err
 	}
 	defer func() {
 		for i := 0; i < int(count); i++ {
-			for _, token := range []C.uint64_t{native[i].event.buffer_token, native[i].event.aux_buffer_token} {
+			for _, token := range []C.uint64_t{native[i].buffer_token, native[i].aux_buffer_token} {
 				if token != 0 {
 					if releaseErr := statusError(C.rnet_game_buffer_release(handle, token)); err == nil {
 						err = releaseErr
@@ -441,8 +444,7 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 	}()
 	result = make([]GameEvent, 0, count)
 	for i := 0; i < int(count); i++ {
-		sourceV2 := native[i]
-		source := sourceV2.event
+		source := native[i]
 		data, copyErr := gameCopyBytes(source.data, source.data_len)
 		if copyErr != nil {
 			return nil, copyErr
@@ -464,7 +466,7 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 			QualitySamples: uint64(source.quality_samples),
 			HasSequence:    source.has_sequence != 0, Sequence: uint32(source.sequence),
 			HasTick: source.has_tick != 0, Tick: uint32(source.tick),
-			CorrelationID: uint64(sourceV2.correlation_id),
+			CorrelationID: uint64(source.correlation_id),
 		}
 		copy(event.ClientPublicKey[:], unsafe.Slice((*byte)(unsafe.Pointer(&source.client_public_key[0])), 32))
 		result = append(result, event)

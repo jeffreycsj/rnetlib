@@ -5,36 +5,31 @@
 
 namespace rnet {
 
-
 class GameRuntime {
  public:
   GameRuntime() {
-    rnet_game_config_v2_t config{};
-    check(rnet_game_config_v2_init(&config));
-    check(rnet_game_runtime_create_v2(&config, nullptr, &handle_));
+    check_abi();
+    rnet_game_config_t config{};
+    check(rnet_game_config_init(&config));
+    check(rnet_game_runtime_create(&config, nullptr, &handle_));
   }
 
   explicit GameRuntime(const rnet_game_config_t &config) {
+    check_abi();
     check(rnet_game_runtime_create(&config, nullptr, &handle_));
   }
 
   GameRuntime(const rnet_game_config_t &config,
-              const rnet_logger_v2_t &logger) {
-    check(rnet_game_runtime_create_logged(&config, nullptr, &logger, &handle_));
-  }
-
-  explicit GameRuntime(const rnet_game_config_v2_t &config) {
-    check(rnet_game_runtime_create_v2(&config, nullptr, &handle_));
-  }
-
-  GameRuntime(const rnet_game_config_v2_t &config,
-              const rnet_logger_v2_t &logger) {
-    check(rnet_game_runtime_create_logged_v2(&config, nullptr, &logger,
-                                             &handle_));
+              const rnet_logger_t &logger) {
+    check_abi();
+    auto configured = config;
+    configured.logger = &logger;
+    check(rnet_game_runtime_create(&configured, nullptr, &handle_));
   }
 
   GameRuntime(const rnet_game_config_t &config, const Keypair &client_key,
               const std::array<uint8_t, 32> &expected_server_key) {
+    check_abi();
     rnet_client_security_t security{};
     security.struct_size = sizeof(security);
     security.abi_version = RNET_ABI_VERSION;
@@ -43,51 +38,33 @@ class GameRuntime {
     check(rnet_game_runtime_create(&config, &security, &handle_));
   }
 
-  GameRuntime(const rnet_game_config_v2_t &config, const Keypair &client_key,
-              const std::array<uint8_t, 32> &expected_server_key) {
-    rnet_client_security_t security{};
-    security.struct_size = sizeof(security);
-    security.abi_version = RNET_ABI_VERSION;
-    security.local_private_key = {client_key.private_key(), 32};
-    security.expected_server_public_key = {expected_server_key.data(), 32};
-    check(rnet_game_runtime_create_v2(&config, &security, &handle_));
-  }
-
   GameRuntime(const rnet_game_config_t &config, const Keypair &client_key,
               const std::array<uint8_t, 32> &expected_server_key,
-              const rnet_logger_v2_t &logger) {
+              const rnet_logger_t &logger) {
+    check_abi();
     rnet_client_security_t security{};
     security.struct_size = sizeof(security);
     security.abi_version = RNET_ABI_VERSION;
     security.local_private_key = {client_key.private_key(), 32};
     security.expected_server_public_key = {expected_server_key.data(), 32};
-    check(rnet_game_runtime_create_logged(&config, &security, &logger, &handle_));
-  }
-
-  GameRuntime(const rnet_game_config_v2_t &config, const Keypair &client_key,
-              const std::array<uint8_t, 32> &expected_server_key,
-              const rnet_logger_v2_t &logger) {
-    rnet_client_security_t security{};
-    security.struct_size = sizeof(security);
-    security.abi_version = RNET_ABI_VERSION;
-    security.local_private_key = {client_key.private_key(), 32};
-    security.expected_server_public_key = {expected_server_key.data(), 32};
-    check(rnet_game_runtime_create_logged_v2(&config, &security, &logger,
-                                             &handle_));
+    auto configured = config;
+    configured.logger = &logger;
+    check(rnet_game_runtime_create(&configured, &security, &handle_));
   }
 
   GameRuntime(const Keypair &client_key,
               const std::array<uint8_t, 32> &expected_server_key,
               bool allow_plaintext_business_data = false) {
-    rnet_game_config_v2_t config{};
-    check(rnet_game_config_v2_init(&config));
+    check_abi();
+    rnet_game_config_t config{};
+    check(rnet_game_config_init(&config));
     config.allow_plaintext_business_data = allow_plaintext_business_data ? 1U : 0U;
     rnet_client_security_t security{};
     security.struct_size = sizeof(security);
     security.abi_version = RNET_ABI_VERSION;
     security.local_private_key = {client_key.private_key(), 32};
     security.expected_server_public_key = {expected_server_key.data(), 32};
-    check(rnet_game_runtime_create_v2(&config, &security, &handle_));
+    check(rnet_game_runtime_create(&config, &security, &handle_));
   }
 
   GameRuntime(const GameRuntime &) = delete;
@@ -388,28 +365,28 @@ class GameRuntime {
   }
 
   std::vector<GameEvent> poll(size_t capacity, uint32_t timeout_ms) const {
-    std::vector<rnet_game_event_v2_t> raw(capacity);
+    std::vector<rnet_game_event_t> raw(capacity);
     size_t count = 0;
-    check(rnet_game_poll_events_v2(handle_, raw.empty() ? nullptr : raw.data(),
+    check(rnet_game_poll_events(handle_, raw.empty() ? nullptr : raw.data(),
                                    raw.size(), timeout_ms, &count));
     // Own all returned tokens before any C++ allocation can throw.
     struct ReleaseBatch {
       rnet_runtime_t runtime;
-      const std::vector<rnet_game_event_v2_t> &events;
+      const std::vector<rnet_game_event_t> &events;
       size_t count;
       ~ReleaseBatch() {
         for (size_t i = 0; i < count; ++i) {
-          if (events[i].event.buffer_token != 0)
-            (void)rnet_game_buffer_release(runtime, events[i].event.buffer_token);
-          if (events[i].event.aux_buffer_token != 0)
-            (void)rnet_game_buffer_release(runtime, events[i].event.aux_buffer_token);
+          if (events[i].buffer_token != 0)
+            (void)rnet_game_buffer_release(runtime, events[i].buffer_token);
+          if (events[i].aux_buffer_token != 0)
+            (void)rnet_game_buffer_release(runtime, events[i].aux_buffer_token);
         }
       }
     } release{handle_, raw, count};
     std::vector<GameEvent> result;
     result.reserve(count);
     for (size_t i = 0; i < count; ++i) {
-      const rnet_game_event_t &source = raw[i].event;
+      const rnet_game_event_t &source = raw[i];
       GameEvent event;
       event.type = source.event_type;
       event.endpoint = source.endpoint;

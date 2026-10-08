@@ -9,8 +9,8 @@ int main() {
   std::array<uint8_t, 32> expected_server_key;
   std::copy(server.keypair.public_key(), server.keypair.public_key() + 32,
             expected_server_key.begin());
-  rnet_config_v5_t runtime_config = {};
-  rnet::check(rnet_config_v5_init(&runtime_config));
+  rnet_config_t runtime_config = {};
+  rnet::check(rnet_config_init(&runtime_config));
   rnet::Runtime runtime(runtime_config, client_key, expected_server_key);
   server.transport = rnet::Transport::Tcp;
   server.initial_security = rnet::SecurityMode::Encrypted;
@@ -51,7 +51,7 @@ int main() {
   if (server_session == 0 || client_session == 0) {
     return 2;
   }
-  runtime.send(client_session, 1, std::string("cpp-secure"));
+  runtime.send(client_session, std::string("cpp-secure"));
   while (std::chrono::steady_clock::now() < deadline) {
     const std::vector<rnet::Event> events = runtime.poll(16, 50);
     for (std::vector<rnet::Event>::const_iterator it = events.begin();

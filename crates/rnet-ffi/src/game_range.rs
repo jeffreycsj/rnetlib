@@ -5,13 +5,10 @@ use crate::game_abi::RnetGameTransportLatest;
 use crate::game_config_abi::{RnetGameRangeClientConfig, RnetGameRangeServerConfig};
 use crate::game_range_abi::RnetGameRangeBuffer;
 use crate::game_registry;
-use crate::registry::{
-    copy_key, ffi_status, invalid_argument, parse_address, validate_struct, with_borrowed_slice,
-};
+use crate::registry::{copy_key, ffi_status, invalid_argument, parse_address, with_borrowed_slice};
 use rnet_core::{ErrorCode, Result, RnetError, Transport};
 use rnet_game::{GameProtocolRange, GameRangeHostClientConfig, GameRangeServerConfig};
 use rnet_security::Keypair;
-use std::mem::size_of;
 use zeroize::Zeroizing;
 
 #[no_mangle]
@@ -26,12 +23,7 @@ pub unsafe extern "C" fn rnet_game_server_listen_range(
         if config.is_null() || out.is_null() {
             return invalid_argument("game range server config and output must be non-null");
         }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetGameRangeServerConfig>(),
-        )?;
+        let config = unsafe { crate::registry::read_config(config) }?;
         if config.reserved != 0 || config.initial_encryption > 1 {
             return invalid_argument("invalid range server flags");
         }
@@ -110,12 +102,7 @@ pub unsafe extern "C" fn rnet_game_client_resume_connect_range(
 unsafe fn parse_range_client(
     config: *const RnetGameRangeClientConfig,
 ) -> Result<GameRangeHostClientConfig> {
-    let config = unsafe { *config };
-    validate_struct(
-        config.struct_size,
-        config.abi_version,
-        size_of::<RnetGameRangeClientConfig>(),
-    )?;
+    let config = unsafe { crate::registry::read_config(config) }?;
     if config.reserved != 0 || config.reserved2 != 0 || config.reserved3 != 0 {
         return invalid_argument("game range client reserved fields must be zero");
     }

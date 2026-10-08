@@ -52,8 +52,8 @@ func (r *Runtime) Metrics() (Metrics, error) {
 	if err != nil {
 		return result, err
 	}
-	var native C.rnet_metrics_v3_t
-	if err := statusError(C.rnet_metrics_snapshot_v3(handle, &native)); err != nil {
+	var native C.rnet_metrics_t
+	if err := statusError(C.rnet_metrics_snapshot(handle, &native)); err != nil {
 		return result, err
 	}
 	result = Metrics{
@@ -102,14 +102,14 @@ func (r *Runtime) latencyMetrics(drain bool) ([]LatencyMetric, error) {
 	if drain {
 		drainWindow = 1
 	}
-	if err := statusError(C.rnet_latency_snapshot_v2(handle, nil, 0, &count, drainWindow)); err != nil {
+	if err := statusError(C.rnet_latency_snapshot(handle, nil, 0, &count, drainWindow)); err != nil {
 		return nil, err
 	}
 	if count == 0 {
 		return nil, nil
 	}
-	native := make([]C.rnet_latency_metric_v2_t, int(count))
-	if err := statusError(C.rnet_latency_snapshot_v2(handle, &native[0], count, &count, drainWindow)); err != nil {
+	native := make([]C.rnet_latency_metric_t, int(count))
+	if err := statusError(C.rnet_latency_snapshot(handle, &native[0], count, &count, drainWindow)); err != nil {
 		return nil, err
 	}
 	result := make([]LatencyMetric, 0, int(count))

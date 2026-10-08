@@ -121,4 +121,7 @@ fn callback_latency_is_measured_without_blocking_producers() {
     let latency = logger.callback_latency();
     assert_eq!(latency.sample_count, 1);
     assert!(latency.max_us >= 1_000);
+    assert_eq!(logger.drain_callback_latency_window().sample_count, 1);
+    assert_eq!(logger.drain_callback_latency_window().sample_count, 0);
+    assert_eq!(logger.callback_latency().sample_count, 1);
 }

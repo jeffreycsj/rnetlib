@@ -64,6 +64,111 @@ fn connect_ready(runtime: &NetworkRuntime, listener: Handle) -> (Handle, Handle)
     (server_session, client_session)
 }
 
+#[test]
+fn established_client_exit_reclaims_capacity_without_closing_its_server_listener() {
+    for local_close in [false, true] {
+        for full in [false, true] {
+            let key = Keypair::generate().unwrap();
+            let runtime = NetworkRuntime::new_with_client_security(
+                RuntimeConfig {
+                    max_endpoints: 2,
+                    event_queue_capacity: 32,
+                    ..RuntimeConfig::production()
+                },
+                Some(ClientSecurity::pinned(
+                    Keypair::generate().unwrap(),
+                    key.public.clone(),
+                )),
+            )
+            .unwrap();
+            let (listener, _socket, _task) = start_listener(&runtime, key);
+            for _ in 0..3 {
+                let (server_session, client_session) = connect_ready(&runtime, listener);
+                let client = runtime
+                    .shared
+                    .sessions
+                    .lock()
+                    .unwrap()
+                    .get(client_session)
+                    .unwrap()
+                    .endpoint;
+                runtime.poll_events(64, Duration::ZERO);
+                if full {
+                    while runtime
+                        .shared
+                        .events
+                        .try_push(Event::simple(EventType::RuntimeStarted))
+                        .is_ok()
+                    {}
+                }
+                runtime
+                    .close_session(
+                        if local_close {
+                            client_session
+                        } else {
+                            server_session
+                        },
+                        ErrorCode::Cancelled,
+                    )
+                    .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                // Do not drain notifications: resource reclamation must also work with a full queue.
+                while Instant::now() < deadline {
+                    let metrics = runtime.metrics_snapshot();
+                    if metrics.current_sessions == 0 && metrics.current_endpoints == 1 {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert_eq!(
+                    runtime.endpoint_local_addr(client).err().map(|e| e.code()),
+                    Some(ErrorCode::InvalidHandle),
+                    "closed TCP client retained its endpoint"
+                );
+                assert!(runtime.endpoint_local_addr(listener).is_ok());
+                let metrics = runtime.metrics_snapshot();
+                assert_eq!(metrics.current_endpoints, 1);
+                assert_eq!(metrics.current_sessions, 0);
+                assert_eq!(metrics.pending_handshakes, 0);
+                assert_eq!(
+                    runtime
+                        .send_payload(client_session, b"stale")
+                        .unwrap_err()
+                        .code(),
+                    ErrorCode::InvalidHandle
+                );
+                let events = runtime.poll_events(64, Duration::ZERO);
+                if full {
+                    assert!(metrics.lifecycle_events_rejected >= 2);
+                } else {
+                    let closes: Vec<_> = events
+                        .iter()
+                        .filter(|e| {
+                            e.event_type == EventType::SessionClosed && e.session == client_session
+                        })
+                        .collect();
+                    assert_eq!(closes.len(), 1, "{events:?}");
+                    assert_eq!(
+                        closes[0].status,
+                        if local_close {
+                            ErrorCode::Cancelled
+                        } else {
+                            ErrorCode::IoError
+                        }
+                    );
+                    if !local_close {
+                        assert!(String::from_utf8_lossy(&closes[0].data).contains("phase=tcp_read"));
+                    }
+                    assert!(!events.iter().any(|e| matches!(
+                        e.event_type,
+                        EventType::JoinFailed | EventType::EndpointError
+                    )));
+                }
+            }
+        }
+    }
+}
+
 // shutdown on a duplicate Linux listening socket wakes the real accept with a local error.
 // No unsafe descriptor manipulation or production-only fault injection is needed.
 #[test]

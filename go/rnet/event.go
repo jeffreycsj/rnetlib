@@ -12,14 +12,12 @@ import (
 )
 
 type Event struct {
-	Type        EventType
-	Endpoint    Endpoint
-	Session     Session
-	MessageType uint32
-	StreamID    uint32
-	RequestID   uint64
-	Status      int32
-	Data        []byte
+	Type          EventType
+	Endpoint      Endpoint
+	Session       Session
+	CorrelationID uint64
+	Status        int32
+	Data          []byte
 }
 
 type SecurityChange struct {
@@ -70,7 +68,7 @@ func (r *Runtime) Poll(capacity int, timeout time.Duration) ([]Event, error) {
 	}
 	if capacity == 0 {
 		var count C.size_t
-		err := statusError(C.rnet_poll_events_ex(handle, nil, 0, 0, &count))
+		err := statusError(C.rnet_poll_events(handle, nil, 0, 0, &count))
 		return nil, err
 	}
 	native := make([]C.rnet_event_t, capacity)
@@ -81,20 +79,18 @@ func (r *Runtime) Poll(capacity int, timeout time.Duration) ([]Event, error) {
 		timeoutMS = int64(^uint32(0))
 	}
 	var count C.size_t
-	if err := statusError(C.rnet_poll_events_ex(handle, &native[0], C.size_t(capacity), C.uint32_t(timeoutMS), &count)); err != nil {
+	if err := statusError(C.rnet_poll_events(handle, &native[0], C.size_t(capacity), C.uint32_t(timeoutMS), &count)); err != nil {
 		return nil, err
 	}
 	events := make([]Event, 0, count)
 	for i := 0; i < int(count); i++ {
 		source := native[i]
 		event := Event{
-			Type:        EventType(source.event_type),
-			Endpoint:    Endpoint(source.endpoint),
-			Session:     Session(source.session),
-			MessageType: uint32(source.msg_type),
-			StreamID:    uint32(source.stream_id),
-			RequestID:   uint64(source.request_id),
-			Status:      int32(source.status),
+			Type:          EventType(source.event_type),
+			Endpoint:      Endpoint(source.endpoint),
+			Session:       Session(source.session),
+			CorrelationID: uint64(source.correlation_id),
+			Status:        int32(source.status),
 		}
 		if source.data_len != 0 {
 			event.Data = C.GoBytes(unsafe.Pointer(source.data), C.int(source.data_len))

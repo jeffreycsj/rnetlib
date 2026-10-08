@@ -21,7 +21,7 @@ See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, a
 
 New deployments should use the transport-neutral `listen`/`connect` APIs. TCP, UDP, or KCP is a configuration value fixed when the endpoint is created; it never appears in the send API. The server chooses the initial application-data security mode and may switch or rekey a live session. Clients follow those authenticated changes automatically.
 
-The old `rnet_endpoint_open`, `rnet_listener_open`, and `rnet_client_join` APIs remain unchanged for ABI compatibility.
+This branch is migrating to a single current SDK/wire implementation. Old SDKs are **not compatible** with the current ABI; rebuild the SDK and native library together. Legacy endpoint implementations and dual game wire paths have not yet been removed: see [migration status](docs/single-current-api.md).
 
 ## Game API quick start
 
@@ -95,7 +95,7 @@ The underlying `NetworkRuntime` exposes transport-level configuration and events
 
 The equivalent public names are:
 
-- C: `rnet_server_open_v2` / `rnet_client_connect_v2`
+- C: `rnet_server_listen` / `rnet_client_connect`
 - C++11: `Runtime::listen` / `Runtime::connect`
 - Go: `Runtime.Listen` / `Runtime.Connect`
 
@@ -116,18 +116,18 @@ Game loggers default to a poll-driven 30-second `game_latency_summary`, with cum
 
 ## C lifecycle
 
-1. Initialize `rnet_config_v5_t` with `rnet_config_v5_init`, then create `rnet_runtime_t` with `rnet_runtime_create_v5`. V3/V4 remain frozen for existing callers; V4 added socket tuning and V5 adds runtime-wide endpoint and pending-handshake limits.
+1. Initialize `rnet_config_t` with `rnet_config_init`, then create `rnet_runtime_t` with `rnet_runtime_create`. This complete layout includes socket tuning and runtime-wide endpoint/pending-handshake limits. Check `rnet_abi_version() == RNET_ABI_VERSION` before initialization.
 2. Generate or load 32-byte X25519 static keys. Use `rnet_keypair_generate` for generation and `rnet_keypair_from_private` to restore the public key from durable private-key storage.
-3. A server calls `rnet_server_open_v2`; `rnet_server_config_v2_t.transport` fixes the transport and `initial_security` fixes the initial application-data mode.
-4. A client runtime is created with `rnet_runtime_create_v5` and runtime-scoped identity/trust, then calls `rnet_client_connect_v2`. The connect config contains transport, address, and join payload but no encryption selection.
+3. A server calls `rnet_server_listen`; `rnet_server_config_t.transport` fixes the transport and `initial_security` fixes the initial application-data mode.
+4. A client runtime is created with `rnet_runtime_create` and runtime-scoped identity/trust, then calls `rnet_client_connect`. The connect config contains transport, address, and join payload but no encryption selection.
 5. The server receives `RNET_EVENT_AUTH_REQUEST`. Event data is `client_public_key[32] || join_payload`; after validation it calls `rnet_session_auth_decide`.
 6. Only after acceptance do both sides receive `RNET_EVENT_SESSION_OPENED`. Sending earlier returns `RNET_E_HANDSHAKE_REQUIRED`.
-7. Send with `rnet_session_send`; only use `rnet_session_send_ex` when a correlation ID is needed. The legacy `rnet_send` remains ABI-compatible but exposes transport-internal legacy fields.
-8. Poll with `rnet_poll_events_ex`, which separates status from event count, and release every nonzero `buffer_token` exactly once. Stop and destroy the runtime when all buffers have been returned.
+7. Send with `rnet_session_send`; only use `rnet_session_send_ex` when a correlation ID is needed. Both take opaque payloads without message-type or stream arguments.
+8. Poll with `rnet_poll_events`, which separates status from event count, and release every nonzero `buffer_token` exactly once. Stop and destroy the runtime when all buffers have been returned.
 
-`rnet_latency_snapshot_v2` returns all latency kinds including P99.9 and can atomically rotate the current window. `rnet_metrics_snapshot_v3` includes endpoint/session/pending-handshake gauges, admission failures by reason, and close counts by stable error code. `rnet_logger_v2_t` emits timestamped structured events. Logging remains bounded, so a slow callback increases `logs_dropped` instead of blocking network work.
+`rnet_latency_snapshot` returns all latency kinds including P99.9 and can rotate the current window without clearing cumulative samples. `rnet_metrics_snapshot` includes endpoint/session/pending-handshake gauges, admission failures by reason, and close counts by stable error code. `rnet_logger_t` emits timestamped structured events. Logging remains bounded, so a slow callback increases `logs_dropped` instead of blocking network work.
 
-The C++11 wrapper exposes `listen`, `connect`, `send`, `poll`, `set_security`, `rekey`, and latency metrics. The Go wrapper exposes the equivalent `Listen`, `Connect`, `Send`, `Poll`, `SetSecurity`, `Rekey`, and typed authentication accessors. Legacy metadata is available only through `send_legacy`/`SendLegacy`.
+The C++11 wrapper exposes `listen`, `connect`, `send`, `poll`, `set_security`, `rekey`, and latency metrics. The Go wrapper exposes the equivalent `Listen`, `Connect`, `Send`, `Poll`, `SetSecurity`, `Rekey`, and typed authentication accessors. Legacy send methods have been removed; event correlation is exposed as `correlation_id` / `CorrelationID`.
 
 All pointer/length inputs are borrowed only for the call. Key material is copied into zeroizing Rust storage when it must outlive the call. C/C++/Go applications must also clear their own private-key copies.
 

@@ -51,7 +51,7 @@ func TestTCPEchoCrossesCgoBoundary(t *testing.T) {
 	}
 
 	payload := []byte("go-echo")
-	if err := runtime.Send(clientSession, 19, payload); err != nil {
+	if err := runtime.Send(clientSession, payload); err != nil {
 		t.Fatal(err)
 	}
 	for time.Now().Before(deadline) {
@@ -145,7 +145,7 @@ func TestSecureJoinCrossesCgoBoundary(t *testing.T) {
 			if clientSession == 0 || serverSession == 0 {
 				t.Fatal("secure sessions did not open")
 			}
-			if err := runtime.Send(clientSession, 1, []byte("go-secure")); err != nil {
+			if err := runtime.Send(clientSession, []byte("go-secure")); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -194,7 +194,7 @@ func TestDefaultRuntimeKeyRestoreAndMetrics(t *testing.T) {
 	}
 }
 
-func TestStructuredLoggerAndV2Observability(t *testing.T) {
+func TestStructuredLoggerAndObservability(t *testing.T) {
 	records := make(chan LogRecord, 8)
 	config := DefaultConfig()
 	config.Logger = func(record LogRecord) {

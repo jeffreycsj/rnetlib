@@ -1,15 +1,14 @@
+use crate::abi::RnetClientSecurity;
 use crate::abi::RNET_ABI_VERSION;
-use crate::abi::{RnetClientSecurity, RnetConfig, RnetConfigV3};
-use crate::abi_config::{RnetConfigV4, RnetConfigV5};
+use crate::abi_config::RnetConfig;
+use crate::observe::build_logger;
 use crate::observe::log_entry;
-use crate::observe::{build_logger, build_logger_v2};
 use crate::registry::copy_key;
 use crate::registry::ffi_status;
 use crate::registry::invalid_argument;
 use crate::registry::invalid_state;
 use crate::registry::runtime_entry;
 use crate::registry::runtimes;
-use crate::registry::validate_struct;
 use crate::registry::RuntimeEntry;
 use crate::registry::IN_LOG_CALLBACK;
 use rnet_core::BufferStore;
@@ -21,7 +20,6 @@ use rnet_security::Keypair;
 use rnet_transport::RuntimeConfig;
 use rnet_transport::{ClientSecurity, NetworkRuntime};
 use std::cell::Cell;
-use std::mem::size_of;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -36,14 +34,14 @@ pub extern "C" fn rnet_abi_version() -> u32 {
 }
 
 #[no_mangle]
-/// Initializes a caller-owned configuration structure.
+/// Initializes the complete configuration with production-safe resource limits.
 ///
 /// # Safety
-/// `config` must be null or point to writable memory for one `RnetConfig`.
+/// `config` must point to writable memory for one `RnetConfig`.
 pub unsafe extern "C" fn rnet_config_init(config: *mut RnetConfig) -> i32 {
     ffi_status(|| {
         if config.is_null() {
-            return invalid_argument("config is null");
+            return invalid_argument("config must be non-null");
         }
         unsafe { config.write(RnetConfig::default()) };
         Ok(())
@@ -51,166 +49,27 @@ pub unsafe extern "C" fn rnet_config_init(config: *mut RnetConfig) -> i32 {
 }
 
 #[no_mangle]
-/// Initializes the secure-by-default production configuration.
+/// Creates a production runtime with global endpoint and pending-handshake limits.
 ///
 /// # Safety
-/// `config` must point to writable memory for one `RnetConfigV3`.
-pub unsafe extern "C" fn rnet_config_v3_init(config: *mut RnetConfigV3) -> i32 {
-    ffi_status(|| {
-        if config.is_null() {
-            return invalid_argument("config is null");
-        }
-        unsafe { config.write(RnetConfigV3::default()) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Initializes the socket-tunable, secure-by-default production configuration.
-///
-/// # Safety
-/// `config` must point to writable memory for one `RnetConfigV4`.
-pub unsafe extern "C" fn rnet_config_v4_init(config: *mut RnetConfigV4) -> i32 {
-    ffi_status(|| {
-        if config.is_null() {
-            return invalid_argument("config is null");
-        }
-        unsafe { config.write(RnetConfigV4::default()) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Initializes a V5 configuration with production-safe resource limits.
-///
-/// # Safety
-/// `config` must point to writable memory for one `RnetConfigV5`.
-pub unsafe extern "C" fn rnet_config_v5_init(config: *mut RnetConfigV5) -> i32 {
-    ffi_status(|| {
-        if config.is_null() {
-            return invalid_argument("config must be non-null");
-        }
-        unsafe { config.write(RnetConfigV5::default()) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Creates a runtime from a versioned configuration.
-///
-/// # Safety
-/// `config` and `out` must point to readable/writable instances for the call. Any logger
-/// pointer in `config` must remain valid for the runtime lifetime.
-pub unsafe extern "C" fn rnet_runtime_create(config: *const RnetConfig, out: *mut u64) -> i32 {
-    unsafe { create_runtime(config, std::ptr::null(), out) }
-}
-
-#[no_mangle]
-/// Creates a runtime with optional runtime-scoped client identity and peer verification.
-///
-/// # Safety
-/// All non-null pointers must remain valid for the call. A verification callback and its
-/// `user_data` must remain valid until the runtime is destroyed and must be thread-safe.
-pub unsafe extern "C" fn rnet_runtime_create_v2(
+/// Configuration/security pointers and `out` must be valid for this call. A logger or verifier
+/// callback and its user data must remain thread-safe and valid until runtime destruction.
+pub unsafe extern "C" fn rnet_runtime_create(
     config: *const RnetConfig,
     client: *const RnetClientSecurity,
     out: *mut u64,
 ) -> i32 {
-    unsafe { create_runtime(config, client, out) }
-}
-
-#[no_mangle]
-/// Creates a runtime using the production configuration and optional client identity.
-///
-/// # Safety
-/// All non-null pointers must be valid for the call. Client verification callbacks and logger
-/// callbacks must remain valid and thread-safe until the runtime is destroyed.
-pub unsafe extern "C" fn rnet_runtime_create_v3(
-    config: *const RnetConfigV3,
-    client: *const RnetClientSecurity,
-    out: *mut u64,
-) -> i32 {
     ffi_status(|| {
         if config.is_null() || out.is_null() {
             return invalid_argument("config and out must be non-null");
         }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetConfigV3>(),
-        )?;
-        let runtime_config = runtime_config_v3(config)?;
-        unsafe { register_runtime(runtime_config, config.logger, config.logger_v2, client, out) }
+        let config = unsafe { crate::registry::read_config(config) }?;
+        let runtime_config = runtime_config(config)?;
+        unsafe { register_runtime(runtime_config, config.logger, client, out) }
     })
 }
 
-#[no_mangle]
-/// Creates a production runtime with explicit TCP socket tuning.
-///
-/// # Safety
-/// All non-null pointers and callbacks follow the lifetime rules of `rnet_runtime_create_v3`.
-pub unsafe extern "C" fn rnet_runtime_create_v4(
-    config: *const RnetConfigV4,
-    client: *const RnetClientSecurity,
-    out: *mut u64,
-) -> i32 {
-    ffi_status(|| {
-        if config.is_null() || out.is_null() {
-            return invalid_argument("config and out must be non-null");
-        }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetConfigV4>(),
-        )?;
-        let base = config.v3_fields();
-        let mut runtime_config = runtime_config_v3(base)?;
-        runtime_config.tcp_nodelay = config.tcp_nodelay != 0;
-        runtime_config.tcp_send_buffer_bytes = optional_usize(config.tcp_send_buffer_bytes)?;
-        runtime_config.tcp_recv_buffer_bytes = optional_usize(config.tcp_recv_buffer_bytes)?;
-        unsafe { register_runtime(runtime_config, config.logger, config.logger_v2, client, out) }
-    })
-}
-
-#[no_mangle]
-/// Creates a production runtime with global endpoint and pending-handshake limits.
-///
-/// # Safety
-/// All non-null pointers and callbacks follow the lifetime rules of `rnet_runtime_create_v3`.
-pub unsafe extern "C" fn rnet_runtime_create_v5(
-    config: *const RnetConfigV5,
-    client: *const RnetClientSecurity,
-    out: *mut u64,
-) -> i32 {
-    ffi_status(|| {
-        if config.is_null() || out.is_null() {
-            return invalid_argument("config and out must be non-null");
-        }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetConfigV5>(),
-        )?;
-        let runtime_config = runtime_config_v5(config)?;
-        unsafe { register_runtime(runtime_config, config.logger, config.logger_v2, client, out) }
-    })
-}
-
-pub(crate) fn runtime_config_v5(config: RnetConfigV5) -> rnet_core::Result<RuntimeConfig> {
-    let socket = config.v4_fields();
-    let mut runtime_config = runtime_config_v3(socket.v3_fields())?;
-    runtime_config.tcp_nodelay = socket.tcp_nodelay != 0;
-    runtime_config.tcp_send_buffer_bytes = optional_usize(socket.tcp_send_buffer_bytes)?;
-    runtime_config.tcp_recv_buffer_bytes = optional_usize(socket.tcp_recv_buffer_bytes)?;
-    runtime_config.max_endpoints = config.max_endpoints as usize;
-    runtime_config.max_pending_handshakes = config.max_pending_handshakes as usize;
-    Ok(runtime_config)
-}
-
-fn runtime_config_v3(config: RnetConfigV3) -> rnet_core::Result<RuntimeConfig> {
+pub(crate) fn runtime_config(config: RnetConfig) -> rnet_core::Result<RuntimeConfig> {
     let mut runtime_config = RuntimeConfig::production();
     runtime_config.worker_threads = config.worker_threads as usize;
     runtime_config.event_queue_capacity = config.event_queue_capacity as usize;
@@ -243,6 +102,11 @@ fn runtime_config_v3(config: RnetConfigV3) -> rnet_core::Result<RuntimeConfig> {
         (config.rekey_after_ms != 0).then(|| Duration::from_millis(config.rekey_after_ms));
     runtime_config.security_policy.rekey_after_bytes =
         (config.rekey_after_bytes != 0).then_some(config.rekey_after_bytes);
+    runtime_config.tcp_nodelay = config.tcp_nodelay != 0;
+    runtime_config.tcp_send_buffer_bytes = optional_usize(config.tcp_send_buffer_bytes)?;
+    runtime_config.tcp_recv_buffer_bytes = optional_usize(config.tcp_recv_buffer_bytes)?;
+    runtime_config.max_endpoints = config.max_endpoints as usize;
+    runtime_config.max_pending_handshakes = config.max_pending_handshakes as usize;
     Ok(runtime_config)
 }
 
@@ -256,57 +120,17 @@ fn optional_usize(value: u64) -> rnet_core::Result<Option<usize>> {
     }
 }
 
-unsafe fn create_runtime(
-    config: *const RnetConfig,
-    client: *const RnetClientSecurity,
-    out: *mut u64,
-) -> i32 {
-    ffi_status(|| {
-        if config.is_null() || out.is_null() {
-            return invalid_argument("config and out must be non-null");
-        }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetConfig>(),
-        )?;
-        let runtime_config = RuntimeConfig {
-            worker_threads: config.worker_threads as usize,
-            event_queue_capacity: config.event_queue_capacity as usize,
-            write_queue_capacity: config.write_queue_capacity as usize,
-            max_body_len: config.max_body_len as usize,
-            max_datagram_size: config.max_datagram_size as usize,
-            ..RuntimeConfig::default()
-        };
-        unsafe { register_runtime(runtime_config, config.logger, std::ptr::null(), client, out) }
-    })
-}
-
 unsafe fn register_runtime(
     runtime_config: RuntimeConfig,
     logger: *const crate::abi::RnetLogger,
-    logger_v2: *const crate::abi::RnetLoggerV2,
     client: *const RnetClientSecurity,
     out: *mut u64,
 ) -> rnet_core::Result<()> {
-    if !logger.is_null() && !logger_v2.is_null() {
-        return invalid_argument("logger and logger_v2 are mutually exclusive");
-    }
-    let logger = if logger_v2.is_null() {
-        unsafe { build_logger(logger) }?
-    } else {
-        unsafe { build_logger_v2(logger_v2) }?
-    };
+    let logger = unsafe { build_logger(logger) }?;
     let client_security = if client.is_null() {
         None
     } else {
-        let client = unsafe { *client };
-        validate_struct(
-            client.struct_size,
-            client.abi_version,
-            size_of::<RnetClientSecurity>(),
-        )?;
+        let client = unsafe { crate::registry::read_config(client) }?;
         let private = unsafe { copy_key(client.local_private_key)? };
         let local_key = Keypair::from_private(&private)
             .map_err(|error| RnetError::new(ErrorCode::CryptoError, error.to_string()))?;

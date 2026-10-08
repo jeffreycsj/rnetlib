@@ -16,3 +16,6 @@ rnet-observe = { version = "0.1.0", path = "../rnet-observe" }
 rnet-security = { version = "0.1.0", path = "../rnet-security" }
 rnet-transport = { version = "0.1.0", path = "../rnet-transport" }
 zeroize = "1"
+
+[dev-dependencies]
+libc = "0.2"

@@ -493,6 +493,7 @@ dependencies = [
 name = "rnet-ffi"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rnet-core",
  "rnet-game",
  "rnet-observe",

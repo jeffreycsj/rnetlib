@@ -158,12 +158,18 @@ impl Default for LoggerConfig {
     }
 }
 
+#[derive(Default)]
+struct CallbackLatency {
+    total: LatencyHistogram,
+    window: LatencyHistogram,
+}
+
 pub struct BoundedLogger {
     normal: Option<SyncSender<LogRecord>>,
     errors: Option<SyncSender<LogRecord>>,
     dropped: Arc<AtomicU64>,
     sink_panics: Arc<AtomicU64>,
-    callback_latency: Arc<LatencyHistogram>,
+    callback_latency: Arc<CallbackLatency>,
     dispatch: Option<JoinHandle<()>>,
 }
 
@@ -190,7 +196,7 @@ impl BoundedLogger {
         let dropped = Arc::new(AtomicU64::new(0));
         let sink_panics = Arc::new(AtomicU64::new(0));
         let dispatch_panics = Arc::clone(&sink_panics);
-        let callback_latency = Arc::new(LatencyHistogram::default());
+        let callback_latency = Arc::new(CallbackLatency::default());
         let dispatch_latency = Arc::clone(&callback_latency);
         let dispatch = thread::Builder::new()
             .name("rnet-logger".into())
@@ -237,7 +243,12 @@ impl BoundedLogger {
     }
 
     pub fn callback_latency(&self) -> LatencySnapshot {
-        self.callback_latency.snapshot()
+        self.callback_latency.total.snapshot()
+    }
+
+    /// Rotates callback latency samples without resetting the cumulative summary.
+    pub fn drain_callback_latency_window(&self) -> LatencySnapshot {
+        self.callback_latency.window.snapshot_and_reset()
     }
 
     pub fn shutdown(&mut self) {
@@ -260,7 +271,7 @@ fn dispatch_logs(
     errors: Receiver<LogRecord>,
     sink: impl Fn(LogRecord),
     sink_panics: Arc<AtomicU64>,
-    callback_latency: Arc<LatencyHistogram>,
+    callback_latency: Arc<CallbackLatency>,
 ) {
     let mut normal_open = true;
     let mut error_open = true;
@@ -291,11 +302,13 @@ fn deliver(
     sink: &impl Fn(LogRecord),
     record: LogRecord,
     sink_panics: &AtomicU64,
-    callback_latency: &LatencyHistogram,
+    callback_latency: &CallbackLatency,
 ) {
     let started = Instant::now();
     if catch_unwind(AssertUnwindSafe(|| sink(record))).is_err() {
         sink_panics.fetch_add(1, Ordering::Relaxed);
     }
-    callback_latency.record(started.elapsed());
+    let elapsed = started.elapsed();
+    callback_latency.window.record(elapsed);
+    callback_latency.total.record(elapsed);
 }

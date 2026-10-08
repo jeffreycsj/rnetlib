@@ -19,7 +19,7 @@ func (r *Runtime) Listen(config ServerConfig) (Endpoint, error) {
 	}
 	host := []byte(config.Host)
 	var endpoint C.rnet_endpoint_t
-	status := C.rnet_go_server_open_v2(
+	status := C.rnet_go_server_listen(
 		handle, C.uint32_t(config.Transport), C.uint32_t(config.InitialSecurity),
 		bytePointer(host), C.size_t(len(host)), C.uint16_t(config.Port),
 		(*C.uint8_t)(unsafe.Pointer(&config.Keypair.Private[0])), &endpoint,
@@ -37,7 +37,7 @@ func (r *Runtime) Connect(config ClientConfig) (Endpoint, error) {
 	}
 	host := []byte(config.Host)
 	var endpoint C.rnet_endpoint_t
-	status := C.rnet_go_client_connect_v2(
+	status := C.rnet_go_client_connect(
 		handle, C.uint32_t(config.Transport), bytePointer(host), C.size_t(len(host)),
 		C.uint16_t(config.Port), bytePointer(config.JoinPayload),
 		C.size_t(len(config.JoinPayload)), &endpoint,

@@ -1,6 +1,6 @@
 //! Event polling and game-runtime lifecycle entry points.
 
-use crate::game_abi::{RnetGameEvent, RnetGameEventV2};
+use crate::game_abi::RnetGameEvent;
 use crate::game_events;
 use crate::game_registry;
 use crate::registry::{ffi_status, invalid_argument, invalid_state, IN_LOG_CALLBACK};
@@ -36,39 +36,6 @@ pub unsafe extern "C" fn rnet_game_poll_events(
             .poll(capacity, Duration::from_millis(u64::from(timeout_ms)));
         for (index, event) in polled.into_iter().enumerate() {
             let converted = game_events::encode(event, &entry.buffers);
-            unsafe { events.add(index).write(converted) };
-            unsafe { out_count.write(index + 1) };
-        }
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// `events` must hold `capacity` writable V2 events; `out_count` must be writable. Each nonzero
-/// token in the nested base event must be released exactly once before runtime destroy.
-pub unsafe extern "C" fn rnet_game_poll_events_v2(
-    runtime: u64,
-    events: *mut RnetGameEventV2,
-    capacity: usize,
-    timeout_ms: u32,
-    out_count: *mut usize,
-) -> i32 {
-    ffi_status(|| {
-        if out_count.is_null() || (capacity != 0 && events.is_null()) {
-            return invalid_argument("invalid game V2 event output");
-        }
-        unsafe { out_count.write(0) };
-        let entry = game_registry::lease(runtime)?;
-        if capacity == 0 {
-            let _ = entry.runtime.poll(0, Duration::ZERO);
-            return Ok(());
-        }
-        let polled = entry
-            .runtime
-            .poll(capacity, Duration::from_millis(u64::from(timeout_ms)));
-        for (index, event) in polled.into_iter().enumerate() {
-            let converted = game_events::encode_v2(event, &entry.buffers);
             unsafe { events.add(index).write(converted) };
             unsafe { out_count.write(index + 1) };
         }

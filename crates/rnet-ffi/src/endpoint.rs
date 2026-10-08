@@ -4,20 +4,18 @@ use crate::abi::RnetJoinConfig;
 use crate::abi::RnetKeypair;
 use crate::abi::RnetListenerConfig;
 use crate::abi::RnetSlice;
-use crate::abi::{RnetClientConfigV2, RnetServerConfigV2};
+use crate::abi::{RnetClientConfig, RnetServerConfig};
 use crate::registry::copy_key;
 use crate::registry::ffi_status;
 use crate::registry::invalid_argument;
 use crate::registry::parse_address;
 use crate::registry::runtime_entry;
-use crate::registry::validate_struct;
 use crate::registry::with_borrowed_slice;
 use rnet_core::ErrorCode;
 use rnet_core::RnetError;
 use rnet_core::Transport;
 use rnet_security::Keypair;
 use rnet_transport::{EndpointConfig, HostClientConfig, SecurityMode, ServerConfig};
-use std::mem::size_of;
 use std::net::SocketAddr;
 
 #[no_mangle]
@@ -25,21 +23,16 @@ use std::net::SocketAddr;
 ///
 /// # Safety
 /// `config`, its slices, and `out` must be valid for this call.
-pub unsafe extern "C" fn rnet_server_open_v2(
+pub unsafe extern "C" fn rnet_server_listen(
     runtime: u64,
-    config: *const RnetServerConfigV2,
+    config: *const RnetServerConfig,
     out: *mut u64,
 ) -> i32 {
     ffi_status(|| {
         if config.is_null() || out.is_null() {
             return invalid_argument("server config and out must be non-null");
         }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetServerConfigV2>(),
-        )?;
+        let config = unsafe { crate::registry::read_config(config) }?;
         if config.reserved != 0 {
             return invalid_argument("server reserved field must be zero");
         }
@@ -66,21 +59,16 @@ pub unsafe extern "C" fn rnet_server_open_v2(
 ///
 /// # Safety
 /// `config`, its slices, and `out` must be valid for this call.
-pub unsafe extern "C" fn rnet_client_connect_v2(
+pub unsafe extern "C" fn rnet_client_connect(
     runtime: u64,
-    config: *const RnetClientConfigV2,
+    config: *const RnetClientConfig,
     out: *mut u64,
 ) -> i32 {
     ffi_status(|| {
         if config.is_null() || out.is_null() {
             return invalid_argument("client config and out must be non-null");
         }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetClientConfigV2>(),
-        )?;
+        let config = unsafe { crate::registry::read_config(config) }?;
         if config.reserved0 != 0 || config.reserved1 != 0 {
             return invalid_argument("client reserved fields must be zero");
         }
@@ -166,12 +154,7 @@ pub unsafe extern "C" fn rnet_listener_open(
         if config.is_null() || out.is_null() {
             return invalid_argument("listener config and out must be non-null");
         }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetListenerConfig>(),
-        )?;
+        let config = unsafe { crate::registry::read_config(config) }?;
         let transport = Transport::try_from(config.transport)?;
         let private = unsafe { copy_key(config.local_private_key)? };
         let bind_addr = unsafe { parse_address(config.bind_host, config.bind_port) }?;
@@ -206,12 +189,7 @@ pub unsafe extern "C" fn rnet_client_join(
         if config.is_null() || out.is_null() {
             return invalid_argument("join config and out must be non-null");
         }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetJoinConfig>(),
-        )?;
+        let config = unsafe { crate::registry::read_config(config) }?;
         let transport = Transport::try_from(config.transport)?;
         let private = unsafe { copy_key(config.local_private_key)? };
         let peer = unsafe { copy_key(config.expected_server_public_key)? };
@@ -274,12 +252,7 @@ pub unsafe extern "C" fn rnet_endpoint_open(
         if config.is_null() || out.is_null() {
             return invalid_argument("endpoint config and out must be non-null");
         }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetEndpointConfig>(),
-        )?;
+        let config = unsafe { crate::registry::read_config(config) }?;
         let entry = runtime_entry(runtime)?;
         let transport = Transport::try_from(config.transport)?;
         let endpoint_config = match (transport, config.mode) {

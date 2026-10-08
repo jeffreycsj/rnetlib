@@ -14,11 +14,13 @@ public sealed unsafe class Keypair : IDisposable {
         CryptographicOperations.ZeroMemory(new Span<byte>(key.Private, 32));
     }
     public static Keypair Generate() {
+        Native.CheckAbi();
         Native.Key key = default;
         try { Native.Check(Native.rnet_keypair_generate(&key)); return new Keypair(key); }
         finally { CryptographicOperations.ZeroMemory(new Span<byte>(key.Private, 32)); }
     }
     public static Keypair FromPrivate(ReadOnlySpan<byte> bytes) {
+        Native.CheckAbi();
         Native.Key key = default;
         fixed (byte* ptr = bytes) {
             try { Native.Check(Native.rnet_keypair_from_private(new Native.Slice(ptr, bytes.Length), &key)); return new Keypair(key); }

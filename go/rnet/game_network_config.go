@@ -9,10 +9,10 @@ import "fmt"
 
 // gameNetworkConfig preserves the existing transport tuning contract while
 // keeping game credentials and logging separate from the low-level runtime.
-func gameNetworkConfig(config Config) (C.rnet_config_v5_t, error) {
+func gameNetworkConfig(config Config) (C.rnet_config_t, error) {
 	defer lockNativeThread()()
-	var native C.rnet_config_v5_t
-	if err := statusError(C.rnet_config_v5_init(&native)); err != nil {
+	var native C.rnet_config_t
+	if err := statusError(C.rnet_config_init(&native)); err != nil {
 		return native, err
 	}
 	if config.Logger != nil || config.ClientSecurity != nil {

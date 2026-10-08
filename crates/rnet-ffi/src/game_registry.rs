@@ -1,4 +1,4 @@
-//! Game runtime and event-buffer lifetimes are independent from the legacy transport ABI.
+//! Game runtime and event-buffer lifetimes are independent from the low-level transport ABI.
 
 use crate::registry::invalid_state;
 use rnet_core::{BufferView, ErrorCode, HandleTable, Result, RnetError};

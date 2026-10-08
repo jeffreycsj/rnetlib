@@ -3,11 +3,10 @@ use rnet_core::EventType;
 use rnet_core::Transport;
 use rnet_observe::LogLevel;
 use rnet_transport::LatencyKind;
-use rnet_transport::RuntimeConfig;
 use std::ffi::c_void;
 use std::mem::size_of;
 
-pub const RNET_ABI_VERSION: u32 = 1;
+pub const RNET_ABI_VERSION: u32 = 2;
 pub const RNET_OK: i32 = ErrorCode::Ok as i32;
 pub const RNET_E_INVALID_ARGUMENT: i32 = ErrorCode::InvalidArgument as i32;
 pub const RNET_E_INVALID_HANDLE: i32 = ErrorCode::InvalidHandle as i32;
@@ -66,31 +65,12 @@ impl Default for RnetSlice {
 pub struct RnetLogger {
     pub struct_size: u32,
     pub abi_version: u32,
-    pub log: Option<
-        unsafe extern "C" fn(
-            user_data: *mut c_void,
-            level: u32,
-            target: *const u8,
-            target_len: usize,
-            message: *const u8,
-            message_len: usize,
-        ),
-    >,
+    pub log: Option<RnetLogFn>,
     pub user_data: *mut c_void,
     pub min_level: u32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetLoggerV2 {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub log: Option<RnetLogV2Fn>,
-    pub user_data: *mut c_void,
-    pub min_level: u32,
-}
-
-pub type RnetLogV2Fn = unsafe extern "C" fn(
+pub type RnetLogFn = unsafe extern "C" fn(
     user_data: *mut c_void,
     timestamp_unix_ms: u64,
     level: u32,
@@ -105,102 +85,6 @@ pub type RnetLogV2Fn = unsafe extern "C" fn(
     message: *const u8,
     message_len: usize,
 );
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub worker_threads: u32,
-    pub event_queue_capacity: u32,
-    pub write_queue_capacity: u32,
-    pub max_body_len: u32,
-    pub max_datagram_size: u32,
-    pub logger: *const RnetLogger,
-}
-
-/// Production runtime configuration. New SDKs use this structure; the legacy layout is unchanged.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetConfigV3 {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub worker_threads: u32,
-    pub event_queue_capacity: u32,
-    pub write_queue_capacity: u32,
-    pub max_body_len: u32,
-    pub max_datagram_size: u32,
-    pub max_event_bytes: u64,
-    pub max_runtime_queued_bytes: u64,
-    pub max_session_queued_bytes: u64,
-    pub max_sessions_per_endpoint: u32,
-    pub max_sessions_per_ip: u32,
-    pub handshake_rate_per_ip: u32,
-    pub handshake_burst_per_ip: u32,
-    pub ipv6_admission_prefix_bits: u32,
-    pub handshake_timeout_ms: u64,
-    pub connect_timeout_ms: u64,
-    pub dns_timeout_ms: u64,
-    pub datagram_idle_timeout_ms: u64,
-    pub allow_plaintext_business_data: u32,
-    pub allow_legacy_unauthenticated_endpoints: u32,
-    pub rekey_after_ms: u64,
-    pub rekey_after_bytes: u64,
-    pub logger: *const RnetLogger,
-    pub logger_v2: *const RnetLoggerV2,
-}
-
-impl Default for RnetConfigV3 {
-    fn default() -> Self {
-        let defaults = RuntimeConfig::production();
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version: RNET_ABI_VERSION,
-            worker_threads: defaults.worker_threads.min(u32::MAX as usize) as u32,
-            event_queue_capacity: defaults.event_queue_capacity as u32,
-            write_queue_capacity: defaults.write_queue_capacity as u32,
-            max_body_len: defaults.max_body_len as u32,
-            max_datagram_size: defaults.max_datagram_size as u32,
-            max_event_bytes: defaults.max_event_bytes as u64,
-            max_runtime_queued_bytes: defaults.max_runtime_queued_bytes as u64,
-            max_session_queued_bytes: defaults.max_session_queued_bytes as u64,
-            max_sessions_per_endpoint: defaults.max_sessions_per_endpoint as u32,
-            max_sessions_per_ip: defaults.max_sessions_per_ip as u32,
-            handshake_rate_per_ip: defaults.handshake_rate_per_ip,
-            handshake_burst_per_ip: defaults.handshake_burst_per_ip,
-            ipv6_admission_prefix_bits: u32::from(defaults.ipv6_admission_prefix_bits),
-            handshake_timeout_ms: defaults.handshake_timeout.as_millis() as u64,
-            connect_timeout_ms: defaults.connect_timeout.as_millis() as u64,
-            dns_timeout_ms: defaults.dns_timeout.as_millis() as u64,
-            datagram_idle_timeout_ms: defaults.datagram_idle_timeout.as_millis() as u64,
-            allow_plaintext_business_data: 0,
-            allow_legacy_unauthenticated_endpoints: 0,
-            rekey_after_ms: defaults
-                .security_policy
-                .rekey_after
-                .map_or(0, |duration| duration.as_millis() as u64),
-            rekey_after_bytes: defaults.security_policy.rekey_after_bytes.unwrap_or(0),
-            logger: std::ptr::null(),
-            logger_v2: std::ptr::null(),
-        }
-    }
-}
-
-impl Default for RnetConfig {
-    fn default() -> Self {
-        let defaults = RuntimeConfig::default();
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version: RNET_ABI_VERSION,
-            worker_threads: defaults.worker_threads.min(u32::MAX as usize) as u32,
-            event_queue_capacity: defaults.event_queue_capacity as u32,
-            write_queue_capacity: defaults.write_queue_capacity as u32,
-            max_body_len: defaults.max_body_len as u32,
-            max_datagram_size: defaults.max_datagram_size as u32,
-            logger: std::ptr::null(),
-        }
-    }
-}
 
 /// Runtime-scoped client identity and server trust policy.
 ///
@@ -233,7 +117,7 @@ impl RnetClientSecurity {
 /// Transport-neutral server listener configuration.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct RnetServerConfigV2 {
+pub struct RnetServerConfig {
     pub struct_size: u32,
     pub abi_version: u32,
     pub transport: u32,
@@ -244,7 +128,7 @@ pub struct RnetServerConfigV2 {
     pub local_private_key: RnetSlice,
 }
 
-impl RnetServerConfigV2 {
+impl RnetServerConfig {
     pub fn new(
         transport: u32,
         bind_host: RnetSlice,
@@ -268,7 +152,7 @@ impl RnetServerConfigV2 {
 /// Transport-neutral client configuration; security is inherited from the runtime and server.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct RnetClientConfigV2 {
+pub struct RnetClientConfig {
     pub struct_size: u32,
     pub abi_version: u32,
     pub transport: u32,
@@ -279,7 +163,7 @@ pub struct RnetClientConfigV2 {
     pub join_payload: RnetSlice,
 }
 
-impl RnetClientConfigV2 {
+impl RnetClientConfig {
     pub fn new(
         transport: u32,
         remote_host: RnetSlice,
@@ -416,9 +300,7 @@ pub struct RnetEvent {
     pub event_type: u32,
     pub endpoint: u64,
     pub session: u64,
-    pub msg_type: u32,
-    pub stream_id: u32,
-    pub request_id: u64,
+    pub correlation_id: u64,
     pub data: *const u8,
     pub data_len: usize,
     pub buffer_token: u64,
@@ -432,9 +314,7 @@ impl Default for RnetEvent {
             event_type: 0,
             endpoint: 0,
             session: 0,
-            msg_type: 0,
-            stream_id: 0,
-            request_id: 0,
+            correlation_id: 0,
             data: std::ptr::null(),
             data_len: 0,
             buffer_token: 0,
@@ -446,57 +326,6 @@ impl Default for RnetEvent {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RnetMetrics {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub frames_received: u64,
-    pub frames_sent: u64,
-    pub bytes_received: u64,
-    pub bytes_sent: u64,
-    pub events_dropped: u64,
-    pub send_would_block: u64,
-    pub protocol_errors: u64,
-    pub logs_dropped: u64,
-    pub logger_panics: u64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RnetLatencyMetric {
-    pub struct_size: u32,
-    pub kind: u32,
-    pub sample_count: u64,
-    pub p50_us: u64,
-    pub p90_us: u64,
-    pub p95_us: u64,
-    pub p99_us: u64,
-    pub max_us: u64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RnetMetricsV2 {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub frames_received: u64,
-    pub frames_sent: u64,
-    pub bytes_received: u64,
-    pub bytes_sent: u64,
-    pub events_dropped: u64,
-    pub send_would_block: u64,
-    pub protocol_errors: u64,
-    pub lifecycle_events_rejected: u64,
-    pub admission_rejected: u64,
-    pub queued_send_bytes: u64,
-    pub peak_queued_send_bytes: u64,
-    pub queued_event_bytes: u64,
-    pub session_closed_by_reason: [u64; 19],
-    pub logs_dropped: u64,
-    pub logger_panics: u64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RnetMetricsV3 {
     pub struct_size: u32,
     pub abi_version: u32,
     pub frames_received: u64,
@@ -524,7 +353,7 @@ pub struct RnetMetricsV3 {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct RnetLatencyMetricV2 {
+pub struct RnetLatencyMetric {
     pub struct_size: u32,
     pub kind: u32,
     pub sample_count: u64,

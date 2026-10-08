@@ -133,10 +133,27 @@ pub(crate) unsafe fn copy_key(value: RnetSlice) -> Result<[u8; 32]> {
 }
 
 pub(crate) fn validate_struct(struct_size: u32, abi_version: u32, required: usize) -> Result<()> {
-    if struct_size < required as u32 || abi_version != RNET_ABI_VERSION {
+    if struct_size != required as u32 || abi_version != RNET_ABI_VERSION {
         return invalid_argument("invalid struct_size or abi_version");
     }
     Ok(())
+}
+
+/// Validates the common header before reading the complete current layout.
+///
+/// # Safety
+/// `pointer` must be null or point to a readable pair of u32 values (size, ABI).
+/// If these identify T's current layout, the caller must provide a complete, aligned T.
+/// T must be a C layout whose first two fields are those header values.
+pub(crate) unsafe fn read_config<T: Copy>(pointer: *const T) -> Result<T> {
+    if pointer.is_null() {
+        return invalid_argument("configuration is null");
+    }
+    let header = pointer.cast::<u32>();
+    let size = unsafe { header.read_unaligned() };
+    let abi = unsafe { header.add(1).read_unaligned() };
+    validate_struct(size, abi, std::mem::size_of::<T>())?;
+    Ok(unsafe { pointer.read() })
 }
 
 pub(crate) fn invalid_argument<T>(message: &str) -> Result<T> {

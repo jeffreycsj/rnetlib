@@ -9,8 +9,8 @@ int main() {
   if (rnet_abi_version() != RNET_ABI_VERSION) {
     return 1;
   }
-  rnet_config_v3_t config{};
-  rnet::check(rnet_config_v3_init(&config));
+  rnet_config_t config{};
+  rnet::check(rnet_config_init(&config));
   config.allow_legacy_unauthenticated_endpoints = 1;
   rnet::Runtime runtime(config);
   const auto listener = runtime.open_tcp_listener("127.0.0.1", 0);
@@ -38,7 +38,7 @@ int main() {
     return 2;
   }
 
-  runtime.send(client_session, 17, "cpp-echo");
+  runtime.send(client_session, "cpp-echo");
   while (std::chrono::steady_clock::now() < deadline) {
     for (const auto &event : runtime.poll(16, 50)) {
       if (event.type == RNET_EVENT_MESSAGE && event.session == server_session) {

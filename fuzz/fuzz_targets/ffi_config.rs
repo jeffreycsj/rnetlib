@@ -2,13 +2,13 @@
 
 use libfuzzer_sys::fuzz_target;
 use rnet::{
-    rnet_config_v4_init, rnet_runtime_create_v4, rnet_runtime_destroy, rnet_runtime_stop,
-    RnetConfigV4, RNET_OK,
+    rnet_config_init, rnet_runtime_create, rnet_runtime_destroy, rnet_runtime_stop, RnetConfig,
+    RNET_OK,
 };
 
 fuzz_target!(|data: &[u8]| {
-    let mut config = RnetConfigV4::default();
-    let _ = unsafe { rnet_config_v4_init(&mut config) };
+    let mut config = RnetConfig::default();
+    let _ = unsafe { rnet_config_init(&mut config) };
     config.worker_threads = 1;
     if let Some(selector) = data.first().filter(|selector| **selector != u8::MAX) {
         match selector % 8 {
@@ -23,7 +23,7 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     let mut runtime = 0;
-    let status = unsafe { rnet_runtime_create_v4(&config, std::ptr::null(), &mut runtime) };
+    let status = unsafe { rnet_runtime_create(&config, std::ptr::null(), &mut runtime) };
     if status == RNET_OK {
         let _ = rnet_runtime_stop(runtime, 0);
         let _ = rnet_runtime_destroy(runtime);

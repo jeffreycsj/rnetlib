@@ -50,13 +50,17 @@ inline void check(int32_t status) {
   }
 }
 
+// Check before any initializer writes a native layout into SDK-owned storage.
+inline void check_abi() {
+  if (rnet_abi_version() != RNET_ABI_VERSION)
+    throw std::runtime_error("RNet SDK/native ABI mismatch; rebuild and deploy together");
+}
+
 struct Event {
   uint32_t type = 0;
   rnet_endpoint_t endpoint = 0;
   rnet_session_t session = 0;
-  uint32_t msg_type = 0;
-  uint32_t stream_id = 0;
-  uint64_t request_id = 0;
+  uint64_t correlation_id = 0;
   int32_t status = RNET_OK;
   std::vector<uint8_t> data;
 

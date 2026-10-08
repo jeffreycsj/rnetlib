@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define RNET_ABI_VERSION 1u
+#define RNET_ABI_VERSION 2u
 
 typedef uint64_t rnet_runtime_t;
 typedef uint64_t rnet_endpoint_t;
@@ -104,9 +104,12 @@ typedef struct rnet_slice {
   size_t len;
 } rnet_slice_t;
 
-typedef void (*rnet_log_fn)(void *user_data, uint32_t level,
-                            const uint8_t *target, size_t target_len,
-                            const uint8_t *message, size_t message_len);
+typedef void (*rnet_log_fn)(
+    void *user_data, uint64_t timestamp_unix_ms, uint32_t level,
+    const uint8_t *event_name, size_t event_name_len, rnet_runtime_t runtime,
+    rnet_endpoint_t endpoint, rnet_session_t session, uint32_t transport,
+    int32_t error_code, uint64_t correlation_id, const uint8_t *message,
+    size_t message_len);
 
 typedef struct rnet_logger {
   uint32_t struct_size;
@@ -116,21 +119,7 @@ typedef struct rnet_logger {
   uint32_t min_level;
 } rnet_logger_t;
 
-typedef void (*rnet_log_v2_fn)(
-    void *user_data, uint64_t timestamp_unix_ms, uint32_t level,
-    const uint8_t *event_name, size_t event_name_len, rnet_runtime_t runtime,
-    rnet_endpoint_t endpoint, rnet_session_t session, uint32_t transport,
-    int32_t error_code, uint64_t correlation_id, const uint8_t *message,
-    size_t message_len);
-
-typedef struct rnet_logger_v2 {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  rnet_log_v2_fn log;
-  void *user_data;
-  uint32_t min_level;
-} rnet_logger_v2_t;
-
+/* Secure-by-default production configuration. A zero rekey threshold disables that trigger. */
 typedef struct rnet_config {
   uint32_t struct_size;
   uint32_t abi_version;
@@ -139,18 +128,6 @@ typedef struct rnet_config {
   uint32_t write_queue_capacity;
   uint32_t max_body_len;
   uint32_t max_datagram_size;
-  const rnet_logger_t *logger;
-} rnet_config_t;
-
-/* Secure-by-default production configuration. A zero rekey threshold disables that trigger. */
-typedef struct rnet_config_v3 {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint32_t worker_threads;
-  uint32_t event_queue_capacity;
-  uint32_t write_queue_capacity;
-  uint32_t max_body_len;
-  uint32_t max_datagram_size;
   uint64_t max_event_bytes;
   uint64_t max_runtime_queued_bytes;
   uint64_t max_session_queued_bytes;
@@ -168,75 +145,12 @@ typedef struct rnet_config_v3 {
   uint64_t rekey_after_ms;
   uint64_t rekey_after_bytes;
   const rnet_logger_t *logger;
-  const rnet_logger_v2_t *logger_v2;
-} rnet_config_v3_t;
-
-/* V3 remains frozen. V4 appends TCP socket tuning without moving any V3 field. */
-typedef struct rnet_config_v4 {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint32_t worker_threads;
-  uint32_t event_queue_capacity;
-  uint32_t write_queue_capacity;
-  uint32_t max_body_len;
-  uint32_t max_datagram_size;
-  uint64_t max_event_bytes;
-  uint64_t max_runtime_queued_bytes;
-  uint64_t max_session_queued_bytes;
-  uint32_t max_sessions_per_endpoint;
-  uint32_t max_sessions_per_ip;
-  uint32_t handshake_rate_per_ip;
-  uint32_t handshake_burst_per_ip;
-  uint32_t ipv6_admission_prefix_bits;
-  uint64_t handshake_timeout_ms;
-  uint64_t connect_timeout_ms;
-  uint64_t dns_timeout_ms;
-  uint64_t datagram_idle_timeout_ms;
-  uint32_t allow_plaintext_business_data;
-  uint32_t allow_legacy_unauthenticated_endpoints;
-  uint64_t rekey_after_ms;
-  uint64_t rekey_after_bytes;
-  const rnet_logger_t *logger;
-  const rnet_logger_v2_t *logger_v2;
-  uint32_t tcp_nodelay;
-  /* Zero preserves the operating-system default. */
-  uint64_t tcp_send_buffer_bytes;
-  uint64_t tcp_recv_buffer_bytes;
-} rnet_config_v4_t;
-
-/* V5 appends runtime-wide endpoint and pending-handshake limits. */
-typedef struct rnet_config_v5 {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint32_t worker_threads;
-  uint32_t event_queue_capacity;
-  uint32_t write_queue_capacity;
-  uint32_t max_body_len;
-  uint32_t max_datagram_size;
-  uint64_t max_event_bytes;
-  uint64_t max_runtime_queued_bytes;
-  uint64_t max_session_queued_bytes;
-  uint32_t max_sessions_per_endpoint;
-  uint32_t max_sessions_per_ip;
-  uint32_t handshake_rate_per_ip;
-  uint32_t handshake_burst_per_ip;
-  uint32_t ipv6_admission_prefix_bits;
-  uint64_t handshake_timeout_ms;
-  uint64_t connect_timeout_ms;
-  uint64_t dns_timeout_ms;
-  uint64_t datagram_idle_timeout_ms;
-  uint32_t allow_plaintext_business_data;
-  uint32_t allow_legacy_unauthenticated_endpoints;
-  uint64_t rekey_after_ms;
-  uint64_t rekey_after_bytes;
-  const rnet_logger_t *logger;
-  const rnet_logger_v2_t *logger_v2;
   uint32_t tcp_nodelay;
   uint64_t tcp_send_buffer_bytes;
   uint64_t tcp_recv_buffer_bytes;
   uint32_t max_endpoints;
   uint32_t max_pending_handshakes;
-} rnet_config_v5_t;
+} rnet_config_t;
 
 /* Called on an I/O worker thread. The callback and user_data must remain valid
  * until rnet_runtime_destroy returns. Return nonzero to trust the key. */
@@ -255,7 +169,7 @@ typedef struct rnet_client_security {
 } rnet_client_security_t;
 
 /* Generic server API: transport selects TCP, UDP, or KCP. */
-typedef struct rnet_server_config_v2 {
+typedef struct rnet_server_config {
   uint32_t struct_size;
   uint32_t abi_version;
   uint32_t transport;
@@ -264,10 +178,10 @@ typedef struct rnet_server_config_v2 {
   uint16_t bind_port;
   uint16_t reserved;
   rnet_slice_t local_private_key;
-} rnet_server_config_v2_t;
+} rnet_server_config_t;
 
 /* Generic client API: security is inherited from runtime and server policy. */
-typedef struct rnet_client_config_v2 {
+typedef struct rnet_client_config {
   uint32_t struct_size;
   uint32_t abi_version;
   uint32_t transport;
@@ -276,7 +190,7 @@ typedef struct rnet_client_config_v2 {
   uint16_t remote_port;
   uint16_t reserved1;
   rnet_slice_t join_payload;
-} rnet_client_config_v2_t;
+} rnet_client_config_t;
 
 /* Server bind hosts are numeric IPv4/IPv6 addresses. Client remote hosts may also be DNS names.
  * Host slices need not be NUL terminated. */
@@ -337,9 +251,7 @@ typedef struct rnet_event {
   uint32_t event_type;
   rnet_endpoint_t endpoint;
   rnet_session_t session;
-  uint32_t msg_type;
-  uint32_t stream_id;
-  uint64_t request_id;
+  uint64_t correlation_id;
   const uint8_t *data;
   size_t data_len;
   uint64_t buffer_token;
@@ -363,51 +275,6 @@ typedef struct rnet_metrics {
   uint64_t events_dropped;
   uint64_t send_would_block;
   uint64_t protocol_errors;
-  uint64_t logs_dropped;
-  uint64_t logger_panics;
-} rnet_metrics_t;
-
-typedef struct rnet_latency_metric {
-  uint32_t struct_size;
-  uint32_t kind;
-  uint64_t sample_count;
-  uint64_t p50_us;
-  uint64_t p90_us;
-  uint64_t p95_us;
-  uint64_t p99_us;
-  uint64_t max_us;
-} rnet_latency_metric_t;
-
-typedef struct rnet_metrics_v2 {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint64_t frames_received;
-  uint64_t frames_sent;
-  uint64_t bytes_received;
-  uint64_t bytes_sent;
-  uint64_t events_dropped;
-  uint64_t send_would_block;
-  uint64_t protocol_errors;
-  uint64_t lifecycle_events_rejected;
-  uint64_t admission_rejected;
-  uint64_t queued_send_bytes;
-  uint64_t peak_queued_send_bytes;
-  uint64_t queued_event_bytes;
-  uint64_t session_closed_by_reason[19];
-  uint64_t logs_dropped;
-  uint64_t logger_panics;
-} rnet_metrics_v2_t;
-
-typedef struct rnet_metrics_v3 {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint64_t frames_received;
-  uint64_t frames_sent;
-  uint64_t bytes_received;
-  uint64_t bytes_sent;
-  uint64_t events_dropped;
-  uint64_t send_would_block;
-  uint64_t protocol_errors;
   uint64_t lifecycle_events_rejected;
   uint64_t admission_rejected;
   uint64_t queued_send_bytes;
@@ -422,9 +289,9 @@ typedef struct rnet_metrics_v3 {
   uint64_t pending_handshakes;
   uint64_t peak_pending_handshakes;
   uint64_t admission_rejected_by_reason[8];
-} rnet_metrics_v3_t;
+} rnet_metrics_t;
 
-typedef struct rnet_latency_metric_v2 {
+typedef struct rnet_latency_metric {
   uint32_t struct_size;
   uint32_t kind;
   uint64_t sample_count;
@@ -434,40 +301,26 @@ typedef struct rnet_latency_metric_v2 {
   uint64_t p99_us;
   uint64_t p999_us;
   uint64_t max_us;
-} rnet_latency_metric_v2_t;
+} rnet_latency_metric_t;
 
+/* Check this against RNET_ABI_VERSION before any initializer/output call.
+ * Only this exact ABI/layout is supported. SDK, header and library must deploy together. */
 uint32_t rnet_abi_version(void);
 int32_t rnet_config_init(rnet_config_t *config);
-int32_t rnet_config_v3_init(rnet_config_v3_t *config);
-int32_t rnet_config_v4_init(rnet_config_v4_t *config);
-int32_t rnet_config_v5_init(rnet_config_v5_t *config);
 int32_t rnet_runtime_create(const rnet_config_t *config,
-                            rnet_runtime_t *out);
-int32_t rnet_runtime_create_v2(const rnet_config_t *config,
                                const rnet_client_security_t *client_security,
                                rnet_runtime_t *out);
-int32_t rnet_runtime_create_v3(const rnet_config_v3_t *config,
-                               const rnet_client_security_t *client_security,
-                               rnet_runtime_t *out);
-int32_t rnet_runtime_create_v4(const rnet_config_v4_t *config,
-                               const rnet_client_security_t *client_security,
-                               rnet_runtime_t *out);
-int32_t rnet_runtime_create_v5(const rnet_config_v5_t *config,
-                               const rnet_client_security_t *client_security,
-                               rnet_runtime_t *out);
-int32_t rnet_metrics_snapshot_v2(rnet_runtime_t runtime,
-                                 rnet_metrics_v2_t *out);
-int32_t rnet_metrics_snapshot_v3(rnet_runtime_t runtime,
-                                 rnet_metrics_v3_t *out);
-int32_t rnet_latency_snapshot_v2(rnet_runtime_t runtime,
-                                 rnet_latency_metric_v2_t *metrics,
+int32_t rnet_metrics_snapshot(rnet_runtime_t runtime,
+                                 rnet_metrics_t *out);
+int32_t rnet_latency_snapshot(rnet_runtime_t runtime,
+                                 rnet_latency_metric_t *metrics,
                                  size_t capacity, size_t *out_count,
                                  uint32_t drain_window);
-int32_t rnet_server_open_v2(rnet_runtime_t runtime,
-                            const rnet_server_config_v2_t *config,
+int32_t rnet_server_listen(rnet_runtime_t runtime,
+                            const rnet_server_config_t *config,
                             rnet_endpoint_t *out);
-int32_t rnet_client_connect_v2(rnet_runtime_t runtime,
-                               const rnet_client_config_v2_t *config,
+int32_t rnet_client_connect(rnet_runtime_t runtime,
+                               const rnet_client_config_t *config,
                                rnet_endpoint_t *out);
 int32_t rnet_endpoint_open(rnet_runtime_t runtime,
                            const rnet_endpoint_config_t *config,
@@ -491,17 +344,12 @@ int32_t rnet_session_rekey(rnet_runtime_t runtime,
 int32_t rnet_endpoint_local_port(rnet_runtime_t runtime,
                                  rnet_endpoint_t endpoint,
                                  uint16_t *out_port);
-int32_t rnet_send(rnet_runtime_t runtime, rnet_session_t session,
-                  uint32_t msg_type, uint32_t stream_id,
-                  rnet_slice_t payload, uint64_t request_id);
 int32_t rnet_session_send(rnet_runtime_t runtime, rnet_session_t session,
-                          uint32_t msg_type, rnet_slice_t payload);
+                          rnet_slice_t payload);
 int32_t rnet_session_send_ex(rnet_runtime_t runtime, rnet_session_t session,
-                             uint32_t msg_type, rnet_slice_t payload,
+                             rnet_slice_t payload,
                              const rnet_send_options_t *options);
-size_t rnet_poll_events(rnet_runtime_t runtime, rnet_event_t *events,
-                        size_t capacity, uint32_t timeout_ms);
-int32_t rnet_poll_events_ex(rnet_runtime_t runtime, rnet_event_t *events,
+int32_t rnet_poll_events(rnet_runtime_t runtime, rnet_event_t *events,
                             size_t capacity, uint32_t timeout_ms,
                             size_t *out_count);
 int32_t rnet_buffer_release(rnet_runtime_t runtime, uint64_t buffer_token);
@@ -516,11 +364,6 @@ int32_t rnet_runtime_destroy(rnet_runtime_t runtime);
 /* Thread-local UTF-8 diagnostic for the most recent failed call. The pointer is
  * valid until the next RNet call on the same thread and must not be freed. */
 const char *rnet_last_error_message(void);
-int32_t rnet_metrics_snapshot(rnet_runtime_t runtime,
-                              rnet_metrics_t *out);
-int32_t rnet_latency_snapshot(rnet_runtime_t runtime,
-                              rnet_latency_metric_t *metrics,
-                              size_t capacity, size_t *out_count);
 /* A zero interval disables periodic summaries. Emission is driven by polling. */
 int32_t rnet_metrics_log_interval_set(rnet_runtime_t runtime,
                                       uint64_t interval_ms);
@@ -554,29 +397,19 @@ enum {
   RNET_GAME_PRIORITY_CRITICAL = 4
 };
 
+/* Complete game configuration. Zero queue budgets select production defaults. */
+/* Game records are delivered asynchronously without payloads, credentials or
+ * tickets. The callback runtime field is the public game ABI runtime handle.
+ * Logger user_data must stay valid until destroy returns. The callback may
+ * query metrics but must not call runtime_stop/runtime_destroy. */
 typedef struct rnet_game_config {
   uint32_t struct_size;
   uint32_t abi_version;
-  /* Zero selects the production default. */
   uint32_t heartbeat_interval_ms;
   uint32_t heartbeat_timeout_ms;
   uint32_t allow_plaintext_business_data;
   uint32_t reserved;
-  /* Optional borrowed V5 capacity/socket tuning; logger pointers must be NULL.
-   * The game-level plaintext flag remains authoritative. */
-  const rnet_config_v5_t *network_config;
-} rnet_game_config_t;
-
-/* Additive configuration for game-stage queue budgets. Every zero queue field
- * selects the production default. The V1 layout remains frozen. */
-typedef struct rnet_game_config_v2 {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint32_t heartbeat_interval_ms;
-  uint32_t heartbeat_timeout_ms;
-  uint32_t allow_plaintext_business_data;
-  uint32_t reserved;
-  const rnet_config_v5_t *network_config;
+  const rnet_config_t *network_config;
   uint64_t realtime_max_queued_bytes;
   uint64_t realtime_max_session_queued_bytes;
   uint64_t realtime_max_keys_per_session;
@@ -585,7 +418,8 @@ typedef struct rnet_game_config_v2 {
   uint64_t scheduled_max_session_queued_bytes;
   uint64_t scheduled_max_queued_messages;
   uint64_t scheduled_flush_batch;
-} rnet_game_config_v2_t;
+  const rnet_logger_t *logger;
+} rnet_game_config_t;
 
 typedef struct rnet_game_server_config {
   uint32_t struct_size;
@@ -680,15 +514,10 @@ typedef struct rnet_game_event {
   uint32_t sequence;
   uint32_t has_tick;
   uint32_t tick;
+  uint64_t correlation_id;
 } rnet_game_event_t;
 
-/* Additive advanced-event layout. Use rnet_game_poll_events_v2; token ownership
- * remains in the nested v1 event. */
-typedef struct rnet_game_event_v2 {
-  rnet_game_event_t event;
-  uint64_t correlation_id;
-} rnet_game_event_v2_t;
-
+/* Optional scheduling and correlation metadata; business message types belong in payloads. */
 typedef struct rnet_game_send_options {
   uint32_t struct_size;
   uint32_t abi_version;
@@ -860,28 +689,12 @@ typedef struct rnet_game_buffer {
 } rnet_game_buffer_t;
 
 int32_t rnet_game_config_init(rnet_game_config_t *out);
-int32_t rnet_game_config_v2_init(rnet_game_config_v2_t *out);
 /* Expands a scenario profile into existing config fields without changing wire semantics. */
 int32_t rnet_game_profile_defaults(uint32_t profile, uint32_t *out_transport,
                                    uint32_t *out_initial_encryption);
 int32_t rnet_game_runtime_create(const rnet_game_config_t *config,
                                  const rnet_client_security_t *client_security,
                                  rnet_runtime_t *out);
-/* Game records are delivered asynchronously without payloads, credentials or
- * tickets. The callback runtime field is the public game ABI runtime handle.
- * Logger user_data must stay valid until destroy returns. The callback may
- * query metrics but must not call runtime_stop/runtime_destroy. */
-int32_t rnet_game_runtime_create_logged(
-    const rnet_game_config_t *config,
-    const rnet_client_security_t *client_security,
-    const rnet_logger_v2_t *logger, rnet_runtime_t *out);
-int32_t rnet_game_runtime_create_v2(
-    const rnet_game_config_v2_t *config,
-    const rnet_client_security_t *client_security, rnet_runtime_t *out);
-int32_t rnet_game_runtime_create_logged_v2(
-    const rnet_game_config_v2_t *config,
-    const rnet_client_security_t *client_security,
-    const rnet_logger_v2_t *logger, rnet_runtime_t *out);
 int32_t rnet_game_server_listen(rnet_runtime_t runtime,
                                 const rnet_game_server_config_t *config,
                                 rnet_endpoint_t *out);
@@ -959,10 +772,6 @@ int32_t rnet_game_prometheus_snapshot(rnet_runtime_t runtime,
 int32_t rnet_game_poll_events(rnet_runtime_t runtime, rnet_game_event_t *events,
                               size_t capacity, uint32_t timeout_ms,
                               size_t *out_count);
-int32_t rnet_game_poll_events_v2(rnet_runtime_t runtime,
-                                 rnet_game_event_v2_t *events,
-                                 size_t capacity, uint32_t timeout_ms,
-                                 size_t *out_count);
 int32_t rnet_game_buffer_release(rnet_runtime_t runtime, uint64_t token);
 int32_t rnet_game_runtime_stop(rnet_runtime_t runtime,
                                uint32_t drain_timeout_ms);

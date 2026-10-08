@@ -161,6 +161,15 @@ pub(crate) async fn run_adaptive_session(
             },
         }
     };
+    // Only clients own a single-session endpoint; an accepted server session shares its listener.
+    // Keep endpoint -> session lock order and release capacity before publishing the I/O close.
+    let _client_endpoint_guard = if server_authoritative {
+        None
+    } else {
+        let mut endpoints = shared.endpoints.lock().expect("endpoint table poisoned");
+        endpoints.remove(endpoint);
+        Some(endpoints)
+    };
     remove_session_with_error(&shared, session, phase, error);
 }
 

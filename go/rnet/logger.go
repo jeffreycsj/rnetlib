@@ -10,8 +10,8 @@ import (
 	"unsafe"
 )
 
-//export rnet_go_log_v2_bridge
-func rnet_go_log_v2_bridge(
+//export rnet_go_log_bridge
+func rnet_go_log_bridge(
 	userData unsafe.Pointer,
 	timestampUnixMillis C.uint64_t,
 	level C.uint32_t,

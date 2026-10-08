@@ -1,13 +1,9 @@
-use crate::abi::RnetLatencyMetric;
 use crate::abi::RnetLogger;
-use crate::abi::RnetLoggerV2;
-use crate::abi::RnetMetrics;
 use crate::abi::RNET_ABI_VERSION;
-use crate::abi::{RnetLatencyMetricV2, RnetMetricsV2, RnetMetricsV3};
+use crate::abi::{RnetLatencyMetric, RnetMetrics};
 use crate::registry::ffi_status;
 use crate::registry::invalid_argument;
 use crate::registry::runtime_entry;
-use crate::registry::validate_struct;
 use crate::registry::LogCallbackGuard;
 use crate::registry::RuntimeEntry;
 use crate::registry::IN_LOG_CALLBACK;
@@ -20,7 +16,6 @@ use rnet_observe::LogLevel;
 use rnet_observe::LogRecord;
 use rnet_observe::LoggerConfig;
 use rnet_transport::LatencyKind;
-use rnet_transport::MetricsSnapshot;
 use rnet_transport::LATENCY_KIND_COUNT;
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -49,7 +44,7 @@ pub extern "C" fn rnet_metrics_log_interval_set(runtime: u64, interval_ms: u64) 
 }
 
 #[no_mangle]
-/// Copies the current metrics counters into caller-owned memory.
+/// Copies production counters and runtime resource gauges into caller-owned memory.
 ///
 /// # Safety
 /// `out` must point to writable memory for one `RnetMetrics`.
@@ -59,16 +54,7 @@ pub unsafe extern "C" fn rnet_metrics_snapshot(runtime: u64, out: *mut RnetMetri
             return invalid_argument("metrics output is null");
         }
         let entry = runtime_entry(runtime)?;
-        let MetricsSnapshot {
-            frames_received,
-            frames_sent,
-            bytes_received,
-            bytes_sent,
-            events_dropped,
-            send_would_block,
-            protocol_errors,
-            ..
-        } = entry.network.metrics_snapshot();
+        let metrics = entry.network.metrics_snapshot();
         let logger = entry.logger.lock().expect("logger lock poisoned");
         let (logs_dropped, logger_panics) = logger
             .as_ref()
@@ -77,84 +63,6 @@ pub unsafe extern "C" fn rnet_metrics_snapshot(runtime: u64, out: *mut RnetMetri
         unsafe {
             out.write(RnetMetrics {
                 struct_size: size_of::<RnetMetrics>() as u32,
-                abi_version: RNET_ABI_VERSION,
-                frames_received,
-                frames_sent,
-                bytes_received,
-                bytes_sent,
-                events_dropped,
-                send_would_block,
-                protocol_errors,
-                logs_dropped,
-                logger_panics,
-            })
-        };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Copies production counters, gauges, and close-reason series into caller-owned memory.
-///
-/// # Safety
-/// `out` must point to writable memory for one `RnetMetricsV2`.
-pub unsafe extern "C" fn rnet_metrics_snapshot_v2(runtime: u64, out: *mut RnetMetricsV2) -> i32 {
-    ffi_status(|| {
-        if out.is_null() {
-            return invalid_argument("metrics output is null");
-        }
-        let entry = runtime_entry(runtime)?;
-        let metrics = entry.network.metrics_snapshot();
-        let logger = entry.logger.lock().expect("logger lock poisoned");
-        let (logs_dropped, logger_panics) = logger
-            .as_ref()
-            .map(|logger| (logger.dropped(), logger.sink_panics()))
-            .unwrap_or_default();
-        unsafe {
-            out.write(RnetMetricsV2 {
-                struct_size: size_of::<RnetMetricsV2>() as u32,
-                abi_version: RNET_ABI_VERSION,
-                frames_received: metrics.frames_received,
-                frames_sent: metrics.frames_sent,
-                bytes_received: metrics.bytes_received,
-                bytes_sent: metrics.bytes_sent,
-                events_dropped: metrics.events_dropped,
-                send_would_block: metrics.send_would_block,
-                protocol_errors: metrics.protocol_errors,
-                lifecycle_events_rejected: metrics.lifecycle_events_rejected,
-                admission_rejected: metrics.admission_rejected,
-                queued_send_bytes: metrics.queued_send_bytes,
-                peak_queued_send_bytes: metrics.peak_queued_send_bytes,
-                queued_event_bytes: metrics.queued_event_bytes,
-                session_closed_by_reason: metrics.session_closed_by_reason,
-                logs_dropped,
-                logger_panics,
-            })
-        };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Copies production counters and runtime resource gauges into caller-owned memory.
-///
-/// # Safety
-/// `out` must point to writable memory for one `RnetMetricsV3`.
-pub unsafe extern "C" fn rnet_metrics_snapshot_v3(runtime: u64, out: *mut RnetMetricsV3) -> i32 {
-    ffi_status(|| {
-        if out.is_null() {
-            return invalid_argument("metrics output is null");
-        }
-        let entry = runtime_entry(runtime)?;
-        let metrics = entry.network.metrics_snapshot();
-        let logger = entry.logger.lock().expect("logger lock poisoned");
-        let (logs_dropped, logger_panics) = logger
-            .as_ref()
-            .map(|logger| (logger.dropped(), logger.sink_panics()))
-            .unwrap_or_default();
-        unsafe {
-            out.write(RnetMetricsV3 {
-                struct_size: size_of::<RnetMetricsV3>() as u32,
                 abi_version: RNET_ABI_VERSION,
                 frames_received: metrics.frames_received,
                 frames_sent: metrics.frames_sent,
@@ -184,62 +92,13 @@ pub unsafe extern "C" fn rnet_metrics_snapshot_v3(runtime: u64, out: *mut RnetMe
 }
 
 #[no_mangle]
-/// Copies all latency percentile snapshots into caller-owned memory.
-///
-/// A zero-capacity call may use a null `metrics` pointer to query the required count.
-///
-/// # Safety
-/// `out_count` must point to writable memory. For nonzero capacity, `metrics` must point to
-/// writable storage for at least `capacity` entries.
-pub unsafe extern "C" fn rnet_latency_snapshot(
-    runtime: u64,
-    metrics: *mut RnetLatencyMetric,
-    capacity: usize,
-    out_count: *mut usize,
-) -> i32 {
-    ffi_status(|| {
-        if out_count.is_null() {
-            return invalid_argument("latency metric count output is null");
-        }
-        let entry = runtime_entry(runtime)?;
-        let snapshots = latency_snapshots(&entry);
-        unsafe { out_count.write(LATENCY_KIND_COUNT) };
-        if capacity == 0 {
-            return Ok(());
-        }
-        if metrics.is_null() {
-            return invalid_argument("latency metrics output is null");
-        }
-        if capacity < LATENCY_KIND_COUNT {
-            return invalid_argument("latency metrics capacity is too small");
-        }
-        for (index, metric) in snapshots.into_iter().enumerate() {
-            let latency = metric.latency;
-            unsafe {
-                metrics.add(index).write(RnetLatencyMetric {
-                    struct_size: size_of::<RnetLatencyMetric>() as u32,
-                    kind: metric.kind as u32,
-                    sample_count: latency.sample_count,
-                    p50_us: latency.p50_us,
-                    p90_us: latency.p90_us,
-                    p95_us: latency.p95_us,
-                    p99_us: latency.p99_us,
-                    max_us: latency.max_us,
-                })
-            };
-        }
-        Ok(())
-    })
-}
-
-#[no_mangle]
 /// Copies latency snapshots including P99.9. Set `drain_window` to rotate the interval.
 ///
 /// # Safety
 /// `out_count` and each requested output entry must point to writable caller-owned memory.
-pub unsafe extern "C" fn rnet_latency_snapshot_v2(
+pub unsafe extern "C" fn rnet_latency_snapshot(
     runtime: u64,
-    metrics: *mut RnetLatencyMetricV2,
+    metrics: *mut RnetLatencyMetric,
     capacity: usize,
     out_count: *mut usize,
     drain_window: u32,
@@ -256,16 +115,22 @@ pub unsafe extern "C" fn rnet_latency_snapshot_v2(
         if metrics.is_null() || capacity < LATENCY_KIND_COUNT {
             return invalid_argument("latency metrics output is null or too small");
         }
-        let snapshots = if drain_window == 0 {
-            entry.network.latency_snapshot()
+        let mut snapshots = if drain_window == 0 {
+            latency_snapshots(&entry)
         } else {
             entry.network.drain_latency_window()
         };
+        if drain_window != 0 {
+            if let Some(logger) = entry.logger.lock().expect("logger lock poisoned").as_ref() {
+                snapshots[LatencyKind::LoggerCallback as usize - 1].latency =
+                    logger.drain_callback_latency_window();
+            }
+        }
         for (index, metric) in snapshots.into_iter().enumerate() {
             let latency = metric.latency;
             unsafe {
-                metrics.add(index).write(RnetLatencyMetricV2 {
-                    struct_size: size_of::<RnetLatencyMetricV2>() as u32,
+                metrics.add(index).write(RnetLatencyMetric {
+                    struct_size: size_of::<RnetLatencyMetric>() as u32,
                     kind: metric.kind as u32,
                     sample_count: latency.sample_count,
                     p50_us: latency.p50_us,
@@ -282,66 +147,26 @@ pub unsafe extern "C" fn rnet_latency_snapshot_v2(
 }
 
 pub(crate) unsafe fn build_logger(logger: *const RnetLogger) -> Result<Option<BoundedLogger>> {
-    if logger.is_null() {
-        return Ok(None);
-    }
-    let logger = unsafe { *logger };
-    validate_struct(
-        logger.struct_size,
-        logger.abi_version,
-        size_of::<RnetLogger>(),
-    )?;
-    let callback = logger
-        .log
-        .ok_or_else(|| RnetError::new(ErrorCode::InvalidArgument, "logger callback is null"))?;
-    let user_data = logger.user_data as usize;
-    let min_level = logger.min_level.min(LogLevel::Error as u32);
-    BoundedLogger::new(LoggerConfig::default(), move |record| {
-        if (record.level as u32) < min_level {
-            return;
-        }
-        IN_LOG_CALLBACK.with(|flag| flag.set(true));
-        let _callback_guard = LogCallbackGuard;
-        unsafe {
-            callback(
-                user_data as *mut c_void,
-                record.level as u32,
-                record.target.as_ptr(),
-                record.target.len(),
-                record.message.as_ptr(),
-                record.message.len(),
-            )
-        };
-    })
-    .map(Some)
-}
-
-pub(crate) unsafe fn build_logger_v2(logger: *const RnetLoggerV2) -> Result<Option<BoundedLogger>> {
-    unsafe { build_logger_v2_inner(logger, None) }
+    unsafe { build_logger_inner(logger, None) }
 }
 
 /// Game callbacks use the same layout as transport callbacks, but their runtime field must be
 /// the public game ABI handle rather than the Rust facade's process-local diagnostic ID.
-pub(crate) unsafe fn build_game_logger_v2(
-    logger: *const RnetLoggerV2,
+pub(crate) unsafe fn build_game_logger(
+    logger: *const RnetLogger,
     ffi_runtime: Arc<AtomicU64>,
 ) -> Result<Option<BoundedLogger>> {
-    unsafe { build_logger_v2_inner(logger, Some(ffi_runtime)) }
+    unsafe { build_logger_inner(logger, Some(ffi_runtime)) }
 }
 
-unsafe fn build_logger_v2_inner(
-    logger: *const RnetLoggerV2,
+unsafe fn build_logger_inner(
+    logger: *const RnetLogger,
     ffi_runtime: Option<Arc<AtomicU64>>,
 ) -> Result<Option<BoundedLogger>> {
     if logger.is_null() {
         return Ok(None);
     }
-    let logger = unsafe { *logger };
-    validate_struct(
-        logger.struct_size,
-        logger.abi_version,
-        size_of::<RnetLoggerV2>(),
-    )?;
+    let logger = unsafe { crate::registry::read_config(logger) }?;
     let callback = logger
         .log
         .ok_or_else(|| RnetError::new(ErrorCode::InvalidArgument, "logger callback is null"))?;

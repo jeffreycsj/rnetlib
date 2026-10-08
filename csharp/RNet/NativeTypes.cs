@@ -14,6 +14,7 @@ internal static unsafe partial class Native
         public NetworkConfig* Network;
         public ulong RealtimeBytes, RealtimeSessionBytes, RealtimeKeys, RealtimeBatch;
         public ulong ScheduledBytes, ScheduledSessionBytes, ScheduledMessages, ScheduledBatch;
+        public Logger* Logger;
     }
     [StructLayout(LayoutKind.Sequential)]
     internal struct NetworkConfig {
@@ -23,7 +24,7 @@ internal static unsafe partial class Native
         public ulong HandshakeTimeoutMs, ConnectTimeoutMs, DnsTimeoutMs, IdleTimeoutMs;
         public uint AllowPlaintext, AllowLegacy;
         public ulong RekeyAfterMs, RekeyAfterBytes;
-        public nint Logger, LoggerV2;
+        public nint Logger;
         public uint TcpNoDelay;
         public ulong TcpSendBuffer, TcpReceiveBuffer;
         public uint MaxEndpoints, MaxPendingHandshakes;
@@ -67,9 +68,8 @@ internal static unsafe partial class Native
         public uint SecurityOperation, QualityGrade, QualityBasis;
         public ulong LastRttUs, JitterUs, QualitySamples;
         public uint HasSequence, Sequence, HasTick, Tick;
+        public ulong CorrelationId;
     }
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct EventV2 { public Event Base; public ulong CorrelationId; }
     [StructLayout(LayoutKind.Sequential)]
     internal struct Buffer { public uint Size, Abi; public byte* Data; public nuint Length; public ulong Token; }
     [StructLayout(LayoutKind.Sequential)]

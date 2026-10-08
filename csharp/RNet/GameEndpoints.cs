@@ -15,13 +15,13 @@ public sealed unsafe partial class GameRuntime {
         try {
             fixed (byte* hp = host, kp = key) {
                 if (range is { } r) {
-                    var raw = new Native.RangeServer { Size = (uint)sizeof(Native.RangeServer), Abi = 1,
+                    var raw = new Native.RangeServer { Size = (uint)sizeof(Native.RangeServer), Abi = 2,
                         Transport = (uint)o.Transport, Encryption = o.InitialEncryption ? 1u : 0u,
                         Host = new Native.Slice(hp, host.Length), Port = o.Port, PrivateKey = new Native.Slice(kp, key.Length),
                         ProtocolId = o.ProtocolId, MinVersion = r.Min, MaxVersion = r.Max };
                     Native.Check(Native.rnet_game_server_listen_range(h.Value, &raw, out var endpoint)); return endpoint;
                 } else {
-                    var raw = new Native.Server { Size = (uint)sizeof(Native.Server), Abi = 1,
+                    var raw = new Native.Server { Size = (uint)sizeof(Native.Server), Abi = 2,
                         Transport = (uint)o.Transport, Encryption = o.InitialEncryption ? 1u : 0u,
                         Host = new Native.Slice(hp, host.Length), Port = o.Port, PrivateKey = new Native.Slice(kp, key.Length),
                         ProtocolId = o.ProtocolId, Version = o.Version };
@@ -44,13 +44,13 @@ public sealed unsafe partial class GameRuntime {
             var ticket = new Native.Slice(rp, resumeTicket.Length);
             ulong endpoint;
             if (range is { } r) {
-                var raw = new Native.RangeClient { Size = (uint)sizeof(Native.RangeClient), Abi = 1, Transport = (uint)o.Transport,
+                var raw = new Native.RangeClient { Size = (uint)sizeof(Native.RangeClient), Abi = 2, Transport = (uint)o.Transport,
                     Host = new Native.Slice(hp, host.Length), Port = o.Port, Ticket = new Native.Slice(tp, o.JoinTicket.Length),
                     ProtocolId = o.ProtocolId, MinVersion = r.Min, MaxVersion = r.Max, BuildId = o.BuildId, Capabilities = o.Capabilities };
                 Native.Check(resume ? Native.rnet_game_client_resume_connect_range(h.Value, &raw, oldSession, ticket, out endpoint)
                     : Native.rnet_game_client_connect_range(h.Value, &raw, out endpoint));
             } else {
-                var raw = new Native.Client { Size = (uint)sizeof(Native.Client), Abi = 1, Transport = (uint)o.Transport,
+                var raw = new Native.Client { Size = (uint)sizeof(Native.Client), Abi = 2, Transport = (uint)o.Transport,
                     Host = new Native.Slice(hp, host.Length), Port = o.Port, Ticket = new Native.Slice(tp, o.JoinTicket.Length),
                     ProtocolId = o.ProtocolId, Version = o.Version, BuildId = o.BuildId, Capabilities = o.Capabilities };
                 Native.Check(resume ? Native.rnet_game_client_resume_connect(h.Value, &raw, oldSession, ticket, out endpoint)

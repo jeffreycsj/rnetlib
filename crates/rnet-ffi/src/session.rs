@@ -3,11 +3,9 @@ use crate::abi::RnetSlice;
 use crate::registry::ffi_status;
 use crate::registry::invalid_argument;
 use crate::registry::runtime_entry;
-use crate::registry::validate_struct;
 use crate::registry::with_borrowed_slice;
 use rnet_core::ErrorCode;
 use rnet_transport::{SecurityMode, SendOptions};
-use std::mem::size_of;
 
 #[no_mangle]
 pub extern "C" fn rnet_session_auth_decide(runtime: u64, session: u64, accept: u32) -> i32 {
@@ -44,42 +42,12 @@ pub extern "C" fn rnet_session_rekey(runtime: u64, session: u64) -> i32 {
 }
 
 #[no_mangle]
-/// Enqueues one framed message.
+/// Enqueues opaque application bytes. The payload schema owns business message types.
 ///
 /// # Safety
 /// A non-empty payload must reference readable memory for the duration of the call.
-pub unsafe extern "C" fn rnet_send(
-    runtime: u64,
-    session: u64,
-    msg_type: u32,
-    stream_id: u32,
-    payload: RnetSlice,
-    request_id: u64,
-) -> i32 {
-    ffi_status(|| {
-        let entry = runtime_entry(runtime)?;
-        unsafe {
-            with_borrowed_slice(payload, |payload| {
-                entry
-                    .network
-                    .send_legacy(session, msg_type, stream_id, request_id, payload)
-            })
-        }
-    })
-}
-
-#[no_mangle]
-/// Enqueues one message using the simplified v2 contract.
-///
-/// # Safety
-/// A non-empty payload must reference readable memory for the duration of the call.
-pub unsafe extern "C" fn rnet_session_send(
-    runtime: u64,
-    session: u64,
-    msg_type: u32,
-    payload: RnetSlice,
-) -> i32 {
-    unsafe { rnet_session_send_ex(runtime, session, msg_type, payload, std::ptr::null()) }
+pub unsafe extern "C" fn rnet_session_send(runtime: u64, session: u64, payload: RnetSlice) -> i32 {
+    unsafe { rnet_session_send_ex(runtime, session, payload, std::ptr::null()) }
 }
 
 #[no_mangle]
@@ -90,7 +58,6 @@ pub unsafe extern "C" fn rnet_session_send(
 pub unsafe extern "C" fn rnet_session_send_ex(
     runtime: u64,
     session: u64,
-    msg_type: u32,
     payload: RnetSlice,
     options: *const RnetSendOptions,
 ) -> i32 {
@@ -98,12 +65,7 @@ pub unsafe extern "C" fn rnet_session_send_ex(
         let correlation_id = if options.is_null() {
             0
         } else {
-            let options = unsafe { *options };
-            validate_struct(
-                options.struct_size,
-                options.abi_version,
-                size_of::<RnetSendOptions>(),
-            )?;
+            let options = unsafe { crate::registry::read_config(options) }?;
             if options.flags != 0 || options.reserved != 0 {
                 return invalid_argument("send options contain unsupported flags");
             }
@@ -112,9 +74,8 @@ pub unsafe extern "C" fn rnet_session_send_ex(
         let entry = runtime_entry(runtime)?;
         unsafe {
             with_borrowed_slice(payload, |payload| {
-                entry.network.send_with_options(
+                entry.network.send_payload_with_options(
                     session,
-                    msg_type,
                     payload,
                     SendOptions { correlation_id },
                 )

@@ -33,6 +33,14 @@ func lockNativeThread() func() {
 	return runtime.UnlockOSThread
 }
 
+// ABI must be checked before a native initializer can write SDK-owned storage.
+func checkABI() error {
+	if C.rnet_abi_version() != C.RNET_ABI_VERSION {
+		return fmt.Errorf("rnet: SDK/native ABI mismatch; rebuild and deploy together")
+	}
+	return nil
+}
+
 func statusError(status C.int32_t) error {
 	if status == C.RNET_OK {
 		return nil

@@ -33,9 +33,12 @@ func NewRuntime(configs ...Config) (*Runtime, error) {
 }
 
 func NewRuntimeWithConfig(config Config) (*Runtime, error) {
+	if err := checkABI(); err != nil {
+		return nil, err
+	}
 	defer lockNativeThread()()
-	var native C.rnet_config_v5_t
-	if err := statusError(C.rnet_config_v5_init(&native)); err != nil {
+	var native C.rnet_config_t
+	if err := statusError(C.rnet_config_init(&native)); err != nil {
 		return nil, err
 	}
 	native.worker_threads = C.uint32_t(config.WorkerThreads)
@@ -90,7 +93,7 @@ func NewRuntimeWithConfig(config Config) (*Runtime, error) {
 		privateKey = (*C.uint8_t)(unsafe.Pointer(&security.LocalKey.Private[0]))
 		serverKey = bytePointer(security.ExpectedServerPublicKey)
 	}
-	createStatus := C.rnet_go_runtime_create_v5_full(
+	createStatus := C.rnet_go_runtime_create(
 		&native, privateKey, serverKey, C.uintptr_t(loggerHandle),
 		C.uint32_t(config.MinLogLevel), &handle,
 	)

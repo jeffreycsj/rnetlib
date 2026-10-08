@@ -1,19 +1,17 @@
-//! Additive C entry points for the high-level game session API.
+//! C entry points for the high-level game session API.
 
-use crate::abi::{RnetClientSecurity, RnetLoggerV2, RnetSlice};
+use crate::abi::{RnetClientSecurity, RnetLogger, RnetSlice};
 use crate::game_abi::{
     RnetGameSendOptions, RNET_GAME_PRIORITY_CRITICAL, RNET_GAME_PRIORITY_HIGH,
     RNET_GAME_PRIORITY_LOW, RNET_GAME_PRIORITY_NORMAL,
 };
-use crate::game_config_abi::{
-    RnetGameClientConfig, RnetGameConfig, RnetGameConfigV2, RnetGameServerConfig,
-};
+use crate::game_config_abi::{RnetGameClientConfig, RnetGameConfig, RnetGameServerConfig};
 use crate::game_registry;
-use crate::observe::build_game_logger_v2;
+use crate::observe::build_game_logger;
 use crate::registry::{
     copy_key, ffi_status, invalid_argument, parse_address, validate_struct, with_borrowed_slice,
 };
-use crate::runtime::runtime_config_v5;
+use crate::runtime::runtime_config;
 use rnet_core::{ErrorCode, Result, RnetError, Transport};
 use rnet_game::{
     GameHostClientConfig, GamePriority, GameProtocol, GameRuntime, GameRuntimeConfig,
@@ -41,119 +39,21 @@ pub unsafe extern "C" fn rnet_game_config_init(out: *mut RnetGameConfig) -> i32 
 }
 
 #[no_mangle]
-/// # Safety
-/// `out` must point to writable storage for one complete V2 configuration.
-pub unsafe extern "C" fn rnet_game_config_v2_init(out: *mut RnetGameConfigV2) -> i32 {
-    ffi_status(|| {
-        if out.is_null() {
-            return invalid_argument("game V2 config output is null");
-        }
-        unsafe { out.write(RnetGameConfigV2::default()) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Creates a game runtime with production limits and optional pinned/verifier client trust.
+/// Creates a game runtime with queue budgets, optional client identity and structured logging.
 ///
 /// # Safety
-/// Config, security slices, and `out` must be valid for the call. A verifier callback and its
-/// user data must remain valid and thread-safe until the runtime is destroyed.
+/// Configuration and output pointers must be valid for the call. Logger/verifier callbacks
+/// and their user data must remain thread-safe and valid until runtime destruction.
 pub unsafe extern "C" fn rnet_game_runtime_create(
     config: *const RnetGameConfig,
     client: *const RnetClientSecurity,
-    out: *mut u64,
-) -> i32 {
-    unsafe { create_game_runtime(config, client, std::ptr::null(), out) }
-}
-
-#[no_mangle]
-/// Adds an asynchronous, bounded game-event logger at creation. `logger` is copied; its
-/// callback user data must remain valid until destroy returns. The callback may query metrics
-/// but must not stop or destroy the runtime from its dispatch thread.
-///
-/// # Safety
-/// All pointers must be valid for this call; callback user data must remain thread-safe and
-/// valid until the runtime is destroyed.
-pub unsafe extern "C" fn rnet_game_runtime_create_logged(
-    config: *const RnetGameConfig,
-    client: *const RnetClientSecurity,
-    logger: *const RnetLoggerV2,
-    out: *mut u64,
-) -> i32 {
-    if logger.is_null() {
-        return ffi_status(|| invalid_argument("game logger must be non-null"));
-    }
-    unsafe { create_game_runtime(config, client, logger, out) }
-}
-
-#[no_mangle]
-/// Creates a game runtime with additive realtime and priority-queue budget controls.
-///
-/// # Safety
-/// Config, security slices, and `out` must be valid for the call.
-pub unsafe extern "C" fn rnet_game_runtime_create_v2(
-    config: *const RnetGameConfigV2,
-    client: *const RnetClientSecurity,
-    out: *mut u64,
-) -> i32 {
-    unsafe { create_game_runtime_v2(config, client, std::ptr::null(), out) }
-}
-
-#[no_mangle]
-/// V2 runtime creation with an asynchronous bounded logger.
-///
-/// # Safety
-/// All pointers must be valid for this call; callback user data must remain thread-safe and valid
-/// until the runtime is destroyed.
-pub unsafe extern "C" fn rnet_game_runtime_create_logged_v2(
-    config: *const RnetGameConfigV2,
-    client: *const RnetClientSecurity,
-    logger: *const RnetLoggerV2,
-    out: *mut u64,
-) -> i32 {
-    if logger.is_null() {
-        return ffi_status(|| invalid_argument("game logger must be non-null"));
-    }
-    unsafe { create_game_runtime_v2(config, client, logger, out) }
-}
-
-unsafe fn create_game_runtime(
-    config: *const RnetGameConfig,
-    client: *const RnetClientSecurity,
-    logger: *const RnetLoggerV2,
     out: *mut u64,
 ) -> i32 {
     ffi_status(|| {
         if config.is_null() || out.is_null() {
             return invalid_argument("game config and output must be non-null");
         }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetGameConfig>(),
-        )?;
-        unsafe { create_game_runtime_from_config(config, None, client, logger, out) }
-    })
-}
-
-unsafe fn create_game_runtime_v2(
-    config: *const RnetGameConfigV2,
-    client: *const RnetClientSecurity,
-    logger: *const RnetLoggerV2,
-    out: *mut u64,
-) -> i32 {
-    ffi_status(|| {
-        if config.is_null() || out.is_null() {
-            return invalid_argument("game V2 config and output must be non-null");
-        }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetGameConfigV2>(),
-        )?;
+        let config = unsafe { crate::registry::read_config(config) }?;
         let defaults = GameRuntimeConfig::production();
         let realtime = RealtimeQueueConfig {
             max_queued_bytes: usize_override(
@@ -191,17 +91,14 @@ unsafe fn create_game_runtime_v2(
                 defaults.scheduled_queue.flush_batch,
             )?,
         };
-        let base = RnetGameConfig {
-            struct_size: size_of::<RnetGameConfig>() as u32,
-            abi_version: config.abi_version,
-            heartbeat_interval_ms: config.heartbeat_interval_ms,
-            heartbeat_timeout_ms: config.heartbeat_timeout_ms,
-            allow_plaintext_business_data: config.allow_plaintext_business_data,
-            reserved: config.reserved,
-            network_config: config.network_config,
-        };
         unsafe {
-            create_game_runtime_from_config(base, Some((realtime, scheduled)), client, logger, out)
+            create_game_runtime_from_config(
+                config,
+                (realtime, scheduled),
+                client,
+                config.logger,
+                out,
+            )
         }
     })
 }
@@ -216,9 +113,9 @@ fn usize_override(value: u64, default: usize) -> Result<usize> {
 
 unsafe fn create_game_runtime_from_config(
     config: RnetGameConfig,
-    queues: Option<(RealtimeQueueConfig, ScheduledQueueConfig)>,
+    queues: (RealtimeQueueConfig, ScheduledQueueConfig),
     client: *const RnetClientSecurity,
-    logger: *const RnetLoggerV2,
+    logger: *const RnetLogger,
     out: *mut u64,
 ) -> Result<()> {
     if config.reserved != 0 || config.allow_plaintext_business_data > 1 {
@@ -226,25 +123,18 @@ unsafe fn create_game_runtime_from_config(
     }
     let mut settings = GameRuntimeConfig::production()
         .allow_plaintext_business_data(config.allow_plaintext_business_data == 1);
-    if let Some((realtime, scheduled)) = queues {
-        settings = settings
-            .with_realtime_queue(realtime)
-            .with_scheduled_queue(scheduled);
-    }
+    settings = settings
+        .with_realtime_queue(queues.0)
+        .with_scheduled_queue(queues.1);
     if !config.network_config.is_null() {
-        let network = unsafe { *config.network_config };
-        validate_struct(
-            network.struct_size,
-            network.abi_version,
-            size_of::<crate::abi_config::RnetConfigV5>(),
-        )?;
-        if !network.logger.is_null() || !network.logger_v2.is_null() {
-            return invalid_argument("game logger configuration is not yet supported");
+        let network = unsafe { crate::registry::read_config(config.network_config) }?;
+        if !network.logger.is_null() {
+            return invalid_argument("use game config.logger instead of network config.logger");
         }
         if network.allow_legacy_unauthenticated_endpoints != 0 {
             return invalid_argument("game runtime forbids legacy unauthenticated endpoints");
         }
-        settings.network = runtime_config_v5(network)?;
+        settings.network = runtime_config(network)?;
         settings
             .network
             .security_policy
@@ -257,11 +147,11 @@ unsafe fn create_game_runtime_from_config(
         );
     }
     let ffi_identity = Arc::new(AtomicU64::new(0));
-    let game_logger = unsafe { build_game_logger_v2(logger, Arc::clone(&ffi_identity)) }?;
+    let game_logger = unsafe { build_game_logger(logger, Arc::clone(&ffi_identity)) }?;
     let runtime = if client.is_null() {
         GameRuntime::new(settings)?
     } else {
-        let security = unsafe { client_security(*client) }?;
+        let security = unsafe { client_security(crate::registry::read_config(client)?) }?;
         GameRuntime::new_with_client_security(settings, security)?
     };
     let runtime = if let Some(logger) = game_logger {
@@ -310,12 +200,7 @@ pub unsafe extern "C" fn rnet_game_server_listen(
         if config.is_null() || out.is_null() {
             return invalid_argument("game server config and output must be non-null");
         }
-        let config = unsafe { *config };
-        validate_struct(
-            config.struct_size,
-            config.abi_version,
-            size_of::<RnetGameServerConfig>(),
-        )?;
+        let config = unsafe { crate::registry::read_config(config) }?;
         if config.reserved != 0 || config.initial_encryption > 1 {
             return invalid_argument("invalid game server flags");
         }
@@ -390,12 +275,7 @@ pub unsafe extern "C" fn rnet_game_client_resume_connect(
 }
 
 unsafe fn parse_game_client(config: *const RnetGameClientConfig) -> Result<GameHostClientConfig> {
-    let config = unsafe { *config };
-    validate_struct(
-        config.struct_size,
-        config.abi_version,
-        size_of::<RnetGameClientConfig>(),
-    )?;
+    let config = unsafe { crate::registry::read_config(config) }?;
     if config.reserved != 0 || config.reserved2 != 0 || config.reserved3 != 0 {
         return invalid_argument("game client reserved fields must be zero");
     }
@@ -496,16 +376,7 @@ pub unsafe extern "C" fn rnet_game_send_ex(
     options: *const RnetGameSendOptions,
 ) -> i32 {
     ffi_status(|| {
-        let options = unsafe {
-            options.as_ref().ok_or_else(|| {
-                RnetError::new(ErrorCode::InvalidArgument, "game send options are null")
-            })?
-        };
-        validate_struct(
-            options.struct_size,
-            options.abi_version,
-            size_of::<RnetGameSendOptions>(),
-        )?;
+        let options = unsafe { crate::registry::read_config(options) }?;
         if options.has_sequence > 1 || options.has_tick > 1 {
             return invalid_argument("game metadata presence flags must be zero or one");
         }

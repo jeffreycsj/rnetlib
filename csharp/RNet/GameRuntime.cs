@@ -13,32 +13,33 @@ public sealed unsafe partial class GameRuntime : IDisposable {
 
     public GameRuntime(GameOptions? options = null, Keypair? clientKey = null, byte[]? expectedServerKey = null) {
         if (IntPtr.Size != 8) throw new PlatformNotSupportedException("This SDK currently validates the 64-bit native ABI only.");
-        if (Native.rnet_abi_version() != 1) throw new NotSupportedException("Unsupported RNet ABI version");
+        Native.CheckAbi();
         if ((clientKey == null) != (expectedServerKey == null)) throw new ArgumentException("Client identity and server pin must be supplied together.");
         options ??= new GameOptions();
         if (options.MinimumLogLevel > LogLevel.Error) throw new ArgumentOutOfRangeException(nameof(options));
         Native.GameConfig game = default;
         Native.NetworkConfig network = default;
-        Native.Check(Native.rnet_game_config_v2_init(&game));
-        Native.Check(Native.rnet_config_v5_init(&network));
+        Native.Check(Native.rnet_game_config_init(&game));
+        Native.Check(Native.rnet_config_init(&network));
         Configure(options, ref game, ref network);
         game.Network = &network;
         byte[] privateKey = clientKey?.ExportPrivateKey() ?? Array.Empty<byte>();
         nint context = 0;
         try {
             fixed (byte* key = privateKey, expected = expectedServerKey) {
-                var security = new Native.Security { Size = (uint)sizeof(Native.Security), Abi = 1,
+                var security = new Native.Security { Size = (uint)sizeof(Native.Security), Abi = 2,
                     PrivateKey = new Native.Slice(key, privateKey.Length),
                     ExpectedKey = new Native.Slice(expected, expectedServerKey?.Length ?? 0) };
                 ulong runtime;
                 if (options.Logger != null) {
                     logState = new LogState(options.Logger);
                     context = GCHandle.ToIntPtr(GCHandle.Alloc(logState));
-                    var logger = new Native.Logger { Size = (uint)sizeof(Native.Logger), Abi = 1,
+                    var logger = new Native.Logger { Size = (uint)sizeof(Native.Logger), Abi = 2,
                         Callback = Marshal.GetFunctionPointerForDelegate(LogBridge.Function),
                         UserData = context, MinLevel = (uint)options.MinimumLogLevel };
-                    Native.Check(Native.rnet_game_runtime_create_logged_v2(&game, clientKey == null ? null : &security, &logger, out runtime));
-                } else Native.Check(Native.rnet_game_runtime_create_v2(&game, clientKey == null ? null : &security, out runtime));
+                    game.Logger = &logger;
+                    Native.Check(Native.rnet_game_runtime_create(&game, clientKey == null ? null : &security, out runtime));
+                } else Native.Check(Native.rnet_game_runtime_create(&game, clientKey == null ? null : &security, out runtime));
                 owner = new RuntimeOwner(runtime, context);
                 context = 0; // only native destroy may now release callback user data
             }

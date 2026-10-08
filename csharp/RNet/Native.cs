@@ -5,14 +5,16 @@ namespace RNet;
 internal static unsafe partial class Native
 {
     private const string Library = "rnet";
+    internal static void CheckAbi() {
+        if (rnet_abi_version() != 2) throw new NotSupportedException("RNet SDK/native ABI mismatch; rebuild and deploy together");
+    }
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern uint rnet_abi_version();
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern nint rnet_last_error_message();
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_keypair_generate(Key* key);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_keypair_from_private(Slice key, Key* output);
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_config_v5_init(NetworkConfig* config);
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_config_v2_init(GameConfig* config);
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_runtime_create_v2(GameConfig* config, Security* security, out ulong runtime);
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_runtime_create_logged_v2(GameConfig* config, Security* security, Logger* logger, out ulong runtime);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_config_init(NetworkConfig* config);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_config_init(GameConfig* config);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_runtime_create(GameConfig* config, Security* security, out ulong runtime);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_server_listen(ulong runtime, Server* config, out ulong endpoint);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_client_connect(ulong runtime, Client* config, out ulong endpoint);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_server_listen_range(ulong runtime, RangeServer* config, out ulong endpoint);
@@ -30,7 +32,7 @@ internal static unsafe partial class Native
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_endpoint_close(ulong runtime, ulong endpoint);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_rekey(ulong runtime, ulong session);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_security_set(ulong runtime, ulong session, uint encrypted);
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_poll_events_v2(ulong runtime, EventV2* events, nuint capacity, uint timeoutMs, out nuint count);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_poll_events(ulong runtime, Event* events, nuint capacity, uint timeoutMs, out nuint count);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_buffer_release(ulong runtime, ulong token);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_runtime_stop(ulong runtime, uint drainMs);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_runtime_destroy(ulong runtime);

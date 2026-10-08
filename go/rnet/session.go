@@ -45,7 +45,7 @@ func (r *Runtime) Rekey(session Session) error {
 	return statusError(C.rnet_session_rekey(handle, C.rnet_session_t(session)))
 }
 
-func (r *Runtime) Send(session Session, messageType uint32, payload []byte) error {
+func (r *Runtime) Send(session Session, payload []byte) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
@@ -54,7 +54,6 @@ func (r *Runtime) Send(session Session, messageType uint32, payload []byte) erro
 	err = statusError(C.rnet_go_send(
 		handle,
 		C.rnet_session_t(session),
-		C.uint32_t(messageType),
 		bytePointer(payload),
 		C.size_t(len(payload)),
 	))
@@ -62,29 +61,15 @@ func (r *Runtime) Send(session Session, messageType uint32, payload []byte) erro
 	return err
 }
 
-func (r *Runtime) SendWithOptions(session Session, messageType uint32, payload []byte, options SendOptions) error {
+func (r *Runtime) SendWithOptions(session Session, payload []byte, options SendOptions) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
 		return err
 	}
 	err = statusError(C.rnet_go_send_ex(
-		handle, C.rnet_session_t(session), C.uint32_t(messageType),
+		handle, C.rnet_session_t(session),
 		bytePointer(payload), C.size_t(len(payload)), C.uint64_t(options.CorrelationID),
-	))
-	runtime.KeepAlive(payload)
-	return err
-}
-
-func (r *Runtime) SendLegacy(session Session, messageType, streamID uint32, requestID uint64, payload []byte) error {
-	defer lockNativeThread()()
-	handle, err := r.handleValue()
-	if err != nil {
-		return err
-	}
-	err = statusError(C.rnet_go_send_legacy(
-		handle, C.rnet_session_t(session), C.uint32_t(messageType), C.uint32_t(streamID),
-		bytePointer(payload), C.size_t(len(payload)), C.uint64_t(requestID),
 	))
 	runtime.KeepAlive(payload)
 	return err

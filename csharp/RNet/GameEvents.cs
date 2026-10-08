@@ -42,7 +42,7 @@ public sealed unsafe partial class GameRuntime {
     public void Send(ulong session, ReadOnlySpan<byte> payload, GameSendOptions options) {
         ArgumentNullException.ThrowIfNull(options);
         using var h = Lease();
-        var raw = new Native.SendOptions { Size = (uint)sizeof(Native.SendOptions), Abi = 1,
+        var raw = new Native.SendOptions { Size = (uint)sizeof(Native.SendOptions), Abi = 2,
             HasSequence = options.Sequence.HasValue ? 1u : 0u, Sequence = options.Sequence ?? 0,
             HasTick = options.Tick.HasValue ? 1u : 0u, Tick = options.Tick ?? 0,
             CorrelationId = options.CorrelationId, Priority = (uint)options.Priority, ExpiryMs = options.ExpiryMs };
@@ -58,14 +58,14 @@ public sealed unsafe partial class GameRuntime {
     public GameEvent[] Poll(int capacity = 64, uint timeoutMs = 0) {
         if (capacity < 0 || capacity > 4096) throw new ArgumentOutOfRangeException(nameof(capacity));
         using var h = Lease();
-        var raw = new Native.EventV2[capacity];
-        fixed (Native.EventV2* events = raw) {
+        var raw = new Native.Event[capacity];
+        fixed (Native.Event* events = raw) {
             nuint count = 0;
             try {
-                Native.Check(Native.rnet_game_poll_events_v2(h.Value, events, (nuint)capacity, timeoutMs, out count));
+                Native.Check(Native.rnet_game_poll_events(h.Value, events, (nuint)capacity, timeoutMs, out count));
                 var result = new GameEvent[checked((int)count)];
                 for (int i = 0; i < result.Length; i++) {
-                    var e = events[i].Base;
+                    var e = events[i];
                     result[i] = new GameEvent {
                         Type = (GameEventType)e.Type, Endpoint = e.Endpoint, Session = e.Session,
                         RelatedSession = e.RelatedSession, Status = e.Status,

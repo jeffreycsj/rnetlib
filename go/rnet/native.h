@@ -4,7 +4,7 @@
 #include "rnet.h"
 #include <string.h>
 
-static inline void rnet_go_log_v2_shim(
+static inline void rnet_go_log_shim(
     void *user_data, uint64_t timestamp_unix_ms, uint32_t level,
     const uint8_t *event_name, size_t event_name_len, rnet_runtime_t runtime,
     rnet_endpoint_t endpoint, rnet_session_t session, uint32_t transport,
@@ -12,24 +12,23 @@ static inline void rnet_go_log_v2_shim(
     size_t message_len);
 
 static inline int32_t rnet_go_game_runtime_create(
-    const rnet_game_config_v2_t *config, const rnet_config_v5_t *network_config,
+    const rnet_game_config_t *config, const rnet_config_t *network_config,
     const uint8_t *client_private_key,
     const uint8_t *server_public_key, uintptr_t logger_handle,
     uint32_t min_log_level, rnet_runtime_t *out) {
-  rnet_game_config_v2_t configured = *config;
+  rnet_game_config_t configured = *config;
   configured.network_config = network_config;
-  rnet_logger_v2_t logger = {0};
+  rnet_logger_t logger = {0};
   if (logger_handle != 0) {
     logger.struct_size = sizeof(logger);
     logger.abi_version = RNET_ABI_VERSION;
-    logger.log = rnet_go_log_v2_shim;
+    logger.log = rnet_go_log_shim;
     logger.user_data = (void *)logger_handle;
     logger.min_level = min_log_level;
+    configured.logger = &logger;
   }
   if (client_private_key == NULL || server_public_key == NULL) {
-    return logger_handle == 0
-               ? rnet_game_runtime_create_v2(&configured, NULL, out)
-               : rnet_game_runtime_create_logged_v2(&configured, NULL, &logger, out);
+    return rnet_game_runtime_create(&configured, NULL, out);
   }
   rnet_client_security_t security = {0};
   security.struct_size = sizeof(security);
@@ -38,9 +37,7 @@ static inline int32_t rnet_go_game_runtime_create(
   security.local_private_key.len = 32;
   security.expected_server_public_key.ptr = server_public_key;
   security.expected_server_public_key.len = 32;
-  return logger_handle == 0
-             ? rnet_game_runtime_create_v2(&configured, &security, out)
-             : rnet_game_runtime_create_logged_v2(&configured, &security, &logger, out);
+  return rnet_game_runtime_create(&configured, &security, out);
 }
 
 static inline int32_t rnet_go_game_server_listen(
@@ -179,80 +176,49 @@ static inline int32_t rnet_go_game_client_resume_connect(
                                          ticket, out);
 }
 
-extern void rnet_go_log_v2_bridge(
+extern void rnet_go_log_bridge(
     void *user_data, uint64_t timestamp_unix_ms, uint32_t level,
     uint8_t *event_name, size_t event_name_len, rnet_runtime_t runtime,
     rnet_endpoint_t endpoint, rnet_session_t session, uint32_t transport,
     int32_t error_code, uint64_t correlation_id, uint8_t *message,
     size_t message_len);
 
-static inline void rnet_go_log_v2_shim(
+static inline void rnet_go_log_shim(
     void *user_data, uint64_t timestamp_unix_ms, uint32_t level,
     const uint8_t *event_name, size_t event_name_len, rnet_runtime_t runtime,
     rnet_endpoint_t endpoint, rnet_session_t session, uint32_t transport,
     int32_t error_code, uint64_t correlation_id, const uint8_t *message,
     size_t message_len) {
-  rnet_go_log_v2_bridge(
+  rnet_go_log_bridge(
       user_data, timestamp_unix_ms, level, (uint8_t *)event_name,
       event_name_len, runtime, endpoint, session, transport, error_code,
       correlation_id, (uint8_t *)message, message_len);
 }
 
-static inline int32_t rnet_go_runtime_create_v2(
+
+
+
+
+
+
+
+
+static inline int32_t rnet_go_runtime_create(
     const rnet_config_t *config, const uint8_t *client_private_key,
-    const uint8_t *server_public_key, rnet_runtime_t *out) {
-  rnet_client_security_t security = {0};
-  security.struct_size = sizeof(security);
-  security.abi_version = RNET_ABI_VERSION;
-  security.local_private_key.ptr = client_private_key;
-  security.local_private_key.len = 32;
-  security.expected_server_public_key.ptr = server_public_key;
-  security.expected_server_public_key.len = 32;
-  return rnet_runtime_create_v2(config, &security, out);
-}
-
-static inline int32_t rnet_go_runtime_create_v3(
-    const rnet_config_v3_t *config, const uint8_t *client_private_key,
-    const uint8_t *server_public_key, rnet_runtime_t *out) {
-  rnet_client_security_t security = {0};
-  security.struct_size = sizeof(security);
-  security.abi_version = RNET_ABI_VERSION;
-  security.local_private_key.ptr = client_private_key;
-  security.local_private_key.len = 32;
-  security.expected_server_public_key.ptr = server_public_key;
-  security.expected_server_public_key.len = 32;
-  return rnet_runtime_create_v3(config, &security, out);
-}
-
-static inline int32_t rnet_go_runtime_create_v4(
-    const rnet_config_v4_t *config, const uint8_t *client_private_key,
-    const uint8_t *server_public_key, rnet_runtime_t *out) {
-  rnet_client_security_t security = {0};
-  security.struct_size = sizeof(security);
-  security.abi_version = RNET_ABI_VERSION;
-  security.local_private_key.ptr = client_private_key;
-  security.local_private_key.len = 32;
-  security.expected_server_public_key.ptr = server_public_key;
-  security.expected_server_public_key.len = 32;
-  return rnet_runtime_create_v4(config, &security, out);
-}
-
-static inline int32_t rnet_go_runtime_create_v4_full(
-    const rnet_config_v4_t *config, const uint8_t *client_private_key,
     const uint8_t *server_public_key, uintptr_t logger_handle,
     uint32_t min_log_level, rnet_runtime_t *out) {
-  rnet_config_v4_t configured = *config;
-  rnet_logger_v2_t logger = {0};
+  rnet_config_t configured = *config;
+  rnet_logger_t logger = {0};
   if (logger_handle != 0) {
     logger.struct_size = sizeof(logger);
     logger.abi_version = RNET_ABI_VERSION;
-    logger.log = rnet_go_log_v2_shim;
+    logger.log = rnet_go_log_shim;
     logger.user_data = (void *)logger_handle;
     logger.min_level = min_log_level;
-    configured.logger_v2 = &logger;
+    configured.logger = &logger;
   }
   if (client_private_key == NULL || server_public_key == NULL) {
-    return rnet_runtime_create_v4(&configured, NULL, out);
+    return rnet_runtime_create(&configured, NULL, out);
   }
   rnet_client_security_t security = {0};
   security.struct_size = sizeof(security);
@@ -261,41 +227,14 @@ static inline int32_t rnet_go_runtime_create_v4_full(
   security.local_private_key.len = 32;
   security.expected_server_public_key.ptr = server_public_key;
   security.expected_server_public_key.len = 32;
-  return rnet_runtime_create_v4(&configured, &security, out);
+  return rnet_runtime_create(&configured, &security, out);
 }
 
-static inline int32_t rnet_go_runtime_create_v5_full(
-    const rnet_config_v5_t *config, const uint8_t *client_private_key,
-    const uint8_t *server_public_key, uintptr_t logger_handle,
-    uint32_t min_log_level, rnet_runtime_t *out) {
-  rnet_config_v5_t configured = *config;
-  rnet_logger_v2_t logger = {0};
-  if (logger_handle != 0) {
-    logger.struct_size = sizeof(logger);
-    logger.abi_version = RNET_ABI_VERSION;
-    logger.log = rnet_go_log_v2_shim;
-    logger.user_data = (void *)logger_handle;
-    logger.min_level = min_log_level;
-    configured.logger_v2 = &logger;
-  }
-  if (client_private_key == NULL || server_public_key == NULL) {
-    return rnet_runtime_create_v5(&configured, NULL, out);
-  }
-  rnet_client_security_t security = {0};
-  security.struct_size = sizeof(security);
-  security.abi_version = RNET_ABI_VERSION;
-  security.local_private_key.ptr = client_private_key;
-  security.local_private_key.len = 32;
-  security.expected_server_public_key.ptr = server_public_key;
-  security.expected_server_public_key.len = 32;
-  return rnet_runtime_create_v5(&configured, &security, out);
-}
-
-static inline int32_t rnet_go_server_open_v2(
+static inline int32_t rnet_go_server_listen(
     rnet_runtime_t runtime, uint32_t transport, uint32_t initial_security,
     const uint8_t *host, size_t host_len, uint16_t port,
     const uint8_t *private_key, rnet_endpoint_t *out) {
-  rnet_server_config_v2_t config = {0};
+  rnet_server_config_t config = {0};
   config.struct_size = sizeof(config);
   config.abi_version = RNET_ABI_VERSION;
   config.transport = transport;
@@ -305,14 +244,14 @@ static inline int32_t rnet_go_server_open_v2(
   config.bind_port = port;
   config.local_private_key.ptr = private_key;
   config.local_private_key.len = 32;
-  return rnet_server_open_v2(runtime, &config, out);
+  return rnet_server_listen(runtime, &config, out);
 }
 
-static inline int32_t rnet_go_client_connect_v2(
+static inline int32_t rnet_go_client_connect(
     rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
     size_t host_len, uint16_t port, const uint8_t *payload,
     size_t payload_len, rnet_endpoint_t *out) {
-  rnet_client_config_v2_t config = {0};
+  rnet_client_config_t config = {0};
   config.struct_size = sizeof(config);
   config.abi_version = RNET_ABI_VERSION;
   config.transport = transport;
@@ -321,7 +260,7 @@ static inline int32_t rnet_go_client_connect_v2(
   config.remote_port = port;
   config.join_payload.ptr = payload;
   config.join_payload.len = payload_len;
-  return rnet_client_connect_v2(runtime, &config, out);
+  return rnet_client_connect(runtime, &config, out);
 }
 
 static inline int32_t rnet_go_endpoint_open(
@@ -344,31 +283,24 @@ static inline int32_t rnet_go_endpoint_open(
 }
 
 static inline int32_t rnet_go_send(
-    rnet_runtime_t runtime, rnet_session_t session, uint32_t message_type,
+    rnet_runtime_t runtime, rnet_session_t session,
     const uint8_t *payload, size_t payload_len) {
   rnet_slice_t slice = {payload, payload_len};
-  return rnet_session_send(runtime, session, message_type, slice);
+  return rnet_session_send(runtime, session, slice);
 }
 
 static inline int32_t rnet_go_send_ex(
-    rnet_runtime_t runtime, rnet_session_t session, uint32_t message_type,
+    rnet_runtime_t runtime, rnet_session_t session,
     const uint8_t *payload, size_t payload_len, uint64_t correlation_id) {
   rnet_slice_t slice = {payload, payload_len};
   rnet_send_options_t options = {0};
   options.struct_size = sizeof(options);
   options.abi_version = RNET_ABI_VERSION;
   options.correlation_id = correlation_id;
-  return rnet_session_send_ex(runtime, session, message_type, slice, &options);
+  return rnet_session_send_ex(runtime, session, slice, &options);
 }
 
-static inline int32_t rnet_go_send_legacy(
-    rnet_runtime_t runtime, rnet_session_t session, uint32_t message_type,
-    uint32_t stream_id, const uint8_t *payload, size_t payload_len,
-    uint64_t request_id) {
-  rnet_slice_t slice = {payload, payload_len};
-  return rnet_send(runtime, session, message_type, stream_id, slice,
-                   request_id);
-}
+
 
 static inline int32_t rnet_go_keypair_from_private(
     const uint8_t *private_key, size_t private_key_len, uint8_t *public_key) {

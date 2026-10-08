@@ -16,13 +16,13 @@ int main() {
   std::array<uint8_t, 32> server_public_key;
   std::copy(server.keypair.public_key(), server.keypair.public_key() + 32,
             server_public_key.begin());
-  rnet_config_v5_t network_config{};
-  rnet::check(rnet_config_v5_init(&network_config));
+  rnet_config_t network_config{};
+  rnet::check(rnet_config_init(&network_config));
   network_config.max_endpoints = 4;
   rnet_game_config_t game_config{};
   rnet::check(rnet_game_config_init(&game_config));
   game_config.network_config = &network_config;
-  rnet_logger_v2_t logger{};
+  rnet_logger_t logger{};
   logger.struct_size = sizeof(logger);
   logger.abi_version = RNET_ABI_VERSION;
   logger.log = game_log_smoke;

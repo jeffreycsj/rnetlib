@@ -1,19 +1,17 @@
 use rnet::{
     rnet_game_auth_decide, rnet_game_buffer_release, rnet_game_client_connect,
     rnet_game_client_resume_connect, rnet_game_clock_micros, rnet_game_clock_sync_snapshot,
-    rnet_game_config_init, rnet_game_config_v2_init, rnet_game_endpoint_local_port,
-    rnet_game_issue_resume_ticket, rnet_game_metrics_snapshot, rnet_game_network_quality,
-    rnet_game_poll_events, rnet_game_poll_events_v2, rnet_game_profile_defaults,
-    rnet_game_prometheus_snapshot, rnet_game_range_buffer_snapshot,
-    rnet_game_realtime_queue_snapshot, rnet_game_runtime_create, rnet_game_runtime_create_logged,
-    rnet_game_runtime_create_v2, rnet_game_runtime_destroy, rnet_game_runtime_stop,
-    rnet_game_scheduled_queue_snapshot, rnet_game_send, rnet_game_send_ex, rnet_game_send_latest,
-    rnet_game_server_listen, rnet_game_session_close, rnet_runtime_create_v5, rnet_runtime_destroy,
-    rnet_runtime_stop, RnetClientSecurity, RnetConfigV5, RnetGameBuffer, RnetGameClientConfig,
-    RnetGameClockSync, RnetGameConfig, RnetGameConfigV2, RnetGameEvent, RnetGameEventV2,
-    RnetGameMetrics, RnetGameQuality, RnetGameRangeBuffer, RnetGameRealtimeQueue,
-    RnetGameScheduledQueue, RnetGameSendOptions, RnetGameServerConfig, RnetLoggerV2, RnetSlice,
-    RNET_ABI_VERSION, RNET_E_HANDSHAKE_REQUIRED, RNET_E_INVALID_ARGUMENT, RNET_E_INVALID_HANDLE,
+    rnet_game_config_init, rnet_game_endpoint_local_port, rnet_game_issue_resume_ticket,
+    rnet_game_metrics_snapshot, rnet_game_network_quality, rnet_game_poll_events,
+    rnet_game_profile_defaults, rnet_game_prometheus_snapshot, rnet_game_range_buffer_snapshot,
+    rnet_game_realtime_queue_snapshot, rnet_game_runtime_create, rnet_game_runtime_destroy,
+    rnet_game_runtime_stop, rnet_game_scheduled_queue_snapshot, rnet_game_send, rnet_game_send_ex,
+    rnet_game_send_latest, rnet_game_server_listen, rnet_game_session_close, rnet_runtime_create,
+    rnet_runtime_destroy, rnet_runtime_stop, RnetClientSecurity, RnetConfig, RnetGameBuffer,
+    RnetGameClientConfig, RnetGameClockSync, RnetGameConfig, RnetGameEvent, RnetGameMetrics,
+    RnetGameQuality, RnetGameRangeBuffer, RnetGameRealtimeQueue, RnetGameScheduledQueue,
+    RnetGameSendOptions, RnetGameServerConfig, RnetLogger, RnetSlice, RNET_ABI_VERSION,
+    RNET_E_HANDSHAKE_REQUIRED, RNET_E_INVALID_ARGUMENT, RNET_E_INVALID_HANDLE,
     RNET_E_INVALID_STATE, RNET_E_WOULD_BLOCK, RNET_GAME_AUTH_REQUEST, RNET_GAME_MESSAGE,
     RNET_GAME_PRIORITY_HIGH, RNET_GAME_PROFILE_REALTIME, RNET_GAME_PROFILE_RELIABLE_REALTIME,
     RNET_GAME_PROFILE_SESSION, RNET_GAME_RESUME_REQUEST, RNET_GAME_RESUME_TICKET,
@@ -66,14 +64,14 @@ fn game_profiles_return_stable_transport_and_encryption_defaults() {
 }
 
 #[test]
-fn game_config_v2_applies_bounded_scheduler_limits_without_changing_v1() {
-    let mut config = RnetGameConfigV2::default();
-    assert_eq!(unsafe { rnet_game_config_v2_init(&mut config) }, RNET_OK);
+fn game_config_applies_bounded_scheduler_limits() {
+    let mut config = RnetGameConfig::default();
+    assert_eq!(unsafe { rnet_game_config_init(&mut config) }, RNET_OK);
     config.scheduled_max_queued_bytes = 1024;
     config.scheduled_max_session_queued_bytes = 2048;
     let mut runtime = 0;
     assert_eq!(
-        unsafe { rnet_game_runtime_create_v2(&config, std::ptr::null(), &mut runtime) },
+        unsafe { rnet_game_runtime_create(&config, std::ptr::null(), &mut runtime) },
         RNET_E_INVALID_ARGUMENT
     );
     assert_eq!(runtime, 0);
@@ -82,7 +80,7 @@ fn game_config_v2_applies_bounded_scheduler_limits_without_changing_v1() {
     config.scheduled_max_queued_messages = 8;
     config.scheduled_flush_batch = 2;
     assert_eq!(
-        unsafe { rnet_game_runtime_create_v2(&config, std::ptr::null(), &mut runtime) },
+        unsafe { rnet_game_runtime_create(&config, std::ptr::null(), &mut runtime) },
         RNET_OK
     );
     assert_ne!(runtime, 0);
@@ -95,7 +93,7 @@ fn game_config_v2_applies_bounded_scheduler_limits_without_changing_v1() {
 }
 
 #[test]
-fn range_game_c_abi_selects_version_without_changing_v3_layout() {
+fn range_game_c_abi_selects_highest_common_business_version() {
     use rnet::{
         rnet_game_client_connect_range, rnet_game_selected_protocol_version,
         rnet_game_server_listen_range, rnet_game_transport_latest_replacements,
@@ -280,8 +278,8 @@ fn game_logger_callback_can_query_metrics_but_cannot_stop_or_destroy_runtime() {
     GAME_LOG_CALLBACK_DESTROY.store(i32::MAX, Ordering::Release);
     GAME_LOG_CALLBACK_METRICS.store(i32::MAX, Ordering::Release);
     GAME_LOG_RECORDS.store(0, Ordering::Release);
-    let logger = RnetLoggerV2 {
-        struct_size: size_of::<RnetLoggerV2>() as u32,
+    let logger = RnetLogger {
+        struct_size: size_of::<RnetLogger>() as u32,
         abi_version: RNET_ABI_VERSION,
         log: Some(game_log_callback),
         user_data: std::ptr::null_mut(),
@@ -290,10 +288,12 @@ fn game_logger_callback_can_query_metrics_but_cannot_stop_or_destroy_runtime() {
     let mut runtime = 0;
     assert_eq!(
         unsafe {
-            rnet_game_runtime_create_logged(
-                &RnetGameConfig::default(),
+            rnet_game_runtime_create(
+                &RnetGameConfig {
+                    logger: &logger,
+                    ..RnetGameConfig::default()
+                },
                 std::ptr::null(),
-                &logger,
                 &mut runtime,
             )
         },
@@ -341,21 +341,19 @@ fn game_logger_callback_can_query_metrics_but_cannot_stop_or_destroy_runtime() {
 }
 
 #[test]
-fn game_logged_create_rejects_missing_or_malformed_logger() {
+fn game_create_accepts_absent_logger_and_rejects_malformed_logger() {
     let mut runtime = 0;
     assert_eq!(
         unsafe {
-            rnet_game_runtime_create_logged(
-                &RnetGameConfig::default(),
-                std::ptr::null(),
-                std::ptr::null(),
-                &mut runtime,
-            )
+            rnet_game_runtime_create(&RnetGameConfig::default(), std::ptr::null(), &mut runtime)
         },
-        RNET_E_INVALID_ARGUMENT
+        RNET_OK
     );
-    let logger = RnetLoggerV2 {
-        struct_size: size_of::<RnetLoggerV2>() as u32,
+    assert_eq!(rnet_game_runtime_stop(runtime, 0), RNET_OK);
+    assert_eq!(rnet_game_runtime_destroy(runtime), RNET_OK);
+    runtime = 0;
+    let logger = RnetLogger {
+        struct_size: size_of::<RnetLogger>() as u32,
         abi_version: RNET_ABI_VERSION,
         log: None,
         user_data: std::ptr::null_mut(),
@@ -363,10 +361,12 @@ fn game_logged_create_rejects_missing_or_malformed_logger() {
     };
     assert_eq!(
         unsafe {
-            rnet_game_runtime_create_logged(
-                &RnetGameConfig::default(),
+            rnet_game_runtime_create(
+                &RnetGameConfig {
+                    logger: &logger,
+                    ..RnetGameConfig::default()
+                },
                 std::ptr::null(),
-                &logger,
                 &mut runtime,
             )
         },
@@ -386,9 +386,7 @@ fn game_and_transport_runtime_handles_are_not_interchangeable() {
     );
     let mut transport = 0;
     assert_eq!(
-        unsafe {
-            rnet_runtime_create_v5(&RnetConfigV5::default(), std::ptr::null(), &mut transport)
-        },
+        unsafe { rnet_runtime_create(&RnetConfig::default(), std::ptr::null(), &mut transport) },
         RNET_OK
     );
     assert_eq!(rnet_game_runtime_stop(transport, 0), RNET_E_INVALID_HANDLE);
@@ -402,9 +400,9 @@ fn game_and_transport_runtime_handles_are_not_interchangeable() {
 
 #[test]
 fn game_runtime_accepts_production_network_capacity_tuning() {
-    let network = RnetConfigV5 {
+    let network = RnetConfig {
         max_endpoints: 1,
-        ..RnetConfigV5::default()
+        ..RnetConfig::default()
     };
     let mut rejected = network;
     rejected.allow_legacy_unauthenticated_endpoints = 1;
@@ -615,28 +613,28 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
     let advanced_deadline = Instant::now() + Duration::from_secs(2);
     let mut advanced_received = false;
     while Instant::now() < advanced_deadline && !advanced_received {
-        let mut events = [RnetGameEventV2::default(); 8];
+        let mut events = [RnetGameEvent::default(); 8];
         let mut count = 0;
         assert_eq!(
             unsafe {
-                rnet_game_poll_events_v2(runtime, events.as_mut_ptr(), events.len(), 10, &mut count)
+                rnet_game_poll_events(runtime, events.as_mut_ptr(), events.len(), 10, &mut count)
             },
             RNET_OK
         );
         for event in events.iter().take(count) {
-            if event.event.event_type == RNET_GAME_MESSAGE {
+            if event.event_type == RNET_GAME_MESSAGE {
                 assert_eq!(event.correlation_id, 0xCAFE_BABE);
-                assert_eq!(event.event.has_sequence, 1);
-                assert_eq!(event.event.sequence, 77);
-                assert_eq!(event.event.has_tick, 1);
-                assert_eq!(event.event.tick, 88);
+                assert_eq!(event.has_sequence, 1);
+                assert_eq!(event.sequence, 77);
+                assert_eq!(event.has_tick, 1);
+                assert_eq!(event.tick, 88);
                 assert_eq!(
-                    unsafe { std::slice::from_raw_parts(event.event.data, event.event.data_len) },
+                    unsafe { std::slice::from_raw_parts(event.data, event.data_len) },
                     b"advanced"
                 );
                 advanced_received = true;
             }
-            for token in [event.event.buffer_token, event.event.aux_buffer_token] {
+            for token in [event.buffer_token, event.aux_buffer_token] {
                 if token != 0 {
                     assert_eq!(rnet_game_buffer_release(runtime, token), RNET_OK);
                 }

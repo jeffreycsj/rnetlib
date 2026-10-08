@@ -43,7 +43,7 @@ for event in runtime.poll_events(32, std::time::Duration::from_millis(50)) {
     match event.event_type {
         EventType::AuthRequest => runtime.auth_decide(event.session, true)?,
         EventType::SessionOpened if event.endpoint == client => {
-            runtime.send(event.session, 1001, b"hello")?;
+            runtime.send_payload(event.session, b"hello")?;
         }
         _ => {}
     }
@@ -64,9 +64,11 @@ active mode, and committed epoch.
 
 ## C
 
+Before calling any initializer, require `rnet_abi_version() == RNET_ABI_VERSION`; do not mix headers, SDKs or native libraries from different builds. Check every returned status in production.
+
 ```c
-rnet_config_v5_t config;
-rnet_config_v5_init(&config);
+rnet_config_t config;
+rnet_config_init(&config);
 
 rnet_client_security_t trust = {0};
 trust.struct_size = sizeof(trust);
@@ -75,9 +77,9 @@ trust.local_private_key = (rnet_slice_t){client_private, 32};
 trust.expected_server_public_key = (rnet_slice_t){server_public, 32};
 
 rnet_runtime_t runtime = 0;
-rnet_runtime_create_v5(&config, &trust, &runtime);
+rnet_runtime_create(&config, &trust, &runtime);
 
-rnet_server_config_v2_t server = {0};
+rnet_server_config_t server = {0};
 server.struct_size = sizeof(server);
 server.abi_version = RNET_ABI_VERSION;
 server.transport = RNET_TRANSPORT_UDP;
@@ -85,16 +87,16 @@ server.initial_security = RNET_SECURITY_ENCRYPTED;
 server.bind_host = (rnet_slice_t){(const uint8_t *)"127.0.0.1", 9};
 server.bind_port = 7000;
 server.local_private_key = (rnet_slice_t){server_private, 32};
-rnet_server_open_v2(runtime, &server, &listener);
+rnet_server_listen(runtime, &server, &listener);
 
-rnet_client_config_v2_t client = {0};
+rnet_client_config_t client = {0};
 client.struct_size = sizeof(client);
 client.abi_version = RNET_ABI_VERSION;
 client.transport = RNET_TRANSPORT_UDP;
 client.remote_host = (rnet_slice_t){(const uint8_t *)"game.example.com", 16};
 client.remote_port = 7000;
 client.join_payload = (rnet_slice_t){ticket, ticket_len};
-rnet_client_connect_v2(runtime, &client, &client_endpoint);
+rnet_client_connect(runtime, &client, &client_endpoint);
 ```
 
 Alternatively set `trust.verify_server` to a thread-safe callback. Its function and `user_data` must remain valid until `rnet_runtime_destroy` returns. Poll `RNET_EVENT_AUTH_REQUEST`, validate `client_public_key[32] || join_payload`, and call `rnet_session_auth_decide`. Release every nonzero event `buffer_token` exactly once.
@@ -114,8 +116,8 @@ std::array<uint8_t, 32> expected;
 std::copy(server.keypair.public_key(), server.keypair.public_key() + 32,
           expected.begin());
 rnet::Keypair client_key;
-rnet_config_v5_t config = {};
-rnet::check(rnet_config_v5_init(&config));
+rnet_config_t config = {};
+rnet::check(rnet_config_init(&config));
 rnet::Runtime runtime(config, client_key, expected);
 
 rnet_endpoint_t listener = runtime.listen(server);
@@ -163,7 +165,7 @@ Handle `EventAuthRequest` with `AuthDecide`, then call `Send`. Use `SetSecurity`
 Rust deployments can tune `max_sessions_per_endpoint`, `handshake_timeout`,
 `datagram_idle_timeout`, event capacity, write capacity, payload limits, worker threads, and KCP
 MTU through `RuntimeConfig`. TCP defaults to `TCP_NODELAY`; optional send/receive buffer requests are
-available in Rust `RuntimeConfig`, C/C++ `rnet_config_v5_t`, and Go `Config`. Runtime-wide endpoint and pending-handshake limits complement per-listener capacity so unauthenticated traffic cannot
+available in Rust `RuntimeConfig`, C/C++ `rnet_config_t`, and Go `Config`. Runtime-wide endpoint and pending-handshake limits complement per-listener capacity so unauthenticated traffic cannot
 bypass admission control. Size queues from an explicit memory budget; increasing every limit is not
 a substitute for backpressure in the application.
 

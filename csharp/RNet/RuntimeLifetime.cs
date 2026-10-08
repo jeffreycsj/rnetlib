@@ -47,12 +47,12 @@ internal sealed unsafe class RuntimeOwner : SafeHandleZeroOrMinusOneIsInvalid {
         return Cleanup(runtime, logContext);
     }
     private static bool Cleanup(ulong runtime, nint context) {
-        Native.EventV2* events = stackalloc Native.EventV2[64];
+        Native.Event* events = stackalloc Native.Event[64];
         // No caller can enter once SafeHandle is closed. Queue capacity, rather than time, bounds
         // the remaining work. WOULD_BLOCK means the final stopped event needs queue space.
         int status;
         while ((status = Native.rnet_game_runtime_stop(runtime, 0)) == -4) {
-            int polled = Native.rnet_game_poll_events_v2(runtime, events, 64, 0, out var count);
+            int polled = Native.rnet_game_poll_events(runtime, events, 64, 0, out var count);
             ReleaseBuffers(runtime, events, count);
             if (polled != 0) return false; // retain callback root if native teardown did not complete
         }
@@ -60,10 +60,10 @@ internal sealed unsafe class RuntimeOwner : SafeHandleZeroOrMinusOneIsInvalid {
         if (context != 0) GCHandle.FromIntPtr(context).Free();
         return true;
     }
-    internal static void ReleaseBuffers(ulong runtime, Native.EventV2* events, nuint count) {
+    internal static void ReleaseBuffers(ulong runtime, Native.Event* events, nuint count) {
         for (nuint i = 0; i < count; i++) {
-            if (events[i].Base.Token != 0) Native.rnet_game_buffer_release(runtime, events[i].Base.Token);
-            if (events[i].Base.AuxToken != 0) Native.rnet_game_buffer_release(runtime, events[i].Base.AuxToken);
+            if (events[i].Token != 0) Native.rnet_game_buffer_release(runtime, events[i].Token);
+            if (events[i].AuxToken != 0) Native.rnet_game_buffer_release(runtime, events[i].AuxToken);
         }
     }
 }

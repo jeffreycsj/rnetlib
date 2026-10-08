@@ -31,31 +31,23 @@ struct ClientOptions {
 class Runtime {
  public:
   Runtime() {
-    rnet_config_v5_t config{};
-    check(rnet_config_v5_init(&config));
-    check(rnet_runtime_create_v5(&config, nullptr, &handle_));
-  }
-
-  explicit Runtime(const rnet_config_v5_t &config) {
-    check(rnet_runtime_create_v5(&config, nullptr, &handle_));
-  }
-
-  explicit Runtime(const rnet_config_v4_t &config) {
-    check(rnet_runtime_create_v4(&config, nullptr, &handle_));
-  }
-
-  explicit Runtime(const rnet_config_v3_t &config) {
-    check(rnet_runtime_create_v3(&config, nullptr, &handle_));
+    check_abi();
+    rnet_config_t config{};
+    check(rnet_config_init(&config));
+    check(rnet_runtime_create(&config, nullptr, &handle_));
   }
 
   explicit Runtime(const rnet_config_t &config) {
-    check(rnet_runtime_create(&config, &handle_));
+    check_abi();
+    check(rnet_runtime_create(&config, nullptr, &handle_));
   }
 
   /* Client identity and trust are runtime-scoped; connect() never selects a
    * plaintext/encrypted branch. */
+
   Runtime(const rnet_config_t &config, const Keypair &client_key,
           const std::array<uint8_t, 32> &expected_server_key) {
+    check_abi();
     rnet_client_security_t security = {};
     security.struct_size = sizeof(security);
     security.abi_version = RNET_ABI_VERSION;
@@ -63,43 +55,7 @@ class Runtime {
     security.local_private_key.len = 32;
     security.expected_server_public_key.ptr = expected_server_key.data();
     security.expected_server_public_key.len = expected_server_key.size();
-    check(rnet_runtime_create_v2(&config, &security, &handle_));
-  }
-
-  Runtime(const rnet_config_v3_t &config, const Keypair &client_key,
-          const std::array<uint8_t, 32> &expected_server_key) {
-    rnet_client_security_t security = {};
-    security.struct_size = sizeof(security);
-    security.abi_version = RNET_ABI_VERSION;
-    security.local_private_key.ptr = client_key.private_key();
-    security.local_private_key.len = 32;
-    security.expected_server_public_key.ptr = expected_server_key.data();
-    security.expected_server_public_key.len = expected_server_key.size();
-    check(rnet_runtime_create_v3(&config, &security, &handle_));
-  }
-
-  Runtime(const rnet_config_v4_t &config, const Keypair &client_key,
-          const std::array<uint8_t, 32> &expected_server_key) {
-    rnet_client_security_t security = {};
-    security.struct_size = sizeof(security);
-    security.abi_version = RNET_ABI_VERSION;
-    security.local_private_key.ptr = client_key.private_key();
-    security.local_private_key.len = 32;
-    security.expected_server_public_key.ptr = expected_server_key.data();
-    security.expected_server_public_key.len = expected_server_key.size();
-    check(rnet_runtime_create_v4(&config, &security, &handle_));
-  }
-
-  Runtime(const rnet_config_v5_t &config, const Keypair &client_key,
-          const std::array<uint8_t, 32> &expected_server_key) {
-    rnet_client_security_t security = {};
-    security.struct_size = sizeof(security);
-    security.abi_version = RNET_ABI_VERSION;
-    security.local_private_key.ptr = client_key.private_key();
-    security.local_private_key.len = 32;
-    security.expected_server_public_key.ptr = expected_server_key.data();
-    security.expected_server_public_key.len = expected_server_key.size();
-    check(rnet_runtime_create_v5(&config, &security, &handle_));
+    check(rnet_runtime_create(&config, &security, &handle_));
   }
 
   Runtime(const Runtime &) = delete;
@@ -121,7 +77,7 @@ class Runtime {
   ~Runtime() { reset(); }
 
   rnet_endpoint_t listen(const ServerOptions &options) {
-    rnet_server_config_v2_t config = {};
+    rnet_server_config_t config = {};
     config.struct_size = sizeof(config);
     config.abi_version = RNET_ABI_VERSION;
     config.transport = static_cast<uint32_t>(options.transport);
@@ -132,12 +88,12 @@ class Runtime {
     config.local_private_key.ptr = options.keypair.private_key();
     config.local_private_key.len = 32;
     rnet_endpoint_t endpoint = 0;
-    check(rnet_server_open_v2(handle_, &config, &endpoint));
+    check(rnet_server_listen(handle_, &config, &endpoint));
     return endpoint;
   }
 
   rnet_endpoint_t connect(const ClientOptions &options) {
-    rnet_client_config_v2_t config = {};
+    rnet_client_config_t config = {};
     config.struct_size = sizeof(config);
     config.abi_version = RNET_ABI_VERSION;
     config.transport = static_cast<uint32_t>(options.transport);
@@ -148,7 +104,7 @@ class Runtime {
         reinterpret_cast<const uint8_t *>(options.join_payload.data());
     config.join_payload.len = options.join_payload.size();
     rnet_endpoint_t endpoint = 0;
-    check(rnet_client_connect_v2(handle_, &config, &endpoint));
+    check(rnet_client_connect(handle_, &config, &endpoint));
     return endpoint;
   }
 
@@ -273,20 +229,20 @@ class Runtime {
     return port;
   }
 
-  void send(rnet_session_t session, uint32_t msg_type,
+  void send(rnet_session_t session,
             const std::string &payload) const {
-    send(session, msg_type, payload.data(), payload.size());
+    send(session, payload.data(), payload.size());
   }
 
-  void send(rnet_session_t session, uint32_t msg_type, const void *payload,
+  void send(rnet_session_t session, const void *payload,
             size_t payload_size) const {
     rnet_slice_t bytes;
     bytes.ptr = static_cast<const uint8_t *>(payload);
     bytes.len = payload_size;
-    check(rnet_session_send(handle_, session, msg_type, bytes));
+    check(rnet_session_send(handle_, session, bytes));
   }
 
-  void send_with_options(rnet_session_t session, uint32_t msg_type,
+  void send_with_options(rnet_session_t session,
                          const std::string &payload,
                          const SendOptions &options) const {
     rnet_send_options_t raw = {};
@@ -295,21 +251,15 @@ class Runtime {
     raw.correlation_id = options.correlation_id;
     rnet_slice_t bytes = {
         reinterpret_cast<const uint8_t *>(payload.data()), payload.size()};
-    check(rnet_session_send_ex(handle_, session, msg_type, bytes, &raw));
+    check(rnet_session_send_ex(handle_, session, bytes, &raw));
   }
 
-  void send_legacy(rnet_session_t session, uint32_t msg_type,
-                   uint32_t stream_id, uint64_t request_id,
-                   const std::string &payload) const {
-    rnet_slice_t bytes = {
-        reinterpret_cast<const uint8_t *>(payload.data()), payload.size()};
-    check(rnet_send(handle_, session, msg_type, stream_id, bytes, request_id));
-  }
+
 
   std::vector<Event> poll(size_t capacity, uint32_t timeout_ms) const {
     std::vector<rnet_event_t> raw(capacity);
     size_t count = 0;
-    check(rnet_poll_events_ex(handle_, raw.empty() ? NULL : raw.data(),
+    check(rnet_poll_events(handle_, raw.empty() ? NULL : raw.data(),
                               raw.size(), timeout_ms, &count));
     std::vector<Event> result;
     result.reserve(count);
@@ -319,9 +269,7 @@ class Runtime {
       event.type = source.event_type;
       event.endpoint = source.endpoint;
       event.session = source.session;
-      event.msg_type = source.msg_type;
-      event.stream_id = source.stream_id;
-      event.request_id = source.request_id;
+      event.correlation_id = source.correlation_id;
       event.status = source.status;
       if (source.data_len != 0) {
         event.data.assign(source.data, source.data + source.data_len);
@@ -344,8 +292,8 @@ class Runtime {
   }
 
   Metrics metrics() const {
-    rnet_metrics_v3_t raw = {};
-    check(rnet_metrics_snapshot_v3(handle_, &raw));
+    rnet_metrics_t raw = {};
+    check(rnet_metrics_snapshot(handle_, &raw));
     Metrics result;
     result.frames_received = raw.frames_received;
     result.frames_sent = raw.frames_sent;
@@ -377,10 +325,10 @@ class Runtime {
 
   std::vector<LatencyMetric> latency_metrics(bool drain_window = false) const {
     size_t count = 0;
-    check(rnet_latency_snapshot_v2(handle_, NULL, 0, &count,
+    check(rnet_latency_snapshot(handle_, NULL, 0, &count,
                                    drain_window ? 1U : 0U));
-    std::vector<rnet_latency_metric_v2_t> raw(count);
-    check(rnet_latency_snapshot_v2(handle_, raw.empty() ? NULL : raw.data(),
+    std::vector<rnet_latency_metric_t> raw(count);
+    check(rnet_latency_snapshot(handle_, raw.empty() ? NULL : raw.data(),
                                    raw.size(), &count,
                                    drain_window ? 1U : 0U));
     std::vector<LatencyMetric> result;

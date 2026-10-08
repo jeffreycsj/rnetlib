@@ -1,4 +1,4 @@
-//! Additive game-facing ABI layouts. The existing transport ABI remains frozen.
+//! Current game-facing ABI layouts.
 
 use crate::abi::RNET_ABI_VERSION;
 use rnet_game::{
@@ -115,6 +115,7 @@ pub struct RnetGameEvent {
     pub sequence: u32,
     pub has_tick: u32,
     pub tick: u32,
+    pub correlation_id: u64,
 }
 
 impl Default for RnetGameEvent {
@@ -147,17 +148,9 @@ impl Default for RnetGameEvent {
             sequence: 0,
             has_tick: 0,
             tick: 0,
+            correlation_id: 0,
         }
     }
-}
-
-/// Additive event layout for advanced message metadata. Keeping the v1 event as a nested prefix
-/// prevents old callers from receiving writes with a larger stride than they allocated.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RnetGameEventV2 {
-    pub event: RnetGameEvent,
-    pub correlation_id: u64,
 }
 
 /// Advanced game send metadata. Message type and transport routing remain library-owned.

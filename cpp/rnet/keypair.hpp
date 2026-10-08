@@ -8,6 +8,7 @@ namespace rnet {
 class Keypair {
  public:
   Keypair() {
+    check_abi();
     raw_.struct_size = sizeof(raw_);
     raw_.abi_version = RNET_ABI_VERSION;
     check(rnet_keypair_generate(&raw_));
@@ -51,6 +52,7 @@ class Keypair {
   struct RestoreTag {};
 
   Keypair(const uint8_t *private_key, size_t private_key_size, RestoreTag) {
+    check_abi();
     if (private_key == NULL && private_key_size != 0) {
       throw std::invalid_argument("private key is null");
     }
