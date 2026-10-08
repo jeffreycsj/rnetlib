@@ -21,8 +21,8 @@ recorded in `deny.toml` or the security review.
 
 ## Runtime policy
 
-- Start new C/C++/Go deployments with config v5; Rust starts with `RuntimeConfig::production()`. Set explicit runtime-wide endpoint and pending-handshake limits instead of relying only on per-listener capacity.
-- Keep plaintext business data and legacy unauthenticated endpoints disabled unless a reviewed compatibility exception requires them.
+- Use the single current `rnet_config_t` or game configuration in C/C++/Go/C#, with SDK and native library rebuilt together. Rust `RuntimeConfig::default()` and `RuntimeConfig::production()` share secure defaults. Set explicit runtime-wide endpoint and pending-handshake limits instead of relying only on per-listener capacity.
+- Keep legacy unauthenticated endpoints disabled; they are pending removal and are not a production integration path. Plaintext business mode is a separate, explicit server policy choice that preserves authenticated setup and control traffic but removes payload confidentiality and integrity. Client configuration does not select the server's business-data mode.
 - Continuously poll every game runtime. Heartbeat scheduling and authenticated reply handling are poll-driven; a stalled game event loop cannot make progress on liveness or per-session quality.
 - `send_latest` is a best-effort pre-transport coalescing path for replaceable snapshots. Poll continuously or explicitly call `flush_realtime`; monitor admission rejection, replacement, close/backpressure drops, send failures, and queued bytes. Keep commands that require reliable delivery on ordinary `send`.
 - Ordinary and advanced game sends use the bounded fair scheduler. Tune Rust `ScheduledQueueConfig`, C `rnet_game_config_t`, C++11's configuration constructor, or Go `GameConfig.ScheduledQueue`; monitor per-priority admission/forwarding, backpressure requeues, expiry and queue-delay percentiles. An expiry is local and cannot recall socket/KCP-owned bytes.

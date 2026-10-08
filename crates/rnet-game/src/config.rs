@@ -109,6 +109,11 @@ impl GameProtocolRange {
 }
 
 /// Runtime limits and policies used by the game facade.
+/// Plaintext business traffic is an explicit policy choice, not an SDK compatibility mode.
+///
+/// ```compile_fail,E0599
+/// let _ = rnet_game::GameRuntimeConfig::compatibility();
+/// ```
 #[derive(Clone, Debug)]
 pub struct GameRuntimeConfig {
     /// Low-level capacity, timeout, socket, and security policy.
@@ -172,28 +177,15 @@ impl GameRuntimeConfig {
         self
     }
 
-    /// Explicitly permits a server to switch business records to plaintext.
+    /// Explicitly permits a local server to switch business records to plaintext.
     ///
     /// This does not enable legacy unauthenticated endpoints. Noise setup and security-control
     /// messages stay authenticated; only subsequent business payloads lose confidentiality and
     /// integrity while the server-selected plaintext mode is active.
+    /// Clients need no matching opt-in: they follow their authenticated server's mode.
     pub fn allow_plaintext_business_data(mut self, allow: bool) -> Self {
         self.network.security_policy.allow_plaintext_business_data = allow;
         self
-    }
-
-    /// Allows explicit plaintext business-data transitions for migrations and controlled tests.
-    pub fn compatibility() -> Self {
-        Self {
-            network: RuntimeConfig::default(),
-            heartbeat_interval: Duration::from_secs(5),
-            heartbeat_timeout: Duration::from_secs(15),
-            quality_policy: QualityPolicy::default(),
-            realtime_queue: RealtimeQueueConfig::default(),
-            scheduled_queue: ScheduledQueueConfig::default(),
-            resume_ticket_ttl: Duration::from_secs(30),
-            max_resume_tickets: 65_536,
-        }
     }
 }
 

@@ -2,7 +2,7 @@
 
 ## One endpoint API, three transports
 
-Servers call `listen`; clients call `connect`. Set `transport` to TCP, UDP, or KCP in the configuration. The selected transport is immutable for the endpoint and session. `send` therefore needs only a session, message type, and payload.
+Servers call `listen`; clients call `connect`. Set `transport` to TCP, UDP, or KCP in the configuration. The selected transport is immutable for the endpoint and session. `send` therefore needs only a session and opaque payload; business message types belong inside that payload.
 
 Every unified connection performs an application handshake before `SessionOpened`. Client identity and server trust belong to the runtime. The client never chooses whether a connection is plaintext or encrypted. The server selects the initial business-data mode and may later switch it; cryptographic control traffic remains authenticated in both modes.
 
@@ -50,7 +50,9 @@ for event in runtime.poll_events(32, std::time::Duration::from_millis(50)) {
 }
 ```
 
-Only a server-side session may initiate changes:
+`RuntimeConfig::default()` and `RuntimeConfig::production()` now use the same secure defaults: no legacy unauthenticated endpoints, no server-selected plaintext business data, and automatic rekey enabled. There is no `compatibility()` preset.
+
+Only a server-side session may initiate changes. To allow the plaintext transition below, explicitly set `config.security_policy.allow_plaintext_business_data = true` **before creating the server runtime**. This permits plaintext business bytes, not unauthenticated setup or controls; it is unsuitable for untrusted network paths. The client does not need this flag and automatically follows the authenticated server policy.
 
 ```rust
 runtime.set_security_mode(server_session, SecurityMode::Plaintext)?;

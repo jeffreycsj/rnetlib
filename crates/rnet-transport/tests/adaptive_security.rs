@@ -204,9 +204,10 @@ fn assert_transport_follows_server_security_changes(transport: Transport) {
     let server_key = Keypair::generate().expect("server key");
     let client_key = Keypair::generate().expect("client key");
     let client_security = ClientSecurity::pinned(client_key, server_key.public.clone());
+    let mut config = RuntimeConfig::default();
+    config.security_policy.allow_plaintext_business_data = true;
     let runtime =
-        NetworkRuntime::new_with_client_security(RuntimeConfig::default(), Some(client_security))
-            .expect("runtime");
+        NetworkRuntime::new_with_client_security(config, Some(client_security)).expect("runtime");
 
     let listener = runtime
         .listen(ServerConfig {

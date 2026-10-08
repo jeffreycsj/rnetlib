@@ -12,6 +12,7 @@
 - 单一游戏事件布局直接提供 `correlation_id`，没有嵌套旧事件前缀。C ABI 底层事件也只保留 payload 和 correlation 元数据，不公开业务类型或流编号；Rust 原始事件字段尚待 wire 阶段清理。
 - 底层发送为 `rnet_session_send(runtime, session, payload)`；带 correlation 使用 `rnet_session_send_ex(..., options)`。C++11 / Go 同步移除发送消息类型参数及 Legacy 发送方法。
 - Rust 底层同样只使用 `send(session, payload)` / `send_with_options(session, payload, options)`；删除 typed send、`send_legacy`、`send_payload` / `send_payload_with_options` 别名。传输类型在建连时固定，业务类型放入 payload，成功仅表示本地队列接受，不保证对端收到。
+- Rust `RuntimeConfig::default()` 与 `production()` 使用同一安全策略：不允许旧无认证端点、不允许本地服务器选择业务明文，自动轮换密钥开启。删除 `SecurityPolicy::compatibility()` 与 `GameRuntimeConfig::compatibility()`；业务明文通过明确的服务器策略开启，客户端仍自动跟随已认证服务器。
 
 ## 接入要求
 
@@ -57,3 +58,19 @@
 对抗性复查发现原有 correlation 断言主要集中在旧端点路径，因此补充现行加密 TCP/UDP/KCP 的空消息、含零字节/非 UTF-8 消息、`u64::MAX` correlation、默认 correlation=0，以及关闭会话/停止 runtime 后的错误回归。本次不改变排队、控制加密和 wire 编码语义。
 
 本阶段重新通过 `cargo test --offline --workspace -- --test-threads=1`、严格 Clippy、格式/结构检查及 C++11 / Go（强制重建 native 链接）/ C# 联调。测试仍在 Linux 串行、15 GiB 可用内存保护下执行；没有执行目标环境长稳，也未重新运行 ASan fuzz 或独立安全审计。
+
+## 后续阶段：安全默认值与客户端明文处理
+
+本阶段先收敛安全默认值和兼容预设，**尚未删除旧端点导出、显式 legacy 开关或执行模块**。尚待迁移的旧端点测试在测试内显式授权，不再依赖宽松默认配置；现行业务明文切换测试只开启业务明文权限，不开启旧无认证端点。
+
+默认策略的 3 个拒绝/资源回收回归及两个兼容构造器的编译拒绝测试完成 RED → GREEN；另外验证 TCP/UDP/KCP 默认服务器拒绝降级后连接仍可收发，以及独立默认客户端跟随服务器动态切换和 rekey。
+
+### 对抗性审查发现与修复
+
+| 严重度 | 位置 | 问题与处理 |
+| --- | --- | --- |
+| 高，已修复 | 游戏 poll 的错误分类 | 接收错误曾同时依赖本地 `allow_plaintext_business_data`，导致默认客户端虽已跟随服务器使用业务明文，仍会把未校验的非法 envelope 上抛为违规并关闭。现在按事件的实际完整性与业务/控制类型分类，删除 runtime 中多余的策略副本；不使用可能已切换的当前安全模式判断排队中的旧消息。 |
+
+新增三个真实 TCP/UDP/KCP v4 回归先复现默认客户端违规断线，再验证非法明文仅计数丢弃、后续合法消息仍可收取、切回加密后相同非法内容仍关闭会话。认证控制错误仍沿用关闭路径。这里只消除游戏 envelope 层的错误分类问题，不承诺明文业务的机密性、完整性或整体抗断线能力；外层 framing 和安全记录错误仍可能终止连接。
+
+最终验证：本轮 8 个新增行为测试与 2 个编译拒绝测试通过；串行 workspace 全量测试、严格 Clippy、格式/结构检查、C++11 四个示例、Go 强制重建 native 链接及 C# 三传输联调通过。构建测试继续由 15 GiB 可用内存保护器监控。未重打最终发布包，未执行新的 Go race、ASan/Miri/Loom 专项或目标环境长稳；旧端点、wire 和历史帧字段清理仍需后续完成。

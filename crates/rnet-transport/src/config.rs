@@ -8,9 +8,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Runtime-wide policy for capabilities that weaken transport security.
+/// Compatibility presets are deliberately not part of the current API.
+///
+/// ```compile_fail,E0599
+/// let _ = rnet_transport::SecurityPolicy::compatibility();
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SecurityPolicy {
-    /// Allows business records without confidentiality or integrity after authenticated setup.
+    /// Allows local server sessions to select business records without confidentiality or
+    /// integrity after authenticated setup. Clients follow the authenticated server's mode;
+    /// this is not a client-side minimum encryption requirement.
     pub allow_plaintext_business_data: bool,
     /// Allows the compatibility TCP/UDP endpoints that do not perform authentication.
     pub allow_legacy_unauthenticated_endpoints: bool,
@@ -27,15 +34,6 @@ impl SecurityPolicy {
             allow_legacy_unauthenticated_endpoints: false,
             rekey_after: Some(Duration::from_secs(60 * 60)),
             rekey_after_bytes: Some(1024 * 1024 * 1024),
-        }
-    }
-
-    pub const fn compatibility() -> Self {
-        Self {
-            allow_plaintext_business_data: true,
-            allow_legacy_unauthenticated_endpoints: true,
-            rekey_after: None,
-            rekey_after_bytes: None,
         }
     }
 }
@@ -137,7 +135,7 @@ impl Default for RuntimeConfig {
             max_event_bytes: 64 * 1024 * 1024,
             max_runtime_queued_bytes: 256 * 1024 * 1024,
             max_session_queued_bytes: 4 * 1024 * 1024,
-            security_policy: SecurityPolicy::compatibility(),
+            security_policy: SecurityPolicy::production(),
             max_endpoints: 1024,
             max_pending_handshakes: 16_384,
             max_sessions_per_endpoint: 16_384,
@@ -157,12 +155,9 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    /// Returns secure defaults for new deployments while `Default` preserves legacy behavior.
+    /// Returns the same secure policy and resource limits as `Default`.
     pub fn production() -> Self {
-        Self {
-            security_policy: SecurityPolicy::production(),
-            ..Self::default()
-        }
+        Self::default()
     }
 
     pub(crate) fn validate(&self) -> Result<()> {

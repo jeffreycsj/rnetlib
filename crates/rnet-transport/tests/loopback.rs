@@ -4,6 +4,18 @@ use std::time::{Duration, Instant};
 use rnet_core::{ErrorCode, Event, EventType};
 use rnet_transport::{EndpointConfig, NetworkRuntime, RuntimeConfig};
 
+// Keep legacy-path regression coverage until those implementations are removed. Application
+// defaults must never grant these permissions just to keep compatibility tests working.
+fn legacy_test_config() -> RuntimeConfig {
+    RuntimeConfig {
+        security_policy: rnet_transport::SecurityPolicy {
+            allow_legacy_unauthenticated_endpoints: true,
+            ..rnet_transport::SecurityPolicy::production()
+        },
+        ..RuntimeConfig::default()
+    }
+}
+
 fn test_runtime() -> NetworkRuntime {
     NetworkRuntime::new(RuntimeConfig {
         worker_threads: 2,
@@ -11,7 +23,7 @@ fn test_runtime() -> NetworkRuntime {
         write_queue_capacity: 4,
         max_body_len: 1024,
         max_datagram_size: 1200,
-        ..RuntimeConfig::default()
+        ..legacy_test_config()
     })
     .unwrap()
 }
@@ -348,7 +360,7 @@ fn send_rejects_a_frame_that_exceeds_runtime_or_session_byte_budget() {
         worker_threads: 2,
         max_runtime_queued_bytes: 28,
         max_session_queued_bytes: 28,
-        ..RuntimeConfig::default()
+        ..legacy_test_config()
     })
     .unwrap();
     let listener = runtime
@@ -394,7 +406,7 @@ fn legacy_plaintext_kcp_endpoint_is_explicitly_not_supported() {
 fn endpoint_open_reports_backpressure_when_its_event_cannot_be_queued() {
     let runtime = NetworkRuntime::new(RuntimeConfig {
         event_queue_capacity: 1,
-        ..RuntimeConfig::default()
+        ..legacy_test_config()
     })
     .unwrap();
 
@@ -418,7 +430,7 @@ fn endpoint_open_reports_backpressure_when_its_event_cannot_be_queued() {
 fn udp_never_delivers_a_new_peer_message_before_session_open() {
     let runtime = NetworkRuntime::new(RuntimeConfig {
         event_queue_capacity: 1,
-        ..RuntimeConfig::default()
+        ..legacy_test_config()
     })
     .unwrap();
     runtime.poll_events(1, Duration::ZERO);
@@ -478,7 +490,7 @@ fn udp_never_delivers_a_new_peer_message_before_session_open() {
 fn stopped_event_does_not_replace_an_older_lifecycle_event() {
     let runtime = NetworkRuntime::new(RuntimeConfig {
         event_queue_capacity: 1,
-        ..RuntimeConfig::default()
+        ..legacy_test_config()
     })
     .unwrap();
     runtime.poll_events(1, Duration::ZERO);
@@ -571,7 +583,7 @@ fn tcp_reports_port_conflict_and_remote_half_close() {
 fn compatibility_tcp_listener_enforces_session_admission_limit() {
     let runtime = NetworkRuntime::new(RuntimeConfig {
         max_sessions_per_endpoint: 1,
-        ..RuntimeConfig::default()
+        ..legacy_test_config()
     })
     .unwrap();
     let listener = runtime

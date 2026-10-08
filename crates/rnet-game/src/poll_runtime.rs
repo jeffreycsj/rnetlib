@@ -147,10 +147,11 @@ impl GameRuntime {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    let unverified_plaintext = self.allow_plaintext_business_data
-                        && is_business_message
-                        && !integrity_verified;
+                    let unverified_plaintext = is_business_message && !integrity_verified;
                     if unverified_plaintext {
+                        // The transport already enforced the authenticated server's mode. The
+                        // local server-policy opt-in says nothing about a client receive event;
+                        // trust only the integrity evidence captured when this frame arrived.
                         // An on-path sender controls both contents and rate in plaintext mode.
                         // Keep the session usable and expose only a low-cardinality counter.
                         self.protocol_metrics

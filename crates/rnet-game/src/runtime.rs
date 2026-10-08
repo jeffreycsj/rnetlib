@@ -68,7 +68,6 @@ pub struct GameRuntime {
     pub(crate) range: Mutex<RangeRuntimeState>,
     pub(crate) realtime_flush_batch: usize,
     pub(crate) scheduled_flush_batch: usize,
-    pub(crate) allow_plaintext_business_data: bool,
     pub(crate) diagnostics: GameDiagnostics,
     pub(crate) poll_guard: Mutex<()>,
 }
@@ -112,8 +111,6 @@ impl GameRuntime {
         let scheduled_flush_batch = config.scheduled_queue.flush_batch;
         let range_buffer_messages = config.network.event_queue_capacity;
         let range_buffer_bytes = config.network.max_event_bytes;
-        let allow_plaintext_business_data =
-            config.network.security_policy.allow_plaintext_business_data;
         let resume = ResumeRuntimeState::new(config.resume_ticket_ttl, config.max_resume_tickets)?;
         let network = NetworkRuntime::new_with_client_security(config.network, client_security)?;
         let clock_origin = Instant::now();
@@ -145,7 +142,6 @@ impl GameRuntime {
             )),
             realtime_flush_batch,
             scheduled_flush_batch,
-            allow_plaintext_business_data,
             diagnostics: GameDiagnostics::new(),
             poll_guard: Mutex::new(()),
         })

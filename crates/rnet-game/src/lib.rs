@@ -64,6 +64,8 @@ mod heartbeat_tests;
 #[cfg(test)]
 mod join_tests;
 #[cfg(test)]
+mod plaintext_policy_tests;
+#[cfg(test)]
 mod quality_tests;
 #[cfg(test)]
 mod realtime_tests;
