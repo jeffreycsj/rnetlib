@@ -142,12 +142,22 @@ impl GameRuntime {
             .expect("game endpoint table poisoned")
             .get(&endpoint)
             .map_or(0, |transport| *transport as u32);
-        let protocol = self
-            .server_protocols
-            .lock()
-            .expect("game protocol table poisoned")
-            .get(&endpoint)
-            .map(|protocol| (protocol.protocol_id, protocol.version));
+        // Authorization logs describe the selected version, not the listener's upper bound.
+        let protocol = match event {
+            GameEvent::AuthRequest { session, .. } | GameEvent::ResumeRequest { session, .. } => {
+                self.range
+                    .lock()
+                    .expect("range state poisoned")
+                    .sessions
+                    .get(session)
+                    .and_then(|state| {
+                        state
+                            .selected
+                            .map(|version| (state.protocol.protocol_id, version))
+                    })
+            }
+            _ => None,
+        };
         self.diagnostics.record(event, transport, protocol, detail);
     }
 

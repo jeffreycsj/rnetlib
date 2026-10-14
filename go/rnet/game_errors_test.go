@@ -27,12 +27,14 @@ func TestGameConcurrentErrorsRetainTheirNativeCause(t *testing.T) {
 			for attempt := 0; attempt < 100; attempt++ {
 				runtime.Gosched()
 				var got error
-				want := "game protocol ID and version must be positive"
+				want := "unknown transport"
 				if rangeError {
 					_, got = r.ListenRange(GameRangeServerConfig{Transport: TransportTCP, Host: "127.0.0.1", Keypair: key})
 					want = "invalid protocol range"
 				} else {
-					_, got = r.Listen(GameServerConfig{Transport: TransportTCP, Host: "127.0.0.1", Keypair: key})
+					// Exact and range versions now share validation. Use another native
+					// failure so this test still detects cross-thread cause corruption.
+					_, got = r.Listen(GameServerConfig{Transport: 0, Host: "127.0.0.1", Keypair: key})
 				}
 				if got == nil || !strings.Contains(got.Error(), want) {
 					t.Errorf("want %q, got %v", want, got)

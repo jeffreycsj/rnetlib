@@ -395,7 +395,7 @@ typedef struct rnet_game_client_config {
   uint64_t capabilities;
 } rnet_game_client_config_t;
 
-/* Explicit wire-v4 range configs. The existing exact-version structs stay wire v3. */
+/* Application version-range configs. Exact-version configs use the same wire with min=max. */
 typedef struct rnet_game_range_server_config {
   uint32_t struct_size;
   uint32_t abi_version;

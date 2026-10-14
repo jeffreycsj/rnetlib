@@ -62,6 +62,10 @@ fn credentials_are_not_in_debug_output() {
         protocol: GameProtocol::new(1, 1),
     };
     assert!(!format!("{game_host:?}").contains(&secret_debug));
+    let range_client = rnet_game::GameRangeClientConfig::from(game_client);
+    let range_host = rnet_game::GameRangeHostClientConfig::from(game_host);
+    assert!(!format!("{range_client:?}").contains(&secret_debug));
+    assert!(!format!("{range_host:?}").contains(&secret_debug));
 }
 
 #[test]

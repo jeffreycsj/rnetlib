@@ -1,7 +1,7 @@
 use rnet_core::Transport;
 use rnet_game::{
-    GameEvent, GameProtocolRange, GameRangeClientConfig, GameRangeServerConfig, GameRuntime,
-    GameRuntimeConfig,
+    GameClientConfig, GameEvent, GameProtocol, GameProtocolRange, GameRangeClientConfig,
+    GameRangeServerConfig, GameRuntime, GameRuntimeConfig, GameServerConfig,
 };
 use rnet_security::Keypair;
 use rnet_transport::ClientSecurity;
@@ -161,6 +161,15 @@ fn wire_v4_udp_and_kcp_recover_when_negotiation_packets_are_lost() {
 
 #[test]
 fn failed_v4_resume_keeps_the_old_session_usable() {
+    failed_resume_keeps_old_session(false);
+}
+
+#[test]
+fn failed_exact_resume_keeps_the_old_session_usable() {
+    failed_resume_keeps_old_session(true);
+}
+
+fn failed_resume_keeps_old_session(exact: bool) {
     let server_key = Keypair::generate().expect("server key");
     let client_key = Keypair::generate().expect("client key");
     let server_public = server_key.public.clone();
@@ -170,27 +179,39 @@ fn failed_v4_resume_keeps_the_old_session_usable() {
         ClientSecurity::pinned(client_key, server_public),
     )
     .expect("client runtime");
-    let listener = server
-        .listen_range(GameRangeServerConfig {
-            transport: Transport::Udp,
-            bind_addr: "127.0.0.1:0".parse().expect("bind address"),
-            local_key: server_key,
-            initial_encryption: true,
-            protocol: GameProtocolRange::new(0x5253_554d, 1, 3),
-        })
-        .expect("range listener");
+    let server_config = GameServerConfig {
+        transport: Transport::Udp,
+        bind_addr: "127.0.0.1:0".parse().expect("bind address"),
+        local_key: server_key,
+        initial_encryption: true,
+        protocol: GameProtocol::new(0x5253_554d, 3),
+    };
+    let listener = if exact {
+        server.listen(server_config)
+    } else {
+        let mut config = GameRangeServerConfig::from(server_config);
+        config.protocol.min_version = 1;
+        server.listen_range(config)
+    }
+    .expect("listener");
     let listener_address = server
         .endpoint_local_addr(listener)
         .expect("listener address");
-    let old_endpoint = client
-        .connect_range(GameRangeClientConfig {
-            transport: Transport::Udp,
-            bind_addr: None,
-            remote_addr: listener_address,
-            join_ticket: b"old-login".to_vec(),
-            protocol: GameProtocolRange::new(0x5253_554d, 1, 3),
-        })
-        .expect("old connection");
+    let client_config = GameClientConfig {
+        transport: Transport::Udp,
+        bind_addr: None,
+        remote_addr: listener_address,
+        join_ticket: b"old-login".to_vec(),
+        protocol: GameProtocol::new(0x5253_554d, 3),
+    };
+    let old_endpoint = if exact {
+        client.connect(client_config)
+    } else {
+        let mut config = GameRangeClientConfig::from(client_config);
+        config.protocol.min_version = 1;
+        client.connect_range(config)
+    }
+    .expect("old connection");
 
     let deadline = Instant::now() + Duration::from_secs(4);
     let mut old_server = None;
@@ -235,19 +256,21 @@ fn failed_v4_resume_keeps_the_old_session_usable() {
     };
 
     let proxy = LossyUdpProxy::start(listener_address);
-    let resumed_endpoint = client
-        .connect_range_resume(
-            GameRangeClientConfig {
-                transport: Transport::Udp,
-                bind_addr: None,
-                remote_addr: proxy.address,
-                join_ticket: b"resume-login".to_vec(),
-                protocol: GameProtocolRange::new(0x5253_554d, 1, 3),
-            },
-            old_client,
-            ticket.as_bytes(),
-        )
-        .expect("resume connection");
+    let resume_config = GameClientConfig {
+        transport: Transport::Udp,
+        bind_addr: None,
+        remote_addr: proxy.address,
+        join_ticket: b"resume-login".to_vec(),
+        protocol: GameProtocol::new(0x5253_554d, 3),
+    };
+    let resumed_endpoint = if exact {
+        client.connect_resume(resume_config, old_client, ticket.as_bytes())
+    } else {
+        let mut config = GameRangeClientConfig::from(resume_config);
+        config.protocol.min_version = 1;
+        client.connect_range_resume(config, old_client, ticket.as_bytes())
+    }
+    .expect("resume connection");
     let deadline = Instant::now() + Duration::from_secs(4);
     let mut authorized_resume = false;
     while !authorized_resume && Instant::now() < deadline {

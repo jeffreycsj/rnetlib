@@ -1,5 +1,6 @@
 use super::*;
 use crate::envelope::{encode_control, ControlKind};
+use crate::GameProtocol;
 use rnet_core::Transport;
 use rnet_security::Keypair;
 
@@ -652,18 +653,20 @@ fn transient_endpoint_error_does_not_erase_listener_protocol_gate() {
     ));
     assert_eq!(
         runtime
-            .server_protocols
+            .range
             .lock()
-            .expect("protocol table")
+            .expect("range state")
+            .server_endpoints
             .get(&endpoint),
-        Some(&GameProtocol::new(12, 1))
+        Some(&crate::GameProtocolRange::new(12, 1, 1))
     );
 
     runtime.close_endpoint(endpoint).expect("close listener");
     assert!(!runtime
-        .server_protocols
+        .range
         .lock()
-        .expect("protocol table")
+        .expect("range state")
+        .server_endpoints
         .contains_key(&endpoint));
 }
 

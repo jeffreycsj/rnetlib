@@ -84,7 +84,7 @@ if (!received) throw new TimeoutException("echo did not complete");
 - 创建时通过 `GameOptions` 设置线程数、帧大小、队列字节/条数、连接和握手上限、超时、TCP buffer/NoDelay、rekey 阈值等。nullable 网络选项的 `null` 使用 native 默认；显式非法的零值由 native 校验。游戏队列字段的零值使用默认预算，不能用零取消所有限制。创建参数不支持在活跃会话上随意修改。
 - 服务端 `SetEncryption(session, bool)` / `Rekey(session)` 是异步操作，等待 `SecurityChanged`；客户端没有加密选择项。默认拒绝明文业务。确有需求时两端创建配置均需 `AllowPlaintextBusinessData=true`，服务端才能关闭业务加密；控制消息仍受保护。明文业务**没有机密性或完整性**，不适合公网敏感数据。
 - `SendLatest` 按 session/key 尽力替换尚未交给 I/O worker 的快照。进入 socket 或 KCP 缓存后不可撤回。带 `GameSendOptions` 的发送可设置 priority、expiry、tick、sequence、correlation；expiry 也只作用于本地暂存。
-- `ListenRange` / `ConnectRange` 显式启用 wire v4；普通接口仍用精确版本 wire v3。`SelectedProtocolVersion` 查询服务端选定版本。
+- `ListenRange` / `ConnectRange` 配置业务版本范围；普通接口以 min=max 走相同的 wire-v4 协商，双方须持续 poll 至游戏就绪。旧 wire-v3 SDK 被拒绝。`SelectedProtocolVersion` 查询服务端选定版本。
 - `IssueResumeTicket` → `ResumeTicket` → `ConnectResume` / `ConnectRangeResume` → 服务端 `ResumeRequest` 再授权 → `SessionResumed`。恢复分配新句柄，通过 `RelatedSession` 映射旧句柄；失败不代表旧会话已失效。票据一次性且限同一服务端 runtime，不能跨进程恢复。
 - `CloseSession` 踢会话，`CloseEndpoint` 关闭端点。`Stop` 的 `-4` 需 poll 后重试；`Dispose` 最终停止并丢弃未交付事件。务必 `using` / 显式 Dispose；不要依赖 GC，特别是 logger 闭包反向引用 runtime 时。与 Dispose 重叠的调用受 SafeHandle lease 保护；Dispose 不保证业务送达。
 

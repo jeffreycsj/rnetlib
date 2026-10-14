@@ -248,8 +248,9 @@ fn absent_heartbeat_ack_closes_only_the_unresponsive_session() {
         unreachable!();
     };
     server.auth_decide(session, true).expect("authorize");
-    poll_until(
+    poll_until_driving_peer(
         &server,
+        &client,
         |event| matches!(event, GameEvent::SessionReady { session: ready, .. } if *ready == session),
     );
     // The client transport remains connected, but its game loop deliberately never polls the
@@ -309,8 +310,9 @@ fn timely_ack_queued_before_a_late_poll_prevents_false_timeout() {
         unreachable!();
     };
     server.auth_decide(session, true).expect("authorize");
-    poll_until(
+    poll_until_driving_peer(
         &server,
+        &client,
         |event| matches!(event, GameEvent::SessionReady { session: ready, .. } if *ready == session),
     );
     poll_until(
@@ -684,6 +686,27 @@ fn poll_until(runtime: &GameRuntime, predicate: impl Fn(&GameEvent) -> bool) -> 
         }
     }
     panic!("game event did not arrive before timeout");
+}
+
+fn poll_until_driving_peer(
+    runtime: &GameRuntime,
+    peer: &GameRuntime,
+    predicate: impl Fn(&GameEvent) -> bool,
+) -> GameEvent {
+    // Readiness requires both game loops to complete SELECT/ACK/READY. Tests stop polling
+    // the peer only after negotiation, to isolate missing heartbeat ACKs from failed joins.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if let Some(event) = runtime
+            .poll(32, Duration::from_millis(1))
+            .into_iter()
+            .find(&predicate)
+        {
+            return event;
+        }
+        peer.poll(32, Duration::from_millis(1));
+    }
+    panic!("game negotiation did not complete before timeout");
 }
 
 fn await_security_change(

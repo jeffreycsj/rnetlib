@@ -1,11 +1,124 @@
 use rnet_core::{ErrorCode, Transport};
 use rnet_game::{
-    GameEvent, GameProtocolRange, GameRangeClientConfig, GameRangeServerConfig, GameRuntime,
-    GameRuntimeConfig,
+    GameClientConfig, GameEvent, GameProtocol, GameProtocolRange, GameRangeClientConfig,
+    GameRangeServerConfig, GameRuntime, GameRuntimeConfig, GameServerConfig,
 };
 use rnet_security::Keypair;
 use rnet_transport::ClientSecurity;
 use std::time::{Duration, Instant};
+
+#[test]
+fn exact_and_range_entries_share_negotiation_on_every_transport() {
+    for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+        for exact_server in [false, true] {
+            let key = Keypair::generate().unwrap();
+            let runtime = GameRuntime::new_with_client_security(
+                GameRuntimeConfig::production(),
+                ClientSecurity::pinned(Keypair::generate().unwrap(), key.public.clone()),
+            )
+            .unwrap();
+            let listener = if exact_server {
+                runtime.listen(GameServerConfig {
+                    transport,
+                    bind_addr: "127.0.0.1:0".parse().unwrap(),
+                    local_key: key,
+                    initial_encryption: true,
+                    protocol: GameProtocol::new(71, 5),
+                })
+            } else {
+                runtime.listen_range(GameRangeServerConfig {
+                    transport,
+                    bind_addr: "127.0.0.1:0".parse().unwrap(),
+                    local_key: key,
+                    initial_encryption: true,
+                    protocol: GameProtocolRange::new(71, 3, 8),
+                })
+            }
+            .unwrap();
+            let remote_addr = runtime.endpoint_local_addr(listener).unwrap();
+            let client = if exact_server {
+                runtime.connect_range(GameRangeClientConfig {
+                    transport,
+                    bind_addr: None,
+                    remote_addr,
+                    join_ticket: b"login".to_vec(),
+                    protocol: GameProtocolRange {
+                        build_id: 42,
+                        capabilities: 9,
+                        ..GameProtocolRange::new(71, 3, 8)
+                    },
+                })
+            } else {
+                runtime.connect(GameClientConfig {
+                    transport,
+                    bind_addr: None,
+                    remote_addr,
+                    join_ticket: b"login".to_vec(),
+                    protocol: GameProtocol {
+                        build_id: 42,
+                        capabilities: 9,
+                        ..GameProtocol::new(71, 5)
+                    },
+                })
+            }
+            .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let (mut server_session, mut client_session) = (None, None);
+            let mut authorized = false;
+            while (server_session.is_none() || client_session.is_none())
+                && Instant::now() < deadline
+            {
+                for event in runtime.poll(32, Duration::from_millis(10)) {
+                    match event {
+                        GameEvent::AuthRequest {
+                            session,
+                            build_id,
+                            capabilities,
+                            join_ticket,
+                            ..
+                        } => {
+                            assert_eq!((build_id, capabilities), (42, 9));
+                            assert_eq!(join_ticket.as_ref(), b"login");
+                            assert_eq!(runtime.selected_protocol_version(session).unwrap(), 5);
+                            assert_eq!(
+                                runtime.send(session, b"early").unwrap_err().code(),
+                                ErrorCode::HandshakeRequired
+                            );
+                            runtime.auth_decide(session, true).unwrap();
+                            authorized = true;
+                        }
+                        GameEvent::SessionReady { endpoint, session } => {
+                            assert!(authorized);
+                            assert_eq!(runtime.selected_protocol_version(session).unwrap(), 5);
+                            if endpoint == listener {
+                                server_session = Some(session);
+                            } else {
+                                assert_eq!(endpoint, client);
+                                client_session = Some(session);
+                            }
+                        }
+                        GameEvent::ProtocolRejected { .. }
+                        | GameEvent::ProtocolViolation { .. } => {
+                            panic!("cross-entry join rejected: {event:?}")
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let server_session = server_session.expect("server ready");
+            runtime
+                .send(client_session.expect("client ready"), b"business")
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                assert!(Instant::now() < deadline, "business message not delivered");
+                if runtime.poll(32, Duration::from_millis(10)).into_iter().any(|event| {
+                    matches!(event, GameEvent::Message(message) if message.session == server_session && message.payload == b"business"[..])
+                }) { break; }
+            }
+        }
+    }
+}
 
 #[test]
 fn v4_range_join_selects_server_highest_common_version_before_ready() {

@@ -37,7 +37,7 @@ struct GameProtocol {
   uint64_t capabilities = 0;
 };
 
-// Wire-v4 negotiation is opt-in; ordinary GameProtocol remains exact-version wire v3.
+// Application version range; ordinary GameProtocol uses the same wire with min=max.
 struct GameProtocolRange {
   uint64_t id = 0;
   uint32_t min_version = 0;

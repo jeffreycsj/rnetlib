@@ -1,4 +1,4 @@
-//! Public endpoint operations for explicit wire-v4 version-range negotiation.
+//! Public endpoint operations for current-wire version negotiation.
 
 use crate::config::{
     GameClientConfig, GameHostClientConfig, GameProtocol, GameRangeClientConfig,
@@ -28,7 +28,7 @@ fn nonce() -> Result<[u8; 16]> {
 }
 
 impl GameRuntime {
-    /// Starts an explicit wire-v4 range listener; exact-version listeners retain wire v3.
+    /// Starts a listener supporting the inclusive application version range.
     pub fn listen_range(&self, config: GameRangeServerConfig) -> Result<Handle> {
         if !config.protocol.is_valid() {
             return Err(RnetError::new(
@@ -36,7 +36,10 @@ impl GameRuntime {
                 "invalid protocol range",
             ));
         }
-        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
+        let _registration = self
+            .endpoint_registration
+            .lock()
+            .expect("endpoint registration poisoned");
         let endpoint = self.network.listen(ServerConfig {
             transport: config.transport,
             bind_addr: config.bind_addr,
@@ -59,7 +62,7 @@ impl GameRuntime {
         Ok(endpoint)
     }
 
-    /// Joins a range listener using a fresh nonce and a distinct wire-v4 marker.
+    /// Joins a range listener using a fresh authenticated negotiation nonce.
     pub fn connect_range(&self, config: GameRangeClientConfig) -> Result<Handle> {
         if !config.protocol.is_valid() {
             return Err(RnetError::new(
@@ -74,7 +77,10 @@ impl GameRuntime {
             &config.join_ticket,
             self.maximum_envelope_len.min(60 * 1024),
         )?;
-        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
+        let _registration = self
+            .endpoint_registration
+            .lock()
+            .expect("endpoint registration poisoned");
         let endpoint = self.connect_prepared(
             GameClientConfig {
                 transport: config.transport,
@@ -118,7 +124,10 @@ impl GameRuntime {
             &config.join_ticket,
             self.maximum_envelope_len.min(60 * 1024),
         )?;
-        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
+        let _registration = self
+            .endpoint_registration
+            .lock()
+            .expect("endpoint registration poisoned");
         let endpoint = self.connect_host_prepared(
             GameHostClientConfig {
                 transport: config.transport,
@@ -168,7 +177,10 @@ impl GameRuntime {
             ticket,
             self.maximum_envelope_len.min(60 * 1024),
         )?;
-        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
+        let _registration = self
+            .endpoint_registration
+            .lock()
+            .expect("endpoint registration poisoned");
         let endpoint = self.connect_prepared(
             GameClientConfig {
                 transport: config.transport,
@@ -218,7 +230,10 @@ impl GameRuntime {
             ticket,
             self.maximum_envelope_len.min(60 * 1024),
         )?;
-        let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
+        let _registration = self
+            .endpoint_registration
+            .lock()
+            .expect("endpoint registration poisoned");
         let endpoint = self.connect_host_prepared(
             GameHostClientConfig {
                 transport: config.transport,

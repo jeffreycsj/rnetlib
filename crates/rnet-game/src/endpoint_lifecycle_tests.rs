@@ -160,9 +160,10 @@ fn lost_endpoint_notifications_do_not_retain_game_state_or_pending_authorization
             runtime.network.poll_events(4096, Duration::ZERO);
             runtime.poll(capacity, Duration::ZERO);
             assert!(!runtime
-                .server_protocols
+                .range
                 .lock()
                 .unwrap()
+                .server_endpoints
                 .contains_key(&listener));
             assert!(!runtime
                 .endpoint_transports
@@ -203,9 +204,10 @@ fn lost_endpoint_notifications_do_not_retain_game_state_or_pending_authorization
                 .is_err());
             assert!(runtime.endpoint_local_addr(other).is_ok());
             assert!(runtime
-                .server_protocols
+                .range
                 .lock()
                 .unwrap()
+                .server_endpoints
                 .contains_key(&other));
             assert_eq!(
                 runtime.send(session, b"stale").unwrap_err().code(),
@@ -241,4 +243,51 @@ fn lost_empty_range_endpoint_notification_releases_its_policy() {
         .lock()
         .unwrap()
         .contains_key(&endpoint));
+}
+#[test]
+fn endpoint_registration_does_not_wait_for_a_blocking_game_poll() {
+    let key = rnet_security::Keypair::generate().unwrap();
+    let runtime = std::sync::Arc::new(
+        GameRuntime::new_with_client_security(
+            GameRuntimeConfig::default(),
+            rnet_transport::ClientSecurity::pinned(
+                rnet_security::Keypair::generate().unwrap(),
+                key.public.clone(),
+            ),
+        )
+        .unwrap(),
+    );
+    // Hold precisely the mutex owned by a waiting poll, avoiding a timing guess about when
+    // the polling thread entered its network wait. Registration must not need this mutex.
+    let poll_guard = runtime.poll_guard.lock().unwrap();
+    let worker_runtime = runtime.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let listener = worker_runtime
+            .listen(crate::GameServerConfig {
+                transport: rnet_core::Transport::Tcp,
+                bind_addr: "127.0.0.1:0".parse().unwrap(),
+                local_key: key,
+                initial_encryption: true,
+                protocol: crate::GameProtocol::new(42, 3),
+            })
+            .unwrap();
+        let client = worker_runtime
+            .connect(crate::GameClientConfig {
+                transport: rnet_core::Transport::Tcp,
+                bind_addr: None,
+                remote_addr: worker_runtime.endpoint_local_addr(listener).unwrap(),
+                join_ticket: b"login".to_vec(),
+                protocol: crate::GameProtocol::new(42, 3),
+            })
+            .unwrap();
+        let _ = sender.send((listener, client));
+    });
+    let registered = receiver.recv_timeout(std::time::Duration::from_secs(1));
+    drop(poll_guard);
+    worker.join().unwrap();
+    let (listener, client) = registered.expect("registration blocked behind the entire poll wait");
+    let range = runtime.range.lock().unwrap();
+    assert!(range.server_endpoints.contains_key(&listener));
+    assert!(range.client_endpoints.contains_key(&client));
 }

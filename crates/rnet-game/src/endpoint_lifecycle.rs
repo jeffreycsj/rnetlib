@@ -1,6 +1,6 @@
 //! Endpoint policy and game-state cleanup independent of bounded lifecycle notifications.
 
-use crate::{GameProtocol, GameRuntime};
+use crate::GameRuntime;
 use rnet_core::{Handle, Result, Transport};
 use std::collections::HashMap;
 
@@ -8,27 +8,27 @@ impl GameRuntime {
     /// Closes an endpoint and releases its game protocol policy.
     pub fn close_endpoint(&self, endpoint: Handle) -> Result<()> {
         let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
-        let mut protocols = self
-            .server_protocols
+        let _registration = self
+            .endpoint_registration
             .lock()
-            .expect("game protocol table poisoned");
+            .expect("endpoint registration poisoned");
         let mut transports = self
             .endpoint_transports
             .lock()
             .expect("game endpoint table poisoned");
         self.network.close_endpoint(endpoint)?;
-        self.forget_endpoint_state(endpoint, &mut protocols, &mut transports);
+        self.forget_endpoint_state(endpoint, &mut transports);
         Ok(())
     }
 
     pub(crate) fn reap_closed_endpoints(&self) {
-        // Registration/cleanup use the same map lock order as listen. While locked, all game
+        let _registration = self
+            .endpoint_registration
+            .lock()
+            .expect("endpoint registration poisoned");
+        // Registration/cleanup serialize endpoint ownership. While locked, all game
         // endpoints are accounted for; a smaller native count proves some ownership is stale.
         // The healthy path avoids walking every endpoint on every high-frequency game poll.
-        let mut protocols = self
-            .server_protocols
-            .lock()
-            .expect("game protocol table poisoned");
         let mut transports = self
             .endpoint_transports
             .lock()
@@ -42,16 +42,11 @@ impl GameRuntime {
             .filter(|endpoint| self.network.endpoint_local_addr(*endpoint).is_err())
             .collect();
         for endpoint in expired {
-            self.forget_endpoint_state(endpoint, &mut protocols, &mut transports);
+            self.forget_endpoint_state(endpoint, &mut transports);
         }
     }
 
-    fn forget_endpoint_state(
-        &self,
-        endpoint: Handle,
-        protocols: &mut HashMap<Handle, GameProtocol>,
-        transports: &mut HashMap<Handle, Transport>,
-    ) {
+    fn forget_endpoint_state(&self, endpoint: Handle, transports: &mut HashMap<Handle, Transport>) {
         self.resume
             .lock()
             .expect("resume state poisoned")
@@ -74,7 +69,6 @@ impl GameRuntime {
             .expect("resume state poisoned")
             .client_endpoints
             .remove(&endpoint);
-        protocols.remove(&endpoint);
         transports.remove(&endpoint);
         self.range
             .lock()

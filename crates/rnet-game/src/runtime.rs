@@ -3,9 +3,7 @@
 use crate::admission::SendAdmission;
 use crate::clock_sync::ClockSyncTracker;
 use crate::clock_sync_runtime::ClockSyncMetrics;
-use crate::config::{
-    GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
-};
+use crate::config::{GameClientConfig, GameHostClientConfig, GameRuntimeConfig, GameServerConfig};
 use crate::diagnostics::GameDiagnostics;
 use crate::event::GameEvent;
 use crate::heartbeat::HeartbeatTracker;
@@ -19,7 +17,7 @@ use crate::scheduler::{GamePriority, ScheduledQueue};
 use rnet_core::{ErrorCode, Event, EventType, Handle, Result, RnetError, Transport};
 use rnet_protocol::control::SecurityMode;
 use rnet_transport::{
-    ClientConfig, ClientSecurity, HostClientConfig, NetworkRuntime, SecurityChange, ServerConfig,
+    ClientConfig, ClientSecurity, HostClientConfig, NetworkRuntime, SecurityChange,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -45,7 +43,6 @@ pub struct GameSendOptions {
 pub struct GameRuntime {
     pub(crate) network: NetworkRuntime,
     pub(crate) maximum_envelope_len: usize,
-    pub(crate) server_protocols: Mutex<HashMap<Handle, GameProtocol>>,
     pub(crate) endpoint_transports: Mutex<HashMap<Handle, Transport>>,
     pub(crate) session_endpoints: Mutex<HashMap<Handle, Handle>>,
     pub(crate) udp_sessions: Mutex<HashMap<Handle, Arc<Mutex<UdpSessionQuality>>>>,
@@ -69,6 +66,9 @@ pub struct GameRuntime {
     pub(crate) scheduled_flush_batch: usize,
     pub(crate) diagnostics: GameDiagnostics,
     pub(crate) poll_guard: Mutex<()>,
+    // Registration and its first event conversion must be atomic, but registration must not
+    // wait for an entire blocking poll. When both are needed, acquire poll_guard first.
+    pub(crate) endpoint_registration: Mutex<()>,
 }
 
 impl GameRuntime {
@@ -116,7 +116,6 @@ impl GameRuntime {
         Ok(Self {
             network,
             maximum_envelope_len,
-            server_protocols: Mutex::new(HashMap::new()),
             endpoint_transports: Mutex::new(HashMap::new()),
             session_endpoints: Mutex::new(HashMap::new()),
             udp_sessions: Mutex::new(HashMap::new()),
@@ -143,50 +142,18 @@ impl GameRuntime {
             scheduled_flush_batch,
             diagnostics: GameDiagnostics::new(),
             poll_guard: Mutex::new(()),
+            endpoint_registration: Mutex::new(()),
         })
     }
 
     /// Starts a listener. The selected transport remains immutable for every accepted session.
     pub fn listen(&self, config: GameServerConfig) -> Result<Handle> {
-        if !config.protocol.is_valid() {
-            return Err(RnetError::new(
-                ErrorCode::InvalidArgument,
-                "game protocol ID and version must be positive",
-            ));
-        }
-        // Hold both maps until the endpoint is registered: a concurrent poll must not observe
-        // an authentication or ready event before its game-level policy is installed.
-        let mut protocols = self
-            .server_protocols
-            .lock()
-            .expect("game protocol table poisoned");
-        let mut transports = self
-            .endpoint_transports
-            .lock()
-            .expect("game endpoint table poisoned");
-        let endpoint = self.network.listen(ServerConfig {
-            transport: config.transport,
-            bind_addr: config.bind_addr,
-            local_key: config.local_key,
-            initial_security: if config.initial_encryption {
-                SecurityMode::Encrypted
-            } else {
-                SecurityMode::Plaintext
-            },
-        })?;
-        protocols.insert(endpoint, config.protocol);
-        transports.insert(endpoint, config.transport);
-        Ok(endpoint)
+        self.listen_range(config.into())
     }
 
     /// Starts a numeric-address client connection without exposing an encryption choice.
     pub fn connect(&self, config: GameClientConfig) -> Result<Handle> {
-        let join_payload = join::encode(
-            config.protocol,
-            &config.join_ticket,
-            self.maximum_envelope_len.min(60 * 1024),
-        )?;
-        self.connect_prepared(config, join_payload, None)
+        self.connect_range(config.into())
     }
 
     pub(crate) fn connect_prepared(
@@ -234,12 +201,7 @@ impl GameRuntime {
 
     /// Resolves a hostname and joins without exposing address-candidate or encryption plumbing.
     pub fn connect_host(&self, config: GameHostClientConfig) -> Result<Handle> {
-        let join_payload = join::encode(
-            config.protocol,
-            &config.join_ticket,
-            self.maximum_envelope_len.min(60 * 1024),
-        )?;
-        self.connect_host_prepared(config, join_payload, None)
+        self.connect_host_range(config.into())
     }
 
     pub(crate) fn connect_host_prepared(
@@ -373,6 +335,15 @@ impl GameRuntime {
     }
 
     pub(crate) fn convert_event(&self, mut event: Event) -> Result<Option<GameEvent>> {
+        let _registration = matches!(
+            event.event_type,
+            EventType::AuthRequest | EventType::SessionOpened
+        )
+        .then(|| {
+            self.endpoint_registration
+                .lock()
+                .expect("endpoint registration poisoned")
+        });
         let converted = match event.event_type {
             EventType::RuntimeStarted => GameEvent::RuntimeStarted,
             EventType::EndpointOpened => GameEvent::EndpointOpened {
@@ -403,16 +374,11 @@ impl GameRuntime {
             }
             EventType::SessionOpened => {
                 let server_session = self
-                    .server_protocols
+                    .range
                     .lock()
-                    .expect("game protocol table poisoned")
-                    .contains_key(&event.endpoint)
-                    || self
-                        .range
-                        .lock()
-                        .expect("range state poisoned")
-                        .server_endpoints
-                        .contains_key(&event.endpoint);
+                    .expect("range state poisoned")
+                    .server_endpoints
+                    .contains_key(&event.endpoint);
                 let transports = self
                     .endpoint_transports
                     .lock()
@@ -447,56 +413,13 @@ impl GameRuntime {
                     .lock()
                     .expect("game session table poisoned")
                     .insert(event.session, event.endpoint);
-                if self.start_range_session(
+                self.start_range_session(
                     event.endpoint,
                     event.session,
                     old_session,
                     server_resume,
-                )? {
-                    return Ok(None);
-                }
-                if let Some(old) = old_session {
-                    // Exact-version wire v3 is ready at SessionOpened. Wire v4 returned above and
-                    // defers this takeover until SELECT/ACK/READY publication.
-                    let _ = self.network.close_session(old, ErrorCode::Cancelled);
-                    self.forget_ready_session(old);
-                }
-                if server_resume {
-                    let old = old_session.expect("server resume has an old session");
-                    let mut state = self.resume.lock().expect("resume state poisoned");
-                    let revoked = state.revoked_inflight.remove(&old);
-                    if revoked || self.network.validate_payload_len(event.session, 0).is_err() {
-                        state.inflight_server.remove(&old);
-                        drop(state);
-                        let _ = self
-                            .network
-                            .close_session(event.session, ErrorCode::Cancelled);
-                        self.forget_ready_session(event.session);
-                        return Ok(None);
-                    }
-                    // Ready publication and the final revocation check share this lock.
-                    // A concurrent kick cannot observe a half-published takeover.
-                    self.admission.publish(event.session);
-                    state.inflight_server.remove(&old);
-                    self.resume_metrics
-                        .sessions_resumed
-                        .fetch_add(1, Ordering::Relaxed);
-                } else {
-                    self.admission.publish(event.session);
-                }
-                drop(transports);
-                if let Some(old_session) = old_session {
-                    GameEvent::SessionResumed {
-                        endpoint: event.endpoint,
-                        old_session,
-                        new_session: event.session,
-                    }
-                } else {
-                    GameEvent::SessionReady {
-                        endpoint: event.endpoint,
-                        session: event.session,
-                    }
-                }
+                )?;
+                return Ok(None);
             }
             EventType::SessionClosed => {
                 self.forget_ready_session(event.session);

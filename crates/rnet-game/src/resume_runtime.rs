@@ -3,7 +3,6 @@
 use crate::config::{GameClientConfig, GameHostClientConfig, GameProtocol};
 use crate::envelope::{decode, encode_control, ControlKind, DecodedEnvelope};
 use crate::event::{GameEvent, ResumeTicket};
-use crate::join;
 use crate::resume::{ResumeClaim, ResumeRegistry, ResumeScope, TICKET_LEN};
 use crate::runtime::GameRuntime;
 use rnet_core::{ErrorCode, Event, Handle, Result, RnetError};
@@ -47,79 +46,9 @@ impl ResumeRuntimeState {
 impl GameRuntime {
     pub(crate) fn convert_game_auth_request(&self, event: &Event) -> Result<GameEvent> {
         let request = AuthRequest::from_event(event)?;
-        if let Some(range_event) = self.range_auth_request(event, &request) {
-            return Ok(range_event);
-        }
-        let expected = self
-            .server_protocols
-            .lock()
-            .expect("game protocol table poisoned")
-            .get(&event.endpoint)
-            .copied();
-        let actual = join::decode(request.join_payload);
-        let (Some(expected), Ok(actual)) = (expected, actual) else {
-            return Ok(self.reject_game_join(event));
-        };
-        if expected.protocol_id != actual.protocol.protocol_id
-            || expected.version != actual.protocol.version
-        {
-            return Ok(self.reject_game_join(event));
-        }
-        let mut state = self.resume.lock().expect("resume state poisoned");
-        let resume_claim = if let Some(ticket) = actual.resume_ticket {
-            self.resume_metrics
-                .requests_received
-                .fetch_add(1, Ordering::Relaxed);
-            match state.tickets.consume(
-                ticket,
-                event.endpoint,
-                request.client_public_key,
-                actual.protocol,
-                Instant::now(),
-            ) {
-                Ok(claim) => Some(claim),
-                Err(_) => {
-                    self.resume_metrics
-                        .tickets_rejected
-                        .fetch_add(1, Ordering::Relaxed);
-                    drop(state);
-                    return Ok(self.reject_game_join(event));
-                }
-            }
-        } else {
-            None
-        };
-        state.server_sessions.insert(
-            event.session,
-            ServerSessionMeta {
-                peer_key: request.client_public_key,
-                protocol: actual.protocol,
-            },
-        );
-        if let Some(claim) = resume_claim {
-            let old_session = claim.old_session;
-            let identity = claim.identity.clone();
-            state.pending_server.insert(event.session, claim);
-            Ok(GameEvent::ResumeRequest {
-                endpoint: event.endpoint,
-                session: event.session,
-                old_session,
-                identity: identity.into(),
-                client_public_key: request.client_public_key,
-                join_ticket: actual.ticket.to_vec().into(),
-                build_id: actual.protocol.build_id,
-                capabilities: actual.protocol.capabilities,
-            })
-        } else {
-            Ok(GameEvent::AuthRequest {
-                endpoint: event.endpoint,
-                session: event.session,
-                client_public_key: request.client_public_key,
-                join_ticket: actual.ticket.to_vec().into(),
-                build_id: actual.protocol.build_id,
-                capabilities: actual.protocol.capabilities,
-            })
-        }
+        Ok(self
+            .range_auth_request(event, &request)
+            .unwrap_or_else(|| self.reject_game_join(event)))
     }
 
     pub(crate) fn reject_game_join(&self, event: &Event) -> GameEvent {
@@ -190,19 +119,7 @@ impl GameRuntime {
         old_session: Handle,
         ticket: &[u8],
     ) -> Result<Handle> {
-        if old_session == 0 || ticket.len() != TICKET_LEN {
-            return Err(RnetError::new(
-                ErrorCode::InvalidArgument,
-                "invalid local resume handle or ticket length",
-            ));
-        }
-        let join_payload = join::encode_resume(
-            config.protocol,
-            &config.join_ticket,
-            ticket,
-            self.maximum_envelope_len.min(60 * 1024),
-        )?;
-        self.connect_prepared(config, join_payload, Some(old_session))
+        self.connect_range_resume(config.into(), old_session, ticket)
     }
 
     /// The hostname variant of `connect_resume`; address-candidate fallback stays internal.
@@ -212,19 +129,7 @@ impl GameRuntime {
         old_session: Handle,
         ticket: &[u8],
     ) -> Result<Handle> {
-        if old_session == 0 || ticket.len() != TICKET_LEN {
-            return Err(RnetError::new(
-                ErrorCode::InvalidArgument,
-                "invalid local resume handle or ticket length",
-            ));
-        }
-        let join_payload = join::encode_resume(
-            config.protocol,
-            &config.join_ticket,
-            ticket,
-            self.maximum_envelope_len.min(60 * 1024),
-        )?;
-        self.connect_host_prepared(config, join_payload, Some(old_session))
+        self.connect_host_range_resume(config.into(), old_session, ticket)
     }
 
     pub(crate) fn handle_game_control_event(&self, event: &Event) -> Result<Option<GameEvent>> {
@@ -243,9 +148,10 @@ impl GameRuntime {
             } => {
                 if payload.len() != TICKET_LEN
                     || self
-                        .server_protocols
+                        .range
                         .lock()
-                        .expect("game protocol table poisoned")
+                        .expect("range state poisoned")
+                        .server_endpoints
                         .contains_key(&event.endpoint)
                 {
                     return Err(RnetError::new(

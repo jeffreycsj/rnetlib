@@ -11,8 +11,8 @@ import (
 	"unsafe"
 )
 
-// GameProtocolRange opts into authenticated wire-v4 version negotiation.
-// Exact-version GameProtocol connections retain wire v3.
+// GameProtocolRange describes authenticated application version negotiation.
+// Exact-version GameProtocol connections use the same wire with min=max.
 type GameProtocolRange struct {
 	ID           uint64
 	MinVersion   uint32

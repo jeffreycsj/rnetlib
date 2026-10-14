@@ -10,6 +10,52 @@ fn range_state() -> RangeRuntimeState {
 }
 
 #[test]
+fn missing_negotiation_state_cannot_fall_back_to_ready() {
+    let runtime = GameRuntime::new(GameRuntimeConfig::production()).unwrap();
+    assert_eq!(
+        runtime
+            .start_range_session(31, 32, None, false)
+            .unwrap_err()
+            .code(),
+        ErrorCode::ProtocolError
+    );
+    assert!(!runtime.admission.contains(32));
+}
+
+#[test]
+fn all_server_entry_points_reject_client_issued_resume_controls() {
+    for exact in [false, true] {
+        let runtime = GameRuntime::new(GameRuntimeConfig::production()).unwrap();
+        let config = crate::GameServerConfig {
+            transport: rnet_core::Transport::Tcp,
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            local_key: rnet_security::Keypair::generate().unwrap(),
+            initial_encryption: true,
+            protocol: GameProtocol::new(42, 3),
+        };
+        let endpoint = if exact {
+            runtime.listen(config)
+        } else {
+            runtime.listen_range(config.into())
+        }
+        .unwrap();
+        let mut event = Event::simple(EventType::GameControl);
+        event.endpoint = endpoint;
+        event.session = 99;
+        event.data = encode_control(ControlKind::Resume, &[7; crate::resume::TICKET_LEN], 1024)
+            .unwrap()
+            .to_vec();
+        assert_eq!(
+            runtime
+                .handle_game_control_event(&event)
+                .unwrap_err()
+                .code(),
+            ErrorCode::ProtocolError
+        );
+    }
+}
+
+#[test]
 fn late_duplicate_select_does_not_disconnect_a_ready_udp_client() {
     let runtime = GameRuntime::new(GameRuntimeConfig::production()).unwrap();
     let now = Instant::now();

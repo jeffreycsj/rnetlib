@@ -5,7 +5,7 @@ namespace RNet;
 
 public sealed unsafe partial class GameRuntime {
     public ulong Listen(ServerOptions options) => ListenCore(options, null);
-    /// <summary>Explicit wire-v4 negotiation; legacy Listen/Connect remain exact-version wire v3.</summary>
+    /// <summary>Application version-range negotiation; Listen/Connect use the same wire with min=max.</summary>
     public ulong ListenRange(ServerOptions options, uint minVersion, uint maxVersion) => ListenCore(options, (minVersion, maxVersion));
     private ulong ListenCore(ServerOptions o, (uint Min, uint Max)? range) {
         ArgumentNullException.ThrowIfNull(o);

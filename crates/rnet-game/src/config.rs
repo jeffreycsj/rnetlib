@@ -52,8 +52,8 @@ impl TryFrom<u32> for GameProfile {
 
 /// Exact application protocol identity selected by one client connection.
 ///
-/// Version zero and protocol ID zero are reserved. The server accepts the client only when both
-/// values match its listener contract; build and capability fields are authenticated join
+/// Version zero and protocol ID zero are reserved. The protocol ID must match the listener and
+/// the version must fall within its range; build and capability fields are authenticated join
 /// metadata for application policy, not permission to enable library features.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GameProtocol {
@@ -78,7 +78,7 @@ impl GameProtocol {
     }
 }
 
-/// Protocol identity and inclusive version interval for an explicit wire-v4 join.
+/// Protocol identity and inclusive version interval for the current authenticated join.
 ///
 /// Build and capability values remain authenticated application metadata. They do not grant
 /// library capabilities. A range is valid only when its ID and both bounds are nonzero and the
@@ -105,6 +105,54 @@ impl GameProtocolRange {
 
     pub(crate) fn is_valid(self) -> bool {
         self.protocol_id != 0 && self.min_version != 0 && self.min_version <= self.max_version
+    }
+}
+
+impl From<GameProtocol> for GameProtocolRange {
+    fn from(protocol: GameProtocol) -> Self {
+        Self {
+            protocol_id: protocol.protocol_id,
+            min_version: protocol.version,
+            max_version: protocol.version,
+            build_id: protocol.build_id,
+            capabilities: protocol.capabilities,
+        }
+    }
+}
+
+impl From<GameServerConfig> for GameRangeServerConfig {
+    fn from(config: GameServerConfig) -> Self {
+        Self {
+            transport: config.transport,
+            bind_addr: config.bind_addr,
+            local_key: config.local_key,
+            initial_encryption: config.initial_encryption,
+            protocol: config.protocol.into(),
+        }
+    }
+}
+
+impl From<GameClientConfig> for GameRangeClientConfig {
+    fn from(config: GameClientConfig) -> Self {
+        Self {
+            transport: config.transport,
+            bind_addr: config.bind_addr,
+            remote_addr: config.remote_addr,
+            join_ticket: config.join_ticket,
+            protocol: config.protocol.into(),
+        }
+    }
+}
+
+impl From<GameHostClientConfig> for GameRangeHostClientConfig {
+    fn from(config: GameHostClientConfig) -> Self {
+        Self {
+            transport: config.transport,
+            host: config.host,
+            port: config.port,
+            join_ticket: config.join_ticket,
+            protocol: config.protocol.into(),
+        }
     }
 }
 
@@ -225,7 +273,7 @@ impl GameServerConfig {
     }
 }
 
-/// Explicit wire-v4 listener. Existing `GameServerConfig` remains exact-version wire v3.
+/// Inclusive application version-range listener; exact versions use the same wire and state machine.
 #[derive(Clone, Debug)]
 pub struct GameRangeServerConfig {
     pub transport: Transport,
@@ -283,7 +331,7 @@ impl GameClientConfig {
 }
 
 /// Explicit wire-v4 numeric-address client join.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GameRangeClientConfig {
     pub transport: Transport,
     pub bind_addr: Option<SocketAddr>,
@@ -353,7 +401,7 @@ impl GameHostClientConfig {
 }
 
 /// Explicit wire-v4 hostname client join.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GameRangeHostClientConfig {
     pub transport: Transport,
     pub host: String,
@@ -385,6 +433,32 @@ impl std::fmt::Debug for GameHostClientConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("GameHostClientConfig")
+            .field("transport", &self.transport)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("join_ticket_len", &self.join_ticket.len())
+            .field("protocol", &self.protocol)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for GameRangeClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GameRangeClientConfig")
+            .field("transport", &self.transport)
+            .field("bind_addr", &self.bind_addr)
+            .field("remote_addr", &self.remote_addr)
+            .field("join_ticket_len", &self.join_ticket.len())
+            .field("protocol", &self.protocol)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for GameRangeHostClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GameRangeHostClientConfig")
             .field("transport", &self.transport)
             .field("host", &self.host)
             .field("port", &self.port)

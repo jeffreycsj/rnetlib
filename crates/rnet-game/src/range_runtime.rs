@@ -154,7 +154,7 @@ impl GameRuntime {
         session: Handle,
         old_session: Option<Handle>,
         server_resume: bool,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let now = Instant::now();
         let control = {
             let mut range = self.range.lock().expect("range state poisoned");
@@ -189,9 +189,9 @@ impl GameRuntime {
                         buffered_bytes: 0,
                     },
                 );
-                return Ok(true);
+                return Ok(());
             } else {
-                return Ok(false);
+                return Err(protocol_error("session has no registered game negotiation"));
             }
         };
         if let Some(control) = control {
@@ -201,7 +201,7 @@ impl GameRuntime {
                 }
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     fn send_range_control(&self, session: Handle, payload: &[u8; CONTROL_LEN]) -> Result<()> {
@@ -347,7 +347,7 @@ impl GameRuntime {
                 self.forget_ready_session(session);
                 return Ok(None);
             }
-            // The revocation check and publication share the resume lock, as in wire v3.
+            // The revocation check and publication share the resume lock.
             self.admission.publish(session);
             resume.inflight_server.remove(&old);
             self.resume_metrics

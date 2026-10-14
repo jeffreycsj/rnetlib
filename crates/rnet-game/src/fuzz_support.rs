@@ -11,5 +11,5 @@ pub fn decode_game_wire(input: &[u8]) {
     {
         let _ = heartbeat::decode_heartbeat(&payload);
     }
-    let _ = join::decode(input);
+    let _ = join::decode_range(input);
 }

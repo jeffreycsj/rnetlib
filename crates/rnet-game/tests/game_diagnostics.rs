@@ -10,6 +10,15 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn optional_game_logger_records_auth_and_denial_without_credentials() {
+    verify_auth_diagnostics(false);
+}
+
+#[test]
+fn range_auth_logs_selected_version_not_listener_upper_bound() {
+    verify_auth_diagnostics(true);
+}
+
+fn verify_auth_diagnostics(range: bool) {
     let (sender, receiver) = mpsc::channel();
     let logger = BoundedLogger::new(LoggerConfig::default(), move |record| {
         let _ = sender.send(record);
@@ -23,15 +32,22 @@ fn optional_game_logger_records_auth_and_denial_without_credentials() {
     )
     .unwrap()
     .with_logger(logger);
-    let listener = runtime
-        .listen(GameServerConfig {
-            transport: Transport::Tcp,
-            bind_addr: "127.0.0.1:0".parse().unwrap(),
-            local_key: server_key,
-            initial_encryption: true,
-            protocol: GameProtocol::new(42, 3),
-        })
-        .unwrap();
+    let config = GameServerConfig {
+        transport: Transport::Tcp,
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        local_key: server_key,
+        initial_encryption: true,
+        protocol: GameProtocol::new(42, 3),
+    };
+    let listener = if range {
+        let mut config = rnet_game::GameRangeServerConfig::from(config);
+        config.protocol.min_version = 1;
+        config.protocol.max_version = 9;
+        runtime.listen_range(config)
+    } else {
+        runtime.listen(config)
+    }
+    .unwrap();
     let client = runtime
         .connect(GameClientConfig {
             transport: Transport::Tcp,
@@ -72,6 +88,7 @@ fn optional_game_logger_records_auth_and_denial_without_credentials() {
                 assert_eq!(record.endpoint, listener);
                 assert_eq!(record.transport, Transport::Tcp as u32);
                 assert!(record.message.contains("protocol_id=42"));
+                assert!(record.message.contains("protocol_version=3 "));
                 names.push(record.event_name);
             } else if record.event_name == "game_join_failed" && record.endpoint == client {
                 assert_eq!(record.error_code, ErrorCode::AuthRejected);

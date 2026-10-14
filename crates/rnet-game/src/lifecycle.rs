@@ -28,6 +28,10 @@ impl GameRuntime {
         // either drained within the deadline or counted as a shutdown drop during queue cleanup.
         self.admission.begin_stop();
         let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
+        let _registration = self
+            .endpoint_registration
+            .lock()
+            .expect("endpoint registration poisoned");
         while (self.scheduled_queue_snapshot().queued_messages != 0
             || self.realtime_queue_snapshot().queued_messages != 0)
             && Instant::now() < deadline
