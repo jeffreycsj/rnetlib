@@ -124,21 +124,77 @@ fn verify_client_policy(transport: Transport) {
         }
     }
 
+    // Keep the client game loop paused until the authenticated switch has completed. I/O still
+    // receives both old plaintext frames, so their integrity must survive queueing across it.
+    let received = client.network.metrics_snapshot().frames_received;
+    server.network.send(server_session, &forged).unwrap();
+    server
+        .send(server_session, b"queued before switch")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while client.network.metrics_snapshot().frames_received < received + 2 {
+        assert!(
+            Instant::now() < deadline,
+            "plaintext frames were not received"
+        );
+        for event in server.poll(32, Duration::from_millis(5)) {
+            assert_no_failure(&event);
+        }
+    }
+    assert_eq!(
+        client
+            .protocol_metrics_snapshot()
+            .plaintext_invalid_envelopes_dropped,
+        1
+    );
     server.set_encryption(server_session, true).unwrap();
     let mut changed = [false; 2];
     let deadline = Instant::now() + Duration::from_secs(3);
-    while changed.contains(&false) {
+    while !changed[0] {
         assert!(Instant::now() < deadline, "encryption transition timed out");
-        for (index, runtime) in [&server, &client].into_iter().enumerate() {
-            for event in runtime.poll(32, Duration::from_millis(5)) {
-                assert_no_failure(&event);
-                if let GameEvent::SecurityChanged { encrypted, .. } = event {
-                    assert!(encrypted);
-                    changed[index] = true;
-                }
+        for event in server.poll(32, Duration::from_millis(5)) {
+            assert_no_failure(&event);
+            if let GameEvent::SecurityChanged { encrypted, .. } = event {
+                assert!(encrypted);
+                changed[0] = true;
             }
         }
     }
+    // Server completion requires the client's authenticated ACK after installing the new mode.
+    // No client game poll has consumed the queued plaintext or SecurityChanged yet.
+    assert_eq!(
+        client
+            .protocol_metrics_snapshot()
+            .plaintext_invalid_envelopes_dropped,
+        1
+    );
+    let mut queued_delivered = false;
+    while !changed[1] || !queued_delivered {
+        assert!(
+            Instant::now() < deadline,
+            "queued events were not processed"
+        );
+        for event in client.poll(32, Duration::from_millis(5)) {
+            assert_no_failure(&event);
+            match event {
+                GameEvent::SecurityChanged { encrypted, .. } => {
+                    assert!(encrypted);
+                    changed[1] = true;
+                }
+                GameEvent::Message(message) => {
+                    assert_eq!(message.payload.as_ref(), b"queued before switch");
+                    queued_delivered = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        client
+            .protocol_metrics_snapshot()
+            .plaintext_invalid_envelopes_dropped,
+        2
+    );
     // Exactly the same malformed bytes must fail closed once integrity is verified. Do not
     // classify from a cached security mode: queued events retain their own integrity evidence.
     server.network.send(server_session, &forged).unwrap();
@@ -157,7 +213,7 @@ fn verify_client_policy(transport: Transport) {
         client
             .protocol_metrics_snapshot()
             .plaintext_invalid_envelopes_dropped,
-        1
+        2
     );
     assert_eq!(
         client

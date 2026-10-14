@@ -1,9 +1,48 @@
 use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::time::{Duration, Instant};
 
-use rnet_core::{ErrorCode, Event, EventType, Handle};
-use rnet_security::{InitiatorHandshake, Keypair};
-use rnet_transport::{EndpointConfig, LatencyKind, NetworkRuntime, RuntimeConfig};
+use rnet_core::{ErrorCode, Event, EventType, Handle, Transport};
+use rnet_protocol::control::{decode_record, encode_record, Record, RecordKind};
+use rnet_security::Keypair;
+use rnet_transport::{
+    ClientConfig, ClientSecurity, LatencyKind, NetworkRuntime, RuntimeConfig, SecurityMode,
+    ServerConfig,
+};
+
+fn authenticated_runtime(client_key: Keypair, server_public: Vec<u8>) -> NetworkRuntime {
+    NetworkRuntime::new_with_client_security(
+        RuntimeConfig::default(),
+        Some(ClientSecurity::pinned(client_key, server_public)),
+    )
+    .expect("runtime")
+}
+
+fn listen(runtime: &NetworkRuntime, transport: Transport, key: Keypair) -> Handle {
+    runtime
+        .listen(ServerConfig {
+            transport,
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            local_key: key,
+            initial_security: SecurityMode::Encrypted,
+        })
+        .expect("listener")
+}
+
+fn connect(
+    runtime: &NetworkRuntime,
+    transport: Transport,
+    remote_addr: SocketAddr,
+    ticket: &[u8],
+) -> Handle {
+    runtime
+        .connect(ClientConfig {
+            transport,
+            bind_addr: None,
+            remote_addr,
+            join_payload: ticket.to_vec(),
+        })
+        .expect("client")
+}
 
 fn poll_until(
     runtime: &NetworkRuntime,
@@ -57,26 +96,14 @@ fn poll_open_pair(
 
 #[test]
 fn secure_tcp_requires_server_auth_before_opening_and_exchanging_frames() {
-    let runtime = NetworkRuntime::new(RuntimeConfig::default()).expect("runtime");
     let server_key = Keypair::generate().expect("server key");
     let client_key = Keypair::generate().expect("client key");
-    let listener = runtime
-        .open_endpoint(EndpointConfig::secure_tcp_listener(
-            "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
-            server_key.clone(),
-        ))
-        .expect("secure listener");
+    let runtime = authenticated_runtime(client_key.clone(), server_key.public.clone());
+    let listener = listen(&runtime, Transport::Tcp, server_key);
     let server_addr = runtime
         .endpoint_local_addr(listener)
         .expect("listener addr");
-    let client = runtime
-        .open_endpoint(EndpointConfig::secure_tcp_client(
-            server_addr,
-            client_key.clone(),
-            server_key.public.clone(),
-            b"account-ticket".to_vec(),
-        ))
-        .expect("secure client");
+    let client = connect(&runtime, Transport::Tcp, server_addr, b"account-ticket");
 
     let auth = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::AuthRequest && event.endpoint == listener
@@ -96,13 +123,6 @@ fn secure_tcp_requires_server_auth_before_opening_and_exchanging_frames() {
 
     let (server_session, client_session) =
         poll_open_pair(&runtime, Duration::from_secs(2), listener, client);
-    assert_eq!(
-        runtime
-            .send_game_control(client_session, b"reserved")
-            .expect_err("legacy secure sessions cannot send game controls")
-            .code(),
-        ErrorCode::NotSupported
-    );
     runtime
         .send_with_options(
             client_session,
@@ -115,29 +135,30 @@ fn secure_tcp_requires_server_auth_before_opening_and_exchanging_frames() {
     });
     assert_eq!(message.data, b"encrypted-frame");
     assert_eq!(message.request_id, 99);
+    assert!(message.integrity_verified);
+    runtime
+        .send_game_control(client_session, b"reserved")
+        .unwrap();
+    let control = poll_until(&runtime, Duration::from_secs(2), |event| {
+        event.event_type == EventType::GameControl && event.session == server_session
+    });
+    assert_eq!(control.data, b"reserved");
     runtime.stop(Duration::ZERO).expect("stop");
 }
 
 #[test]
 fn secure_tcp_rejects_an_unpinned_server() {
-    let runtime = NetworkRuntime::new(RuntimeConfig::default()).expect("runtime");
     let server_key = Keypair::generate().expect("server key");
     let wrong_key = Keypair::generate().expect("wrong key");
     let client_key = Keypair::generate().expect("client key");
-    let listener = runtime
-        .open_endpoint(EndpointConfig::secure_tcp_listener(
-            "127.0.0.1:0".parse().unwrap(),
-            server_key,
-        ))
-        .expect("secure listener");
-    let client = runtime
-        .open_endpoint(EndpointConfig::secure_tcp_client(
-            runtime.endpoint_local_addr(listener).unwrap(),
-            client_key,
-            wrong_key.public.clone(),
-            Vec::new(),
-        ))
-        .expect("secure client");
+    let runtime = authenticated_runtime(client_key, wrong_key.public.clone());
+    let listener = listen(&runtime, Transport::Tcp, server_key);
+    let client = connect(
+        &runtime,
+        Transport::Tcp,
+        runtime.endpoint_local_addr(listener).unwrap(),
+        b"",
+    );
     let failed = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::JoinFailed && event.endpoint == client
     });
@@ -147,24 +168,16 @@ fn secure_tcp_rejects_an_unpinned_server() {
 
 #[test]
 fn secure_udp_establishes_a_logical_session_before_delivering_datagrams() {
-    let runtime = NetworkRuntime::new(RuntimeConfig::default()).expect("runtime");
     let server_key = Keypair::generate().expect("server key");
     let client_key = Keypair::generate().expect("client key");
-    let listener = runtime
-        .open_endpoint(EndpointConfig::secure_udp_listener(
-            "127.0.0.1:0".parse().unwrap(),
-            server_key.clone(),
-        ))
-        .expect("UDP listener");
-    let client = runtime
-        .open_endpoint(EndpointConfig::secure_udp_client(
-            "127.0.0.1:0".parse().unwrap(),
-            runtime.endpoint_local_addr(listener).unwrap(),
-            client_key,
-            server_key.public.clone(),
-            b"udp-ticket".to_vec(),
-        ))
-        .expect("UDP client");
+    let runtime = authenticated_runtime(client_key, server_key.public.clone());
+    let listener = listen(&runtime, Transport::Udp, server_key);
+    let client = connect(
+        &runtime,
+        Transport::Udp,
+        runtime.endpoint_local_addr(listener).unwrap(),
+        b"udp-ticket",
+    );
     let auth = poll_until(&runtime, Duration::from_secs(2), |event| {
         event.event_type == EventType::AuthRequest && event.endpoint == listener
     });
@@ -183,29 +196,22 @@ fn secure_udp_establishes_a_logical_session_before_delivering_datagrams() {
     });
     assert_eq!(message.data, b"secure-datagram");
     assert_eq!(message.request_id, 1);
+    assert!(message.integrity_verified);
     runtime.stop(Duration::ZERO).expect("stop");
 }
 
 #[test]
 fn secure_kcp_establishes_and_exchanges_a_reliable_message() {
-    let runtime = NetworkRuntime::new(RuntimeConfig::default()).expect("runtime");
     let server_key = Keypair::generate().expect("server key");
     let client_key = Keypair::generate().expect("client key");
-    let listener = runtime
-        .open_endpoint(EndpointConfig::secure_kcp_listener(
-            "127.0.0.1:0".parse().unwrap(),
-            server_key.clone(),
-        ))
-        .expect("KCP listener");
-    let client = runtime
-        .open_endpoint(EndpointConfig::secure_kcp_client(
-            "127.0.0.1:0".parse().unwrap(),
-            runtime.endpoint_local_addr(listener).unwrap(),
-            client_key,
-            server_key.public.clone(),
-            b"kcp-ticket".to_vec(),
-        ))
-        .expect("KCP client");
+    let runtime = authenticated_runtime(client_key, server_key.public.clone());
+    let listener = listen(&runtime, Transport::Kcp, server_key);
+    let client = connect(
+        &runtime,
+        Transport::Kcp,
+        runtime.endpoint_local_addr(listener).unwrap(),
+        b"kcp-ticket",
+    );
     let auth = poll_until(&runtime, Duration::from_secs(3), |event| {
         event.event_type == EventType::AuthRequest && event.endpoint == listener
     });
@@ -225,6 +231,7 @@ fn secure_kcp_establishes_and_exchanges_a_reliable_message() {
     });
     assert_eq!(message.data, payload);
     assert_eq!(message.request_id, 2);
+    assert!(message.integrity_verified);
     let latencies = runtime.latency_snapshot();
     for kind in [LatencyKind::CryptoHandshake, LatencyKind::AuthWait] {
         assert!(
@@ -262,18 +269,8 @@ fn secure_kcp_establishes_and_exchanges_a_reliable_message() {
 fn secure_udp_requires_a_stateless_cookie_before_noise_allocation() {
     let runtime = NetworkRuntime::new(RuntimeConfig::default()).expect("runtime");
     let server_key = Keypair::generate().expect("server key");
-    let client_key = Keypair::generate().expect("client key");
-    let listener = runtime
-        .open_endpoint(EndpointConfig::secure_udp_listener(
-            "127.0.0.1:0".parse().unwrap(),
-            server_key.clone(),
-        ))
-        .expect("listener");
-    let mut handshake =
-        InitiatorHandshake::new(&client_key.private, &server_key.public).expect("initiator");
-    let first = handshake.write_first().expect("first Noise message");
-    let mut packet = vec![1];
-    packet.extend_from_slice(&first);
+    let listener = listen(&runtime, Transport::Udp, server_key);
+    let packet = encode_record(&Record::new(RecordKind::ClientHello, 0, b""), 128).unwrap();
     let socket = StdUdpSocket::bind("127.0.0.1:0").expect("raw UDP client");
     socket
         .set_read_timeout(Some(Duration::from_secs(1)))
@@ -283,27 +280,31 @@ fn secure_udp_requires_a_stateless_cookie_before_noise_allocation() {
         .expect("send first");
     let mut response = [0_u8; 128];
     let (length, _) = socket.recv_from(&mut response).expect("cookie response");
-    assert!(length > 1);
+    let response = decode_record(&response[..length], 128).unwrap();
     assert_eq!(
-        response[0], 6,
+        response.kind,
+        RecordKind::CookieChallenge,
         "server must challenge before Noise response"
     );
+    assert_eq!(runtime.metrics_snapshot().current_sessions, 0);
+    assert_eq!(runtime.metrics_snapshot().pending_handshakes, 0);
     runtime.stop(Duration::ZERO).expect("stop");
 }
 
 #[test]
 fn oversized_join_payload_is_rejected_before_connecting() {
-    let runtime = NetworkRuntime::new(RuntimeConfig::default()).expect("runtime");
     let server_key = Keypair::generate().expect("server key");
     let client_key = Keypair::generate().expect("client key");
+    let runtime = authenticated_runtime(client_key, server_key.public.clone());
     let error = runtime
-        .open_endpoint(EndpointConfig::secure_tcp_client(
-            "127.0.0.1:9".parse().unwrap(),
-            client_key,
-            server_key.public.clone(),
-            vec![0; 60 * 1024 + 1],
-        ))
+        .connect(ClientConfig {
+            transport: Transport::Tcp,
+            bind_addr: None,
+            remote_addr: "127.0.0.1:9".parse().unwrap(),
+            join_payload: vec![0; 60 * 1024 + 1],
+        })
         .expect_err("oversized join must fail before connect");
     assert_eq!(error.code(), ErrorCode::MessageTooLarge);
+    assert_eq!(runtime.metrics_snapshot().current_endpoints, 0);
     runtime.stop(Duration::ZERO).expect("stop");
 }

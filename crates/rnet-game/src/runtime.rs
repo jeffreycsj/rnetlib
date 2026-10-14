@@ -7,8 +7,7 @@ use crate::config::{
     GameClientConfig, GameHostClientConfig, GameProtocol, GameRuntimeConfig, GameServerConfig,
 };
 use crate::diagnostics::GameDiagnostics;
-use crate::envelope::{decode, DecodedEnvelope};
-use crate::event::{GameEvent, GameMessage};
+use crate::event::GameEvent;
 use crate::heartbeat::HeartbeatTracker;
 use crate::join;
 use crate::observe::{HeartbeatMetrics, ProtocolMetrics, ResumeMetrics};
@@ -512,44 +511,7 @@ impl GameRuntime {
                 event.data.zeroize();
                 return converted;
             }
-            EventType::Message => {
-                // Values other than zero indicate a legacy or non-game peer. Accepting them would
-                // reintroduce application routing fields that the game contract intentionally owns
-                // inside its opaque payload.
-                if event.msg_type != 0 || event.stream_id != 0 || event.status != ErrorCode::Ok {
-                    return Err(RnetError::new(
-                        ErrorCode::ProtocolError,
-                        "game message contains legacy routing metadata",
-                    ));
-                }
-                match decode(&event.data, self.maximum_envelope_len)? {
-                    DecodedEnvelope::Application {
-                        sequence,
-                        tick,
-                        datagram_sequence,
-                        payload,
-                    } => {
-                        self.observe_datagram_sequence(event.session, datagram_sequence)?;
-                        return self.buffer_range_message(GameMessage {
-                            endpoint: event.endpoint,
-                            session: event.session,
-                            sequence,
-                            tick,
-                            correlation_id: event.request_id,
-                            payload,
-                        });
-                    }
-                    // A future control state machine must explicitly consume each kind. Silently
-                    // ignoring a known kind today would let peers believe heartbeat, resume, or
-                    // protocol synchronization succeeded when none of those paths is active.
-                    DecodedEnvelope::Control { .. } => {
-                        return Err(RnetError::new(
-                            ErrorCode::ProtocolError,
-                            "unsupported game control for this runtime version",
-                        ));
-                    }
-                }
-            }
+            EventType::Message => return self.convert_business_event(&event),
             EventType::Writable => GameEvent::Writable {
                 endpoint: event.endpoint,
                 session: event.session,

@@ -346,10 +346,16 @@ fn plaintext_game_controls_cannot_impersonate_authenticated_controls() {
         .expect("control")
         .to_vec();
 
-    let error = runtime
+    assert!(runtime
         .convert_event(event)
-        .expect_err("unhandled control must fail closed");
-    assert_eq!(error.code(), ErrorCode::ProtocolError);
+        .expect("unverified control must be discarded")
+        .is_none());
+    assert_eq!(
+        runtime
+            .protocol_metrics_snapshot()
+            .plaintext_invalid_envelopes_dropped,
+        1
+    );
 }
 
 #[test]

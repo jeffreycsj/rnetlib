@@ -2,6 +2,8 @@
 
 RNet supplies bounded runtime behavior and production-test tooling; capacity is accepted only after it is measured on the target kernel, hardware, network, and application event loop.
 
+Current status: candidate, not certified. Legacy execution paths and dual game wires are still being removed; do not ship this migration tree as a production release. Historical green runs do not qualify a later commit. Complete the [single-current migration](single-current-api.md) before final packaging and target soak.
+
 ## Required release checks
 
 Run these from a clean source package:
@@ -13,6 +15,13 @@ make fuzz-asan-smoke
 make miri-test
 ```
 
+Pin and record the release commit, `Cargo.lock` hash, native/SDK package hashes, toolchains,
+platform and all test logs. Rebuild the native archive before `go test -a -race -p 1 -count=1
+./go/rnet`; a cached Go pass does not verify a newly linked library. Any subsequent source or
+dependency change invalidates this record for release purposes. Short fuzz smoke is a sanity
+check, not a third-party audit. Functional/API cleanup comes first, these repository gates and
+package checks next, and the 24–72 hour target weak-network/soak matrix last.
+
 The sanitizer and Miri targets require rustup toolchain `nightly-2026-09-21`, its Miri component,
 and cargo-fuzz 0.13.2. `make check` includes the Loom send-admission model. CI additionally runs
 RustSec, cargo-deny, the same six AddressSanitizer campaigns, concurrency model, and Miri suites.
@@ -23,10 +32,10 @@ recorded in `deny.toml` or the security review.
 
 - Use the single current `rnet_config_t` or game configuration in C/C++/Go/C#, with SDK and native library rebuilt together. Rust `RuntimeConfig::default()` and `RuntimeConfig::production()` share secure defaults. Set explicit runtime-wide endpoint and pending-handshake limits instead of relying only on per-listener capacity.
 - Keep legacy unauthenticated endpoints disabled; they are pending removal and are not a production integration path. Plaintext business mode is a separate, explicit server policy choice that preserves authenticated setup and control traffic but removes payload confidentiality and integrity. Client configuration does not select the server's business-data mode.
-- Continuously poll every game runtime. Heartbeat scheduling and authenticated reply handling are poll-driven; a stalled game event loop cannot make progress on liveness or per-session quality.
+- Continuously poll every game runtime on both peers. Heartbeat scheduling/replies, clock samples and version-negotiation retries/timeouts are poll-driven. There is no background game protocol scheduler: a stalled loop can be timed out by the peer and can process overdue local timeouts when it resumes. Zero-capacity polls advance bounded internal work but do not replace draining application events. Do not block the poll loop on long business operations.
 - `send_latest` is a best-effort pre-transport coalescing path for replaceable snapshots. Poll continuously or explicitly call `flush_realtime`; monitor admission rejection, replacement, close/backpressure drops, send failures, and queued bytes. Keep commands that require reliable delivery on ordinary `send`.
 - Ordinary and advanced game sends use the bounded fair scheduler. Tune Rust `ScheduledQueueConfig`, C `rnet_game_config_t`, C++11's configuration constructor, or Go `GameConfig.ScheduledQueue`; monitor per-priority admission/forwarding, backpressure requeues, expiry and queue-delay percentiles. An expiry is local and cannot recall socket/KCP-owned bytes.
-- Resume tickets are single-runtime and one-use; a server restart or a different instance cannot recover the identity. Keep the same client Noise static key, reauthorize every `ResumeRequest`, monitor `rnet_game_resume_*`, and revoke tickets on an application kick. Do not advertise rolling-restart recovery until a shared atomic ticket store is implemented and tested.
+- Resume tickets are single-runtime, bound to the original listener, and one-use. Recreating the runtime, restarting the process, rolling deployment or moving to another instance requires a fresh application login; none can recover identity with the old ticket. Keep the same client Noise static key, reauthorize every `ResumeRequest`, monitor `rnet_game_resume_*`, and revoke tickets on an application kick. Cross-instance/restart recovery is outside this library's current product scope, not an unverified supported feature.
 - Persist private keys in an external keystore, pin or verify the server public key, and rotate identities according to the application's incident policy. Never log key, cookie, ticket, or payload bytes.
 - Size event and send byte budgets from a process RSS limit. Alert before gauges remain above 80% of their configured limits.
 - A wire-v4 game runtime uses `event_queue_capacity` and `max_event_bytes` again as an independent ceiling for authenticated business data that arrives before the ready event. Include both the transport event queue and this game-layer early-data allowance when calculating worst-case RSS; reservations survive negotiation completion until the application polls them.
@@ -37,7 +46,16 @@ recorded in `deny.toml` or the security review.
 
 ## Observability gate
 
-Export `metrics_snapshot_v3` and rotate latency windows at the monitoring interval. At minimum alert on event drops, lifecycle rejection, admission rejection by reason, endpoint/session/pending-handshake gauges, protocol errors, close reason, send backpressure, queued bytes, KCP update delay, and P99/P99.9. Use logger v2 to retain the timestamp, event name, runtime, endpoint, session, transport, error code, and correlation ID needed to join an incident timeline.
+Export `rnet_metrics_snapshot` (Rust: `metrics_snapshot`) and rotate latency windows at the monitoring interval. At minimum alert on event drops, lifecycle rejection, admission rejection by reason, endpoint/session/pending-handshake gauges, protocol errors, close reason, send backpressure, queued bytes, KCP update delay, and P99/P99.9. Use the current `rnet_logger_t` to retain the timestamp, event name, runtime, endpoint, session, transport, error code, and correlation ID needed to join an incident timeline.
+
+Game-layer malformed **unverified** business envelopes are silently dropped and counted in
+`rnet_game_plaintext_invalid_envelopes_dropped_total`; authenticated malformed messages still
+fail closed. This counter excludes valid pre-ready messages refused by local buffer limits.
+Those increment `range_buffer_snapshot().session_admission_rejected` or
+`runtime_admission_rejected`, emit `ProtocolViolation` with the budget cause in the configured
+logger, and close the session with `ProtocolError` in both security modes. A resource ceiling
+is a local failure boundary, not proof that the peer is malicious. Queued frames retain their
+receive-time integrity even when the server changes encryption before game polling.
 
 For Rust game deployments, also scrape `GameRuntime::prometheus_snapshot()` or sample `heartbeat_metrics_snapshot()`. Track heartbeat timeouts, rejected replies, probe/reply send failures, RTT P95/P99, scheduled queue delay P95/P99, tick-annotated queue delay and expiry together; percentile values are zero until their sample counter is nonzero. For incident-sensitive RTT percentiles, call `drain_heartbeat_rtt_window()` at each monitoring interval; it does not reset cumulative data. These are runtime-wide aggregates, not per-player or correlation labels. The per-session `network_quality(session)` snapshot is intended for targeted diagnosis and is removed when the session closes. A failed deferred send emits the bounded `game_scheduled_send_failed` log with its correlation ID and no payload.
 

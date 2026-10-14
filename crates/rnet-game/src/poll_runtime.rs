@@ -3,11 +3,14 @@
 use crate::event::GameEvent;
 use crate::runtime::GameRuntime;
 use rnet_core::{ErrorCode, Event, EventType};
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 const NONBLOCKING_EVENT_BATCH: usize = 64;
 const MAX_INTERNAL_EVENTS_PER_POLL: usize = 1024;
+
+#[cfg(test)]
+#[path = "poll_runtime_tests.rs"]
+mod tests;
 
 impl GameRuntime {
     /// Polls typed game events. Unsupported internal controls fail closed until implemented.
@@ -127,8 +130,6 @@ impl GameRuntime {
         for event in events {
             let endpoint = event.endpoint;
             let session = event.session;
-            let is_business_message = event.event_type == EventType::Message;
-            let integrity_verified = event.integrity_verified;
             // These lifecycle payloads are local diagnostics, unlike opaque application bytes
             // and authentication tickets. Preserve the cause before typed conversion drops it.
             let detail = (matches!(
@@ -147,30 +148,18 @@ impl GameRuntime {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    let unverified_plaintext = is_business_message && !integrity_verified;
-                    if unverified_plaintext {
-                        // The transport already enforced the authenticated server's mode. The
-                        // local server-policy opt-in says nothing about a client receive event;
-                        // trust only the integrity evidence captured when this frame arrived.
-                        // An on-path sender controls both contents and rate in plaintext mode.
-                        // Keep the session usable and expose only a low-cardinality counter.
-                        self.protocol_metrics
-                            .plaintext_invalid_envelopes_dropped
-                            .fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        if session != 0 {
-                            let _ = self
-                                .network
-                                .close_session(session, ErrorCode::ProtocolError);
-                        }
-                        let violation = GameEvent::ProtocolViolation { endpoint, session };
-                        self.log_game_event_detail(&violation, Some(&error.to_string()));
-                        deferred_public |= self
-                            .range
-                            .lock()
-                            .expect("range state poisoned")
-                            .queue_public(violation, output, capacity);
+                    if session != 0 {
+                        let _ = self
+                            .network
+                            .close_session(session, ErrorCode::ProtocolError);
                     }
+                    let violation = GameEvent::ProtocolViolation { endpoint, session };
+                    self.log_game_event_detail(&violation, Some(&error.to_string()));
+                    deferred_public |= self
+                        .range
+                        .lock()
+                        .expect("range state poisoned")
+                        .queue_public(violation, output, capacity);
                 }
             }
             self.range

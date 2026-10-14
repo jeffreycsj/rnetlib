@@ -40,6 +40,7 @@ pub struct ResumeMetricsSnapshot {
 /// of being logged or labeled by session, because an unauthenticated sender controls its rate.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProtocolMetricsSnapshot {
+    /// Malformed unverified business envelopes only; excludes local early-data admission failures.
     pub plaintext_invalid_envelopes_dropped: u64,
 }
 

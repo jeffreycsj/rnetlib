@@ -1,8 +1,26 @@
 # Game production qualification record
 
-This record separates repository qualification from target-environment certification. It was
-updated on 2026-09-23 against the dirty development tree shown by the commands below; rerun every
-gate on the release commit and archive the resulting package hash before deployment.
+This record separates repository qualification from target-environment certification.
+
+## Current release status (2026-10-14)
+
+**Candidate, not certified; migration incomplete.** The historical results below were recorded
+on a dirty 2026-09-23 development tree. They do not qualify the current HEAD or subsequent local
+changes. In particular, the later current-ABI, opaque-send, secure-default and plaintext-error
+changes do not inherit those ASan, Miri, Loom, Go race or packaged-binary results. See the
+[incremental migration record](single-current-api.md) for the narrower checks actually rerun.
+
+Final qualification must reference one clean release commit and its exact native/SDK package
+hashes. First finish old-endpoint removal, single-wire negotiation and failure-path regressions;
+then rerun repository/ABI/multilanguage, Go race, ASan fuzz, Miri and Loom gates; only then perform
+target weak-network tests and 24–72 hour soak. None of these local checks constitutes an
+independent audit of snow, ring or their Noise/KCP integration.
+
+Linux guard-page ABI checks do not qualify other operating systems. Managed integration evidence
+is limited to Linux x86_64 / .NET 8, not Windows, macOS, Unity/IL2CPP or mobile. Target capacity and
+long-term stability remain unmeasured; short loopback probes are not substitutes.
+
+## Historical evidence (not current-HEAD qualification)
 
 ## Repository gates
 

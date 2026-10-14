@@ -43,6 +43,7 @@ install -m 0644 docs/getting-started.md "${destination}/docs/getting-started.md"
 install -m 0644 docs/csharp.md docs/game-library-review.md "${destination}/docs/"
 install -m 0644 docs/game-networking.md "${destination}/docs/game-networking.md"
 install -m 0644 docs/production-deployment.md "${destination}/docs/production-deployment.md"
+install -m 0644 docs/single-current-api.md "${destination}/docs/single-current-api.md"
 install -m 0644 Cargo.lock LICENSE README.md SECURITY.md go.mod "${destination}/"
 
 (

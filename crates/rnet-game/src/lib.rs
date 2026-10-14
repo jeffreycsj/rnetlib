@@ -6,6 +6,8 @@ mod clock_sync_runtime;
 mod config;
 mod diagnostics;
 mod diagnostics_summary;
+#[cfg(test)]
+mod early_data_policy_tests;
 mod endpoint_lifecycle;
 #[cfg(test)]
 mod endpoint_lifecycle_tests;
@@ -17,6 +19,7 @@ mod heartbeat;
 mod heartbeat_runtime;
 mod join;
 mod lifecycle;
+mod message_runtime;
 mod observe;
 mod poll_runtime;
 mod quality;
