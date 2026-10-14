@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 
 impl GameRuntime {
     /// Closes one game session while leaving its listener and other players active.
+    /// `session` is a local handle. Revokes its resume credentials and removes pending game
+    /// sends; use this for an explicit kick, not for preserving reconnect eligibility.
+    /// Returns an error for an unknown/closed handle. Serializes with poll and readiness
+    /// publication; shutdown of a client connection may also retire its dedicated endpoint.
     pub fn close_session(&self, session: Handle) -> Result<()> {
         // Serialize with readiness publication so a racing v4 control cannot resurrect a
         // locally closed handle after cleanup.
@@ -16,7 +20,12 @@ impl GameRuntime {
         Ok(())
     }
 
-    /// Stops the runtime after the requested drain period and closes remaining endpoints.
+    /// Rejects new game sends, attempts draining, then closes remaining endpoints.
+    /// `drain_timeout` is a best-effort local drain budget; zero skips the grace period.
+    /// It does not guarantee remote delivery or bound time spent waiting for concurrent poll.
+    /// Pending work left after draining is discarded, and all resume tickets are invalidated.
+    /// An unrepresentable deadline returns `InvalidArgument` before shutdown begins.
+    /// Do not invoke shutdown from this runtime's logger callback.
     pub fn stop(&self, drain_timeout: Duration) -> Result<()> {
         let deadline = Instant::now().checked_add(drain_timeout).ok_or_else(|| {
             RnetError::new(

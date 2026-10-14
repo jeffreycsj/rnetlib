@@ -19,17 +19,29 @@ pub(crate) enum UdpObservation {
 }
 
 /// Receiver-side sequence gap estimate, not a raw IP-layer packet capture.
+/// Totals are session-local. Late unique packets can reduce `missing`; gaps that outlive the
+/// reorder window cannot be repaired. Plaintext data makes this an advisory, untrusted signal.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct UdpLossSnapshot {
+    /// Sequence positions expected since tracking began, excluding implausible forward jumps.
     pub expected: u64,
+    /// Unique packets counted, including accepted late arrivals within the reorder window.
     pub received: u64,
+    /// `expected - received`, saturating at zero; may shrink after reordered arrivals.
     pub missing: u64,
+    /// Number of sequence positions represented in the recent window, from 0 through 64.
     pub recent_expected: u8,
+    /// Missing positions within that recent window, not finalized lost packets.
     pub recent_missing: u8,
+    /// Recent missing/expected ratio scaled by 1,000 (10 means 1%); zero with no samples.
     pub recent_loss_per_mille: u16,
+    /// Unique late packets accepted inside the reorder window.
     pub reordered: u64,
+    /// Duplicate packets recognized within tracked history.
     pub duplicates: u64,
+    /// Arrivals older than retained history; ignored for received/loss repair.
     pub too_old: u64,
+    /// Implausibly large forward jumps that restarted the recent window without inflating loss.
     pub discontinuities: u64,
 }
 
@@ -132,22 +144,39 @@ impl UdpLossTracker {
 /// Tunable thresholds for a game-facing grade. RTT and jitter use authenticated heartbeat
 /// samples. UDP data gaps are advisory when the server selects plaintext business records:
 /// unlike heartbeat controls, those records then have no integrity protection.
+/// For each signal, excellent <= good <= fair; boundaries are inclusive, and larger values
+/// are poor. Runtime creation rejects invalid ordering or out-of-range sample minima/ratios.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QualityPolicy {
+    /// Positive heartbeat sample minimum before any non-unknown grade; default 3.
     pub minimum_rtt_samples: u64,
+    /// Recent UDP positions required to include loss, in 1..=64; default 16.
     pub minimum_udp_packets: u8,
+    /// Recent KCP transmissions required to include retransmission, in 1..=128; default 16.
     pub minimum_kcp_segments: u16,
+    /// Inclusive excellent smoothed-RTT ceiling; default 80 ms.
     pub excellent_rtt: Duration,
+    /// Inclusive good smoothed-RTT ceiling; default 150 ms.
     pub good_rtt: Duration,
+    /// Inclusive fair smoothed-RTT ceiling; default 250 ms.
     pub fair_rtt: Duration,
+    /// Inclusive excellent smoothed-jitter ceiling; default 15 ms.
     pub excellent_jitter: Duration,
+    /// Inclusive good smoothed-jitter ceiling; default 35 ms.
     pub good_jitter: Duration,
+    /// Inclusive fair smoothed-jitter ceiling; default 70 ms.
     pub fair_jitter: Duration,
+    /// Excellent recent UDP gap ceiling in thousandths, 0..=1,000; default 10 (1%).
     pub excellent_udp_loss_per_mille: u16,
+    /// Good recent UDP gap ceiling in thousandths; default 30 (3%).
     pub good_udp_loss_per_mille: u16,
+    /// Fair recent UDP gap ceiling in thousandths, at most 1,000; default 100 (10%).
     pub fair_udp_loss_per_mille: u16,
+    /// Excellent recent KCP retransmission ceiling in thousandths; default 10 (1%).
     pub excellent_kcp_retransmission_per_mille: u16,
+    /// Good recent KCP retransmission ceiling in thousandths; default 50 (5%).
     pub good_kcp_retransmission_per_mille: u16,
+    /// Fair recent KCP retransmission ceiling in thousandths, at most 1,000; default 150 (15%).
     pub fair_kcp_retransmission_per_mille: u16,
 }
 

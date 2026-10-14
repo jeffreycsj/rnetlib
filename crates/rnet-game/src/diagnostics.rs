@@ -10,9 +10,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Cumulative counters for the logger attached to this game's diagnostics.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GameLoggerSnapshot {
+    /// Records lost to bounded-logger overload or shutdown, not network packets lost.
     pub dropped: u64,
+    /// Callback panics caught by the logger thread; they do not unwind the game loop.
     pub sink_panics: u64,
 }
 
@@ -104,6 +107,10 @@ impl GameDiagnostics {
 impl GameRuntime {
     /// Installs an optional asynchronous logger before the runtime is used. Log callbacks run
     /// outside network and game-poll threads; normal sends and receives remain unchanged.
+    /// `logger` is moved into this runtime. Its sink may forward into your own logging component.
+    /// Return promptly
+    /// from the callback; never stop or drop its owning runtime there. Game records are primarily
+    /// produced during poll, exclude credential/payload bytes, and may be dropped under overload.
     pub fn with_logger(mut self, logger: BoundedLogger) -> Self {
         self.diagnostics.logger = Some(logger);
         self
@@ -120,8 +127,9 @@ impl GameRuntime {
             })
     }
 
-    /// Asynchronous sink callback time. This separate query preserves the original public
-    /// `GameLoggerSnapshot` shape for Rust callers constructing it directly.
+    /// Cumulative asynchronous sink callback durations, in microsecond histogram percentiles.
+    /// Returns `None` with no configured logger; a configured logger may still have zero samples.
+    /// Measures callback execution, not log delivery delay. Querying does not drain samples.
     pub fn game_logger_callback_latency(&self) -> Option<LatencySnapshot> {
         self.diagnostics
             .logger

@@ -7,14 +7,23 @@ use rnet_core::{ErrorCode, Handle, Result, RnetError};
 use rnet_transport::LatestTransportSnapshot;
 
 impl GameRuntime {
-    /// Stages a replaceable snapshot. The key is scoped to the session; ordinary `send` remains
-    /// reliable FIFO on TCP/KCP and never silently drops. A snapshot already handed to the
-    /// transport worker or KCP send cache cannot be recalled.
+    /// Copies `payload` into replaceable staging for the game-ready `session`.
+    /// `key` identifies a snapshot slot only within that session; zero is a valid key.
+    /// Admission replaces any pending value for the same key, without notifying its receiver.
+    /// The key is local scheduling metadata, not a business message type sent to the peer.
+    ///
+    /// TCP/KCP also coalesce pending transport slots until I/O worker pickup; UDP replacement
+    /// ends at transport admission. Nothing recalls data already owned by socket/KCP buffers.
+    /// Ordinary [`Self::send`] does not use replacement, but neither API promises delivery.
+    /// Readiness, size, stopping and staging-budget errors follow the ordinary send contract.
+    /// Keep polling or call [`Self::flush_realtime`] to forward snapshots.
     pub fn send_latest(&self, session: Handle, key: u64, payload: &[u8]) -> Result<()> {
         self.send_latest_with_tick(session, key, payload, None)
     }
 
     /// Adds an optional simulation tick to a replaceable snapshot.
+    /// `session`, `key` and borrowed `payload` follow [`Self::send_latest`]. `tick` is forwarded
+    /// unchanged; `None` omits it and `Some(0)` is valid. Replacing a value also replaces its tick.
     pub fn send_latest_with_tick(
         &self,
         session: Handle,
@@ -60,8 +69,10 @@ impl GameRuntime {
             })
     }
 
-    /// Non-blockingly forwards at most `capacity` staged snapshots in fair key order.
+    /// Attempts at most `capacity` staged snapshots in fair key order; zero performs no sends.
     /// A full transport queue rotates that snapshot behind other pending keys.
+    /// Returns the number accepted by transport, not delivered. No network completion is waited
+    /// for, but this method can wait for the shared poll lock; it does not drive heartbeat timers.
     pub fn flush_realtime(&self, capacity: usize) -> usize {
         let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
         self.flush_realtime_inner(capacity)
@@ -102,6 +113,8 @@ impl GameRuntime {
         forwarded
     }
 
+    /// Returns game-staging gauges and cumulative snapshot counters without resetting them.
+    /// Transport-pending replacement is reported separately by [`Self::transport_latest_snapshot`].
     pub fn realtime_queue_snapshot(&self) -> RealtimeQueueSnapshot {
         self.realtime
             .lock()

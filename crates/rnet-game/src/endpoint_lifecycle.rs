@@ -6,6 +6,9 @@ use std::collections::HashMap;
 
 impl GameRuntime {
     /// Closes an endpoint and releases its game protocol policy.
+    /// `endpoint` is the listen/connect handle, not a session. All its sessions, staged data
+    /// and resume credentials are retired; other endpoints remain independent. Stale handles
+    /// fail. This operation serializes with poll and prevents queued readiness from reviving it.
     pub fn close_endpoint(&self, endpoint: Handle) -> Result<()> {
         let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
         let _registration = self

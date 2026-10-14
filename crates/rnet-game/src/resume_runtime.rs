@@ -61,6 +61,12 @@ impl GameRuntime {
 
     /// Server-only: issues a short-lived one-use ticket for an authorized logical player.
     /// `identity` is opaque to the library (1–64 bytes); do not put secrets in logs.
+    /// `session` must be game-ready and server-side. The borrowed identity is copied into the
+    /// runtime registry. Success queues protected control data; the client obtains the bytes in
+    /// [`GameEvent::ResumeTicket`], not as this method's return value.
+    /// Tickets expire, are one-use and bind the client key, endpoint and selected version.
+    /// Restarting the server runtime invalidates them; reauthorization is always required.
+    /// Invalid identity/role, full ticket storage, stale handles or control backpressure fail.
     pub fn issue_resume_ticket(&self, session: Handle, identity: &[u8]) -> Result<()> {
         self.ensure_game_ready(session)?;
         let endpoint = self

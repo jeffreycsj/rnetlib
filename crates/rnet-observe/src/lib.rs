@@ -1,4 +1,9 @@
 //! Bounded asynchronous logging and metrics helpers.
+//!
+//! Forward owned [`LogRecord`] values into an application logger through [`BoundedLogger`].
+//! Logging is best-effort and must not be used as a reliable audit/event delivery channel.
+
+#![deny(missing_docs)]
 
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -12,17 +17,29 @@ use rnet_core::{ErrorCode, Handle, Result, RnetError};
 
 const LATENCY_BUCKET_COUNT: usize = 66;
 
+/// Fixed-memory latency summary in microseconds. Percentiles are power-of-two bucket estimates
+/// capped by the observed maximum, not exact order statistics. The producer defines whether the
+/// snapshot is cumulative or windowed; `sample_count == 0` means no samples, not zero latency.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LatencySnapshot {
+    /// Number of observations represented by the sampled buckets, saturating at `u64::MAX`.
     pub sample_count: u64,
+    /// Estimated median latency in microseconds.
     pub p50_us: u64,
+    /// Estimated 90th percentile latency in microseconds.
     pub p90_us: u64,
+    /// Estimated 95th percentile latency in microseconds.
     pub p95_us: u64,
+    /// Estimated 99th percentile latency in microseconds.
     pub p99_us: u64,
+    /// Estimated 99.9th percentile latency in microseconds.
     pub p999_us: u64,
+    /// Largest recorded duration in microseconds, not a percentile bucket boundary.
     pub max_us: u64,
 }
 
+/// Concurrent, fixed-size histogram with no per-sample allocation.
+/// Bucket/max reads are independent; snapshots and resets are not whole-histogram transactions.
 #[derive(Debug)]
 pub struct LatencyHistogram {
     buckets: [AtomicU64; LATENCY_BUCKET_COUNT],
@@ -40,6 +57,8 @@ impl Default for LatencyHistogram {
 
 impl LatencyHistogram {
     /// Records a latency using fixed power-of-two microsecond buckets.
+    /// `duration` is truncated to whole microseconds and capped at `u64::MAX` microseconds;
+    /// zero is a valid observation. The caller chooses the operation being measured.
     // `try_update` is the future spelling, but it is unavailable on the declared Rust 1.85 MSRV.
     #[allow(deprecated)]
     pub fn record(&self, duration: Duration) {
@@ -51,6 +70,8 @@ impl LatencyHistogram {
         self.max_us.fetch_max(micros, Ordering::Relaxed);
     }
 
+    /// Reads observations since construction or the last reset, without consuming them.
+    /// Concurrent record/reset calls may be reflected in different buckets at different instants.
     pub fn snapshot(&self) -> LatencySnapshot {
         let counts: [u64; LATENCY_BUCKET_COUNT] =
             std::array::from_fn(|index| self.buckets[index].load(Ordering::Relaxed));
@@ -58,6 +79,8 @@ impl LatencyHistogram {
     }
 
     /// Returns the interval accumulated since the previous drain and begins a new interval.
+    /// Coordinate consumers: each call consumes shared counters. Individual swaps are atomic,
+    /// but a racing observation's bucket and maximum may fall into different interval snapshots.
     pub fn snapshot_and_reset(&self) -> LatencySnapshot {
         let counts: [u64; LATENCY_BUCKET_COUNT] =
             std::array::from_fn(|index| self.buckets[index].swap(0, Ordering::AcqRel));
@@ -118,34 +141,57 @@ fn percentile(
     u64::MAX
 }
 
+/// Structured log severity. Only `Error` uses the logger's separate reserved queue.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum LogLevel {
+    /// Fine-grained diagnostic tracing.
     Trace = 0,
+    /// Developer-oriented diagnostic detail.
     Debug = 1,
+    /// Expected lifecycle or operational information.
     Info = 2,
+    /// Recoverable failure or degraded behavior; shares normal queue capacity.
     Warn = 3,
+    /// Failure diagnostics using separately reserved queue capacity.
     Error = 4,
 }
 
+/// Owned structured record delivered to a logging sink. RNet-generated messages omit credentials
+/// and business payloads; callers constructing their own records are responsible for redaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LogRecord {
+    /// Producer's wall-clock milliseconds since Unix epoch; not a monotonic duration.
     pub timestamp_unix_ms: u64,
+    /// Severity used for queue selection, not automatic minimum-level filtering.
     pub level: LogLevel,
+    /// Stable event category suitable for querying, independent of free-form diagnostic text.
     pub event_name: String,
+    /// Component/category emitting the record, such as `rnet.game`.
     pub target: String,
+    /// Human-readable diagnostic detail; do not treat its wording as a stable wire format.
     pub message: String,
+    /// Producer's runtime correlation identity; not necessarily an FFI runtime handle.
     pub runtime: Handle,
+    /// Local endpoint context, or zero when not applicable/available.
     pub endpoint: Handle,
+    /// Local session context, or zero when not applicable/available.
     pub session: Handle,
+    /// Transport tag: 1 TCP, 2 UDP, 3 KCP; zero when unknown or not applicable.
     pub transport: u32,
+    /// Structured local error category; `Ok` when the record does not describe an error.
     pub error_code: ErrorCode,
+    /// Optional application request/trace correlation; zero means absent.
     pub correlation_id: u64,
 }
 
+/// Logger queue capacities in records, not bytes. Both must be positive.
+/// Separate error capacity limits starvation but cannot guarantee lossless logging.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LoggerConfig {
+    /// Queue slots shared by trace/debug/info/warn records; default 256.
     pub normal_capacity: usize,
+    /// Slots reserved for error records; default 16.
     pub error_capacity: usize,
 }
 
@@ -164,6 +210,11 @@ struct CallbackLatency {
     window: LatencyHistogram,
 }
 
+/// Best-effort logger with one dedicated callback thread and two bounded queues.
+/// Producers may log concurrently; callbacks execute serially, away from I/O/game-poll threads.
+/// Cross-severity ordering is not guaranteed because errors use a separate queue.
+/// Dropping the logger drains admitted records and joins the callback thread; a blocked callback
+/// can therefore block destruction. Never shut down/drop the logger or owning runtime in its sink.
 pub struct BoundedLogger {
     normal: Option<SyncSender<LogRecord>>,
     errors: Option<SyncSender<LogRecord>>,
@@ -184,6 +235,11 @@ impl fmt::Debug for BoundedLogger {
 }
 
 impl BoundedLogger {
+    /// Starts a logger with `config` queue capacities and a caller-supplied `sink`.
+    /// The sink receives owned records and may forward them to the application's log component.
+    /// It must return promptly; panics are caught and counted. Captured data must remain valid for
+    /// the logger's lifetime (`'static`). Zero capacity returns `InvalidArgument`; thread creation
+    /// failures return an I/O error. This constructor does not install the logger on a runtime.
     pub fn new(config: LoggerConfig, sink: impl Fn(LogRecord) + Send + 'static) -> Result<Self> {
         if config.normal_capacity == 0 || config.error_capacity == 0 {
             return Err(RnetError::new(
@@ -215,6 +271,8 @@ impl BoundedLogger {
     }
 
     /// Enqueues a record without waiting. Error records use separately reserved capacity.
+    /// Consumes `record`; `true` means queued, not persisted. `false` means it was discarded due
+    /// to full/disconnected queues or shutdown and counted by [`Self::dropped`]. No level filter.
     pub fn log(&self, record: LogRecord) -> bool {
         let sender = if record.level == LogLevel::Error {
             self.errors.as_ref()
@@ -234,23 +292,31 @@ impl BoundedLogger {
         }
     }
 
+    /// Cumulative records rejected by queue admission, including attempts after shutdown.
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
 
+    /// Cumulative caught callback panics; logging continues with later records.
     pub fn sink_panics(&self) -> u64 {
         self.sink_panics.load(Ordering::Relaxed)
     }
 
+    /// Cumulative callback execution time, including callbacks that panicked; no reset.
+    /// Excludes time waiting in the logging queues; units and sampling follow [`LatencySnapshot`].
     pub fn callback_latency(&self) -> LatencySnapshot {
         self.callback_latency.total.snapshot()
     }
 
     /// Rotates callback latency samples without resetting the cumulative summary.
+    /// Consumes the shared window, with the concurrency caveats of [`LatencyHistogram::snapshot_and_reset`].
     pub fn drain_callback_latency_window(&self) -> LatencySnapshot {
         self.callback_latency.window.snapshot_and_reset()
     }
 
+    /// Stops admission, drains previously queued records and joins the sink thread.
+    /// Repeated calls are harmless. There is no drain deadline: a slow sink delays this call.
+    /// Never invoke from the sink itself, including indirectly through owning runtime destruction.
     pub fn shutdown(&mut self) {
         self.normal.take();
         self.errors.take();

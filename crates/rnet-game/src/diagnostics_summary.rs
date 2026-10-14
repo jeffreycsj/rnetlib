@@ -10,6 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 impl GameRuntime {
     /// Sets the poll-driven summary interval (default 30 seconds); zero disables summaries.
     /// Histograms are cumulative, and querying/logging never drains a caller's interval window.
+    /// `interval` schedules future summaries from this call; an unrepresentable monotonic deadline
+    /// returns `InvalidArgument`. No records are generated without a logger or ongoing polls.
     pub fn set_metrics_log_interval(&self, interval: Duration) -> Result<()> {
         let now = Instant::now();
         if now.checked_add(interval).is_none() {

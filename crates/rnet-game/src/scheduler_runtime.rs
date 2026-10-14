@@ -66,7 +66,11 @@ impl GameRuntime {
             })
     }
 
-    /// Attempts a bounded number of priority-aware sends without blocking the game loop.
+    /// Attempts at most `capacity` priority-aware forwards; zero performs no sends.
+    /// Returns successful transport admissions, not peer deliveries. Expired entries are dropped
+    /// while selecting work and do not count as forwards. Backpressure restores pending work.
+    /// It does not wait for network completion, but can wait for the poll lock and does not
+    /// replace regular polling for heartbeats or negotiation.
     pub fn flush_scheduled(&self, capacity: usize) -> usize {
         let _poll = self.poll_guard.lock().expect("game poll lock poisoned");
         self.flush_scheduled_inner(capacity)
@@ -114,6 +118,8 @@ impl GameRuntime {
         forwarded
     }
 
+    /// Returns priority staging gauges, cumulative counters and cumulative queue-delay samples.
+    /// Does not drain or reset statistics; snapshots exclude transport-owned queued bytes.
     pub fn scheduled_queue_snapshot(&self) -> ScheduledQueueSnapshot {
         self.scheduled
             .lock()

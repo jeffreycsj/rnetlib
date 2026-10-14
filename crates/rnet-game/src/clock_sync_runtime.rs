@@ -19,13 +19,18 @@ pub(crate) struct ClockSyncMetrics {
     pub(crate) send_failures: AtomicU64,
 }
 
-/// Aggregate counters without per-player labels.
+/// Runtime-wide cumulative clock-control counters without per-player labels.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ClockSyncMetricsSnapshot {
+    /// Client probes accepted by the protected control send path.
     pub probes_sent: u64,
+    /// Server replies accepted by the protected control send path.
     pub replies_sent: u64,
+    /// Valid matching replies incorporated into client clock estimates.
     pub samples: u64,
+    /// Rate-limited probes or replies rejected by the clock tracker; not all parser failures.
     pub rejected: u64,
+    /// Probe RNG/encoding/admission failures plus reply send-admission failures.
     pub send_failures: u64,
 }
 
@@ -45,6 +50,9 @@ impl GameRuntime {
     }
 
     /// Most recent client-side sample. Server sessions do not estimate an offset.
+    /// `session` must be game-ready. `None` means no accepted sample yet or a server-side session,
+    /// not a measured zero offset. Pending/stale handles fail readiness validation. Callers must
+    /// keep polling to obtain new samples; this query does not send a clock probe.
     pub fn clock_sync_snapshot(&self, session: Handle) -> Result<Option<ClockSyncSample>> {
         self.ensure_game_ready(session)?;
         Ok(self
@@ -55,6 +63,8 @@ impl GameRuntime {
             .and_then(ClockSyncTracker::sample))
     }
 
+    /// Returns cumulative clock counters without resetting them or advancing the clock protocol.
+    /// Counters may be observed at slightly different instants during concurrent polling.
     pub fn clock_sync_metrics_snapshot(&self) -> ClockSyncMetricsSnapshot {
         let metrics = &self.clock_metrics;
         ClockSyncMetricsSnapshot {

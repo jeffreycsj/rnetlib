@@ -1,5 +1,21 @@
 //! Game-oriented session and messaging facade over RNet's transport runtime.
 //!
+//! Start with [`GameRuntimeConfig::production`], then [`GameRuntime::listen`] on the server
+//! and [`GameRuntime::connect`] or [`GameRuntime::connect_host`] on a client configured with
+//! server trust. Select transport once in endpoint configuration, never on each message.
+//! Both sides must keep calling [`GameRuntime::poll`]. The server answers authorization events;
+//! each side waits for [`GameEvent::SessionReady`] before sending opaque application payloads.
+//!
+//! # Contracts to keep in mind
+//!
+//! - Successful send means bounded local admission, not peer delivery; handle backpressure.
+//! - Snapshot replacement and priority/expiry operate locally, not on already transmitted data.
+//! - Only the server chooses business encryption; plaintext business data has no integrity.
+//! - Resume tickets are one-use and server-runtime-local, never cross-process recovery.
+//! - RTT/clock estimates include queueing effects and do not constitute an anti-cheat clock.
+//!
+//! # SDK compatibility
+//!
 //! One inclusive application version configuration serves every connection.
 //! Older SDK source APIs are deliberately rejected:
 //! ```compile_fail
@@ -14,6 +30,16 @@
 //!     let _ = runtime.listen_range(config);
 //! }
 //! ```
+
+#![deny(missing_docs)]
+#![doc = concat!(
+    "\n# Executable server/client example\n\n",
+    "This example runs separate server and client runtimes in one process. Its fixed login ",
+    "credential is only a demonstration; production authorization must validate real credentials.\n\n",
+    "```rust\n",
+    include_str!("../examples/game_quickstart.rs"),
+    "\n```\n"
+)]
 
 mod admission;
 mod clock_sync;

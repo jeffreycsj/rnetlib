@@ -51,10 +51,15 @@ pub struct RustKcpEngine {
 /// Counts KCP PUSH segment retransmissions, not IP-layer packet loss.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct KcpRetransmissionSnapshot {
+    /// Cumulative outbound PUSH transmissions, including retransmissions; excludes ACK/control.
     pub segments_sent: u64,
+    /// Cumulative PUSH transmissions whose sequence had already been sent by this engine.
     pub retransmitted: u64,
+    /// Transmissions represented by the recent window, from 0 through 128.
     pub recent_segments: u16,
+    /// Retransmissions within the recent window, not the number of unique lost packets.
     pub recent_retransmitted: u16,
+    /// Recent retransmitted/total ratio scaled by 1,000; zero with no samples.
     pub recent_retransmission_per_mille: u16,
 }
 

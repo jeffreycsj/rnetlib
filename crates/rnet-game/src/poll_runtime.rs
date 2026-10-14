@@ -13,7 +13,17 @@ const MAX_INTERNAL_EVENTS_PER_POLL: usize = 1024;
 mod tests;
 
 impl GameRuntime {
-    /// Polls typed game events. Unsupported internal controls fail closed until implemented.
+    /// Drives game state and returns at most `capacity` owned application events.
+    ///
+    /// `timeout` bounds event waiting after the poll lock is acquired, not total execution
+    /// time; lock contention, conversion and maintenance add overhead. Zero requests no event
+    /// wait. `capacity = 0` returns no public events but still performs bounded internal work,
+    /// flushes staging, checks deadlines and drives negotiation/clock/heartbeat controls.
+    ///
+    /// Keep polling both peers even when no business data is expected. I/O workers alone do
+    /// not advance game timers. Returned payloads remain valid across subsequent calls; an
+    /// empty vector is not proof of disconnection. Terminal failures arrive as events/logs.
+    /// Calls serialize with other polls, explicit flushes and lifecycle operations.
     pub fn poll(&self, capacity: usize, timeout: Duration) -> Vec<GameEvent> {
         // Game controls are handled by the same event queue as lifecycle changes. Serializing
         // polls preserves their order and keeps challenge state single-writer.

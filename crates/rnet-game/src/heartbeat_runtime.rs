@@ -14,6 +14,9 @@ use std::time::Instant;
 
 impl GameRuntime {
     /// Returns the latest authenticated sample, or `None` before the first matching reply.
+    /// `session` must have an active heartbeat tracker; unknown or cleaned-up handles return
+    /// `InvalidHandle`. Reading does not drive probes. The grade may remain `Unknown` until
+    /// enough samples exist; transport-specific loss/retransmission may be unavailable.
     pub fn network_quality(&self, session: Handle) -> Result<Option<NetworkQuality>> {
         let sample = {
             let trackers = self

@@ -31,6 +31,7 @@ jobs:
           dotnet-version: "8.0.x"
       - run: cargo fmt --check
       - run: make structure-check
+      - run: make doc-check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: make cpp-test

@@ -1,5 +1,19 @@
 # RNet getting started
 
+## 游戏 API 的代码注释与可执行示例
+
+游戏接入首先使用 `rnet-game`，不要将下面底层传输示例中的 `SessionOpened`
+当作游戏层的 `SessionReady`。完整游戏收发循环见
+[`game_quickstart.rs`](../crates/rnet-game/examples/game_quickstart.rs)。
+
+`cargo doc -p rnet-game --no-deps --open` 可查看 Rust 游戏接口的类型、成员和方法说明，
+包括参数单位/零值、句柄有效期、缓冲区所有权、错误、线程约束和异步完成事件。
+crate 首页直接包含同一份可执行示例，避免文档和示例维护两份不同代码。
+
+`make doc-check` 检查游戏及日志 crate 的缺失注释和文档链接，并实际执行 doctest 中的
+客户端/服务端握手、授权与回显；它已加入 `make check` 和 Linux CI。此检查覆盖 Rust 游戏层及日志模块，
+不代表 C/C++、Go、C# 或底层依赖的注释已经全部补齐，也不替代生产环境长稳验证。
+
 ## One endpoint API, three transports
 
 Servers call `listen`; clients call `connect`. Set `transport` to TCP, UDP, or KCP in the configuration. The selected transport is immutable for the endpoint and session. `send` therefore needs only a session and opaque payload; business message types belong inside that payload.

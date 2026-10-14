@@ -4,13 +4,18 @@ FUZZ_SECONDS ?= 10
 FUZZ_RSS_MB ?= 2048
 FUZZ_TARGET_DIR ?= $(CURDIR)/target/fuzz
 
-.PHONY: abi-check build check cpp-test csharp-test fuzz-asan-smoke go-test loom-test miri-test package structure-check test
+.PHONY: abi-check build check cpp-test csharp-test doc-check fuzz-asan-smoke go-test loom-test miri-test package structure-check test
 
 build:
 	cargo build -p rnet-ffi --release
 
 test:
 	cargo test --workspace
+
+doc-check:
+	cargo rustdoc -p rnet-observe --lib -- -D warnings
+	cargo rustdoc -p rnet-game --lib --all-features -- -D warnings
+	cargo test -p rnet-game -p rnet-observe --doc
 
 cpp-test:
 	cargo build -p rnet-ffi
@@ -51,6 +56,7 @@ miri-test:
 check:
 	$(MAKE) structure-check
 	cargo fmt --check
+	$(MAKE) doc-check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
 	$(MAKE) loom-test

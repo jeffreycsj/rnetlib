@@ -22,13 +22,21 @@ pub(crate) const MAX_BUFFERED_BYTES: usize = 256 * 1024;
 /// after runtime stop; current gauges return to zero.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RangeBufferSnapshot {
+    /// Early application messages retained, including ready-but-not-yet-polled messages.
     pub buffered_messages: usize,
+    /// Retained early payload bytes; excludes framing and allocation overhead.
     pub buffered_bytes: usize,
+    /// Highest runtime-wide retained early-message count observed so far.
     pub peak_buffered_messages: usize,
+    /// Highest runtime-wide retained early-payload byte count observed so far.
     pub peak_buffered_bytes: usize,
+    /// Runtime-wide message cap inherited from transport event queue capacity at creation.
     pub max_buffered_messages: usize,
+    /// Runtime-wide payload-byte cap inherited from the configured event-byte budget.
     pub max_buffered_bytes: usize,
+    /// Admissions rejected by the per-session early-message count or byte cap.
     pub session_admission_rejected: u64,
+    /// Admissions rejected by runtime-wide early-message count or byte budgets.
     pub runtime_admission_rejected: u64,
 }
 

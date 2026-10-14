@@ -57,15 +57,23 @@ pub enum LatestSendOutcome {
 /// Cumulative, low-cardinality telemetry for replaceable transport-pending snapshots.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LatestTransportSnapshot {
+    /// Existing TCP/KCP pending values replaced before I/O worker pickup across this runtime.
     pub pending_replaced: u64,
     /// Slots taken by an I/O worker. From this boundary onward the payload cannot be recalled.
     pub worker_pickups: u64,
+    /// Admission attempts rejected by bounded transport capacity; may include retries.
     pub admission_would_block: u64,
+    /// Admission attempts referencing unknown or retired session handles.
     pub admission_invalid_handle: u64,
+    /// Admission attempts rejected because the runtime/session was not accepting work.
     pub admission_invalid_state: u64,
+    /// Admission attempts before transport handshake completion.
     pub admission_handshake_required: u64,
+    /// Admission attempts on unsupported transport paths; native UDP uses ordinary forwarding.
     pub admission_not_supported: u64,
+    /// Admission attempts exceeding configured frame/payload limits.
     pub admission_message_too_large: u64,
+    /// Admission failures not represented by the explicit error categories above.
     pub admission_other_failures: u64,
 }
 

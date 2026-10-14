@@ -7,11 +7,17 @@ use std::collections::{HashMap, VecDeque};
 const WORST_ENVELOPE_OVERHEAD: usize = 16;
 
 /// Limits are in addition to the transport's own bounded send queue.
+/// All fields must be positive. Byte accounting reserves payload bytes plus worst-case game
+/// envelope space, not allocator metadata or a process RSS bound. See `Default` for the preset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RealtimeQueueConfig {
+    /// Runtime-wide staging budget in bytes; default 16 MiB.
     pub max_queued_bytes: usize,
+    /// Per-session staging byte budget; at most the runtime budget, default 256 KiB.
     pub max_session_queued_bytes: usize,
+    /// Distinct pending snapshot keys per session; default 64. Replacing a key uses no new slot.
     pub max_keys_per_session: usize,
+    /// Maximum snapshot-forward attempts at the start of each poll; default 256.
     pub flush_batch: usize,
 }
 
@@ -32,15 +38,24 @@ pub(crate) enum QueueEffect {
     Replaced,
 }
 
+/// Runtime-wide game snapshot staging gauges and cumulative counters; excludes transport slots.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RealtimeQueueSnapshot {
+    /// Current number of distinct pending `(session, key)` entries.
     pub queued_messages: usize,
+    /// Current reserved bytes, including worst-case game envelope allowance per entry.
     pub queued_bytes: usize,
+    /// Enqueue attempts rejected by byte/key budgets, including failed requeue attempts.
     pub admission_rejected: u64,
+    /// Pending values replaced by newer snapshots for the same session and key.
     pub replaced: u64,
+    /// Pending snapshots discarded by session cleanup or runtime shutdown.
     pub closed_dropped: u64,
+    /// Snapshots that could not be restored to staging after transport backpressure.
     pub backpressure_dropped: u64,
+    /// Snapshots discarded when transport forwarding failed for a non-backpressure reason.
     pub send_failed: u64,
+    /// Snapshots accepted by the transport, not confirmed delivered or applied remotely.
     pub forwarded: u64,
 }
 

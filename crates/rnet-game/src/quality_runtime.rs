@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 
 impl GameRuntime {
     /// Returns per-session KCP PUSH retransmissions without waiting for a heartbeat sample.
-    /// TCP/UDP return `None`; an unknown or not-yet-ready game session is rejected.
+    /// `session` is local; TCP/UDP return `None`, not measured zero retransmissions.
+    /// An unknown or not-yet-tracked session returns `InvalidHandle`. Tracking begins at transport
+    /// opening; a successful query alone does not prove that game negotiation is complete.
     pub fn kcp_retransmission_snapshot(
         &self,
         session: Handle,
@@ -29,7 +31,9 @@ impl GameRuntime {
     }
 
     /// Returns a receiver-side UDP data-gap estimate; TCP and KCP return `None`.
-    /// An unknown or not-yet-ready game session returns `InvalidHandle`.
+    /// `session` is local; unknown or not-yet-tracked sessions return `InvalidHandle`.
+    /// Tracking begins at transport opening, not game readiness. Inspect `expected` for sample
+    /// availability; plaintext business data makes sequence gaps an untrusted advisory estimate.
     pub fn udp_loss_snapshot(&self, session: Handle) -> Result<Option<UdpLossSnapshot>> {
         let udp = self
             .udp_sessions

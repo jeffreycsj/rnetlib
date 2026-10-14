@@ -10,12 +10,19 @@ use std::time::Instant;
 const ENVELOPE_RESERVATION: usize = 16;
 const WEIGHTED_ORDER: [usize; 15] = [3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 0];
 
+/// Local staging class, not wire metadata or an OS socket priority.
+/// Classes use weighted service (low:normal:high:critical = 1:2:4:8), with round-robin sessions
+/// inside each class. This reduces starvation; it does not promise bandwidth or latency.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum GamePriority {
+    /// Background traffic, with the smallest nonzero service share.
     Low,
+    /// Default class for ordinary `send` calls.
     #[default]
     Normal,
+    /// Elevated service share for time-sensitive messages.
     High,
+    /// Highest service share, without starving lower classes or bypassing resource budgets.
     Critical,
 }
 
@@ -30,11 +37,17 @@ impl GamePriority {
     }
 }
 
+/// Limits for ordinary and advanced game sends, independent of snapshot and transport queues.
+/// All fields must be positive; byte accounting includes a worst-case game envelope allowance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScheduledQueueConfig {
+    /// Runtime-wide staging byte budget; default 16 MiB, not a total memory limit.
     pub max_queued_bytes: usize,
+    /// Per-session byte budget, at most `max_queued_bytes`; default 256 KiB.
     pub max_session_queued_bytes: usize,
+    /// Runtime-wide message count cap, including empty payloads; default 65,536.
     pub max_queued_messages: usize,
+    /// Maximum scheduled-forward attempts at the start of a poll; default 256.
     pub flush_batch: usize,
 }
 
@@ -49,21 +62,33 @@ impl Default for ScheduledQueueConfig {
     }
 }
 
+/// Runtime-wide staging gauges and cumulative counters. Forwarding is not remote delivery.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ScheduledQueueSnapshot {
+    /// Current admitted messages awaiting a terminal forwarding/drop result.
     pub queued_messages: usize,
+    /// Current reserved payload and worst-case game envelope bytes.
     pub queued_bytes: usize,
+    /// Enqueue attempts rejected by the staging count or byte budgets.
     pub admission_rejected: u64,
+    /// Messages discarded because their local staging deadline expired before forwarding.
     pub expired_dropped: u64,
+    /// Pending messages discarded by session cleanup or runtime shutdown.
     pub closed_dropped: u64,
+    /// Messages discarded after non-backpressure transport forwarding errors.
     pub send_failed: u64,
+    /// Messages accepted by transport; the remote application may not have received them.
     pub forwarded: u64,
+    /// Transport-full attempts restored to staging; one message may be counted repeatedly.
     pub backpressure_requeued: u64,
+    /// Successful staging admissions indexed as low, normal, high, critical.
     pub admitted_by_priority: [u64; 4],
+    /// Successful transport forwards in the same class order as `admitted_by_priority`.
     pub forwarded_by_priority: [u64; 4],
-    /// Local admission-to-transport delay, not remote delivery latency.
+    /// Cumulative admission-to-transport delay in microseconds, sampled on successful forwarding.
+    /// Percentiles use histogram buckets; `sample_count = 0` means no measured delay.
     pub queue_delay: LatencySnapshot,
-    /// Queue delay for messages that carry a simulation tick.
+    /// Same cumulative delay distribution, restricted to messages carrying a simulation tick.
     pub tick_queue_delay: LatencySnapshot,
 }
 

@@ -291,16 +291,53 @@ fn server_automatically_rekeys_after_the_encrypted_byte_threshold() {
     let mut config = RuntimeConfig::default();
     config.security_policy.rekey_after = None;
     config.security_policy.rekey_after_bytes = Some(4);
-    let (runtime, _, server_session, _) =
+    let (runtime, _, server_session, client_session) =
         establish_pair_with_config(Transport::Tcp, SecurityMode::Encrypted, config);
 
     runtime.send(server_session, b"four").unwrap();
-    assert_message(&runtime, b"four", "automatic rekey trigger message");
-    let changed = poll_until(&runtime, EventType::SecurityChanged);
-    let change = SecurityChange::from_event(&changed).unwrap();
+    assert_automatic_rekey_events(&runtime, server_session, client_session);
+}
 
-    assert_eq!(change.operation, SecurityOperation::Rekey);
-    assert!(change.epoch >= 2);
+fn assert_automatic_rekey_events(runtime: &NetworkRuntime, server: Handle, client: Handle) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut message_received = false;
+    let mut rekeyed = [false; 2];
+    // All three notifications may share a batch or arrive in different orders. Separate
+    // find-based waits would discard sibling events that the next assertion still needs.
+    while Instant::now() < deadline && !(message_received && rekeyed == [true; 2]) {
+        for event in runtime.poll_events(32, Duration::from_millis(20)) {
+            match event.event_type {
+                EventType::Message => {
+                    assert_eq!(event.session, client);
+                    assert_eq!(event.data, b"four");
+                    assert!(event.integrity_verified);
+                    message_received = true;
+                }
+                EventType::SecurityChanged => {
+                    let change = SecurityChange::from_event(&event).unwrap();
+                    assert_eq!(change.operation, SecurityOperation::Rekey);
+                    assert_eq!(change.mode, SecurityMode::Encrypted);
+                    assert!(change.epoch >= 2);
+                    let index = if event.session == server {
+                        0
+                    } else {
+                        assert_eq!(event.session, client);
+                        1
+                    };
+                    rekeyed[index] = true;
+                }
+                EventType::SessionClosed | EventType::JoinFailed => {
+                    panic!("unexpected failure during automatic rekey: {event:?}");
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        message_received,
+        "automatic rekey trigger message was not delivered"
+    );
+    assert_eq!(rekeyed, [true; 2], "both peers must report completed rekey");
 }
 
 #[test]
@@ -309,16 +346,22 @@ fn datagram_servers_automatically_rekey_after_the_encrypted_byte_threshold() {
         let mut config = RuntimeConfig::default();
         config.security_policy.rekey_after = None;
         config.security_policy.rekey_after_bytes = Some(4);
-        let (runtime, _, server_session, _) =
+        let (runtime, _, server_session, client_session) =
             establish_pair_with_config(transport, SecurityMode::Encrypted, config);
 
         runtime.send(server_session, b"four").unwrap();
-        assert_message(&runtime, b"four", "datagram automatic rekey trigger");
-        let changed = poll_until(&runtime, EventType::SecurityChanged);
-        assert_eq!(
-            SecurityChange::from_event(&changed).unwrap().operation,
-            SecurityOperation::Rekey
+        // Deliberately poll late: one four-byte message plus the two ten-byte local security
+        // notifications must already be queued. This exercises coalesced event batches without
+        // relying on a sleep being long enough for handshake/worker scheduling.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while runtime.metrics_snapshot().queued_event_bytes < 24 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            runtime.metrics_snapshot().queued_event_bytes >= 24,
+            "message and both rekey notifications must be queued before polling"
         );
+        assert_automatic_rekey_events(&runtime, server_session, client_session);
     }
 }
 

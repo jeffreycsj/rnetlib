@@ -29,17 +29,29 @@ use zeroize::{Zeroize, Zeroizing};
 /// Optional network metadata. Business message typing remains inside `payload`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GameSendOptions {
+    /// Optional application-supplied sequence, copied unchanged to the receiver.
+    /// `None` omits it; `Some(0)` is valid. It does not enable ordering or deduplication.
     pub sequence: Option<u32>,
+    /// Optional simulation tick, copied unchanged; unrelated to the library's clock samples.
     pub tick: Option<u32>,
     /// Optional request/trace correlation metadata; zero means absent.
     pub correlation_id: u64,
     /// Local scheduling priority. Normal is the default and participates in bounded fair queuing.
     pub priority: GamePriority,
-    /// Optional local staging lifetime. It cannot recall socket/KCP-owned data.
+    /// Local staging lifetime measured from admission. `None` never expires; zero expires
+    /// before forwarding. It cannot recall socket/KCP-owned data or set a remote deadline.
     pub expires_after: Option<Duration>,
 }
 
 /// High-level runtime whose normal send/receive path uses only session handles and payload bytes.
+///
+/// The same runtime can listen and, with client security configured, initiate connections.
+/// It owns I/O workers but has no autonomous game loop: keep calling [`Self::poll`] to drive
+/// authorization events, negotiation, heartbeats, clock samples, staged sends and diagnostics.
+///
+/// The type is `Send + Sync`. Calls may be made from multiple threads, but poll, explicit
+/// flush and close/stop operations serialize on one lock; use one regular poll consumer.
+/// A handle belongs to its originating runtime and is not a durable player identity.
 pub struct GameRuntime {
     pub(crate) network: NetworkRuntime,
     pub(crate) maximum_envelope_len: usize,
@@ -72,12 +84,18 @@ pub struct GameRuntime {
 }
 
 impl GameRuntime {
-    /// Creates a server-only or externally authenticated game runtime.
+    /// Creates a runtime capable of listening, without outbound client trust configuration.
+    /// `config` is consumed and validated; listeners are created separately with [`Self::listen`].
+    /// Returns `InvalidArgument` for invalid budgets/policies, or an initialization error.
+    /// Use [`Self::new_with_client_security`] when this runtime must also connect as a client.
     pub fn new(config: GameRuntimeConfig) -> Result<Self> {
         Self::build(config, None)
     }
 
-    /// Creates a runtime capable of making client connections with pinned server trust.
+    /// Creates a runtime capable of making client connections with explicit server trust.
+    /// `client_security` supplies the client identity and server verification policy used by
+    /// outbound connections. It does not prevent this runtime from also hosting listeners.
+    /// Configuration and security initialization failures are returned before any join starts.
     pub fn new_with_client_security(
         config: GameRuntimeConfig,
         client_security: ClientSecurity,
@@ -217,10 +235,17 @@ impl GameRuntime {
         Ok(endpoint)
     }
 
+    /// Returns the actual local address of `endpoint`, including an OS-assigned port.
+    /// `endpoint` must be a live listen/connect handle, not a session; stale handles fail.
     pub fn endpoint_local_addr(&self, endpoint: Handle) -> Result<SocketAddr> {
         self.network.endpoint_local_addr(endpoint)
     }
 
+    /// Answers one [`GameEvent::AuthRequest`] or [`GameEvent::ResumeRequest`] on the server.
+    /// `session` is the pending handle from that event; `accept` is the application's decision.
+    /// Acceptance continues negotiation: wait for Ready/Resumed before sending game data.
+    /// Rejection closes the pending connection. Unknown handles return `InvalidHandle`;
+    /// repeated, expired or non-pending decisions return `InvalidState`.
     pub fn auth_decide(&self, session: Handle, accept: bool) -> Result<()> {
         self.network.auth_decide(session, accept)?;
         if !accept {
@@ -284,11 +309,23 @@ impl GameRuntime {
     }
 
     /// Sends opaque business bytes. Message typing belongs to the serialized payload.
+    ///
+    /// `session` must be game-ready. `payload` is copied into bounded local staging and may
+    /// be empty; the caller may reuse its buffer on return. Success is admission, not delivery.
+    /// Keep polling or call [`Self::flush_scheduled`] to forward queued messages.
+    ///
+    /// Returns `HandshakeRequired` before readiness, `InvalidHandle` for stale sessions,
+    /// `InvalidState` while stopping, `MessageTooLarge` for payload plus envelope exceeding
+    /// transport limits, or `WouldBlock` for full game staging. Transport errors after admission
+    /// appear in queue counters/logs; disconnection can discard already accepted messages.
     pub fn send(&self, session: Handle, payload: &[u8]) -> Result<()> {
         self.send_with_options(session, payload, GameSendOptions::default())
     }
 
-    /// Sends opaque business bytes with optional network-owned tick/sequence metadata.
+    /// Stages `payload` for `session` using optional metadata, priority and local expiry.
+    /// Ownership, readiness and admission errors match [`Self::send`]. `options` is copied;
+    /// an expiry that cannot form a monotonic deadline returns `InvalidArgument`.
+    /// Priority may reorder messages across classes; it is not a transport priority or delivery SLA.
     pub fn send_with_options(
         &self,
         session: Handle,
@@ -302,6 +339,11 @@ impl GameRuntime {
     ///
     /// Clients cannot initiate this transition; the transport runtime enforces the server role and
     /// carries the change over its always-authenticated control path.
+    /// `session` is a local server-side handle; `enabled = false` requires explicit runtime
+    /// plaintext permission or returns `NotSupported`. A client-side handle returns `InvalidState`.
+    /// Success queues a request, not a completed transition: observe [`GameEvent::SecurityChanged`].
+    /// Full command queues return `WouldBlock`; stale handles return `InvalidHandle`.
+    /// A request for the already active mode may be a no-op, without a new change event.
     pub fn set_encryption(&self, session: Handle, enabled: bool) -> Result<()> {
         self.network.set_security_mode(
             session,
@@ -315,6 +357,9 @@ impl GameRuntime {
 
     /// Rotates session keys on the server without changing the business-data encryption mode.
     /// Like mode changes, the request travels through the authenticated control path.
+    /// `session` must be server-controlled. Success queues a rotation; completion is reported
+    /// by [`GameEvent::SecurityChanged`]. Invalid handles/roles and full command queues fail
+    /// as in [`Self::set_encryption`]. This cannot recover a compromised application identity.
     pub fn rekey(&self, session: Handle) -> Result<()> {
         self.network.rekey_session(session)
     }

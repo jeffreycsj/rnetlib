@@ -8,31 +8,48 @@ use std::fmt::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// Cumulative, process-local heartbeat telemetry. Snapshots taken during concurrent I/O may
+/// Cumulative, runtime-local heartbeat telemetry. Snapshots taken during concurrent I/O may
 /// observe counters and histogram buckets at slightly different instants.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HeartbeatMetricsSnapshot {
+    /// Outbound probes accepted by the protected control send path, not confirmed delivered.
     pub probes_sent: u64,
+    /// Failed attempts to admit an outbound probe.
     pub probe_send_failures: u64,
+    /// Responses to peer probes accepted by the protected control send path.
     pub replies_sent: u64,
+    /// Failed attempts to send a response to a peer probe.
     pub reply_send_failures: u64,
+    /// Timely authenticated replies matching an outstanding local challenge.
     pub replies_matched: u64,
+    /// Replies rejected by challenge/deadline validation; they do not refresh liveness.
     pub replies_rejected: u64,
+    /// Inbound probes suppressed by the per-session response rate limit.
     pub probes_rate_limited: u64,
+    /// Heartbeat deadlines that triggered a session close request.
     pub timeouts: u64,
     /// Only authenticated, challenge-matched replies arriving before their deadline are sampled.
+    /// Cumulative histogram percentiles are microseconds; inspect `sample_count` before use.
     pub rtt: LatencySnapshot,
 }
 
 /// Low-cardinality, cumulative resume telemetry. No ticket or player identifier is exported.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ResumeMetricsSnapshot {
+    /// Tickets issued and admitted to the protected send path; not confirmed delivered.
     pub tickets_issued: u64,
+    /// Decoded resume join requests reaching ticket validation, including rejected requests.
     pub requests_received: u64,
+    /// Resume tickets rejected by claim validation, including invalid, expired or replayed claims.
     pub tickets_rejected: u64,
+    /// Valid pending resume requests explicitly denied by application authorization.
     pub authorization_denied: u64,
+    /// Pending/in-flight resume attempts revoked by explicit session or endpoint cleanup.
     pub pending_revoked: u64,
+    /// Completed resume publications in this runtime, not globally unique player recoveries.
     pub sessions_resumed: u64,
+    /// Entries currently retained by the ticket registry; expiry cleanup is opportunistic,
+    /// so this gauge is not a count of credentials guaranteed to remain usable.
     pub outstanding_tickets: usize,
 }
 
@@ -120,10 +137,12 @@ impl HeartbeatMetrics {
 }
 
 impl GameRuntime {
+    /// Returns cumulative malformed-plaintext drop counts without exposing untrusted payloads.
     pub fn protocol_metrics_snapshot(&self) -> ProtocolMetricsSnapshot {
         self.protocol_metrics.snapshot()
     }
 
+    /// Returns cumulative resume counters and the current retained-ticket gauge; no reset.
     pub fn resume_metrics_snapshot(&self) -> ResumeMetricsSnapshot {
         let outstanding = self
             .resume
@@ -140,11 +159,14 @@ impl GameRuntime {
     }
 
     /// Rotates only the heartbeat RTT monitoring window; cumulative counters stay intact.
+    /// This consumes the shared window: coordinate multiple telemetry readers. An empty window
+    /// has zero samples, not evidence of zero latency; bucket updates may race with rotation.
     pub fn drain_heartbeat_rtt_window(&self) -> LatencySnapshot {
         self.heartbeat_metrics.rtt_window.snapshot_and_reset()
     }
 
     /// Returns cumulative counters and current resource gauges.
+    /// These are transport statistics; game staging and heartbeat counters have separate queries.
     pub fn metrics_snapshot(&self) -> MetricsSnapshot {
         self.network.metrics_snapshot()
     }
@@ -155,6 +177,8 @@ impl GameRuntime {
     }
 
     /// Returns transport and game-heartbeat Prometheus metrics without per-session labels.
+    /// The owned UTF-8 text also includes game queues, resume, clock, protocol and logger metrics.
+    /// Reading it does not reset counters/windows; concurrent updates are not one atomic snapshot.
     pub fn prometheus_snapshot(&self) -> String {
         let mut output = self.network.prometheus_snapshot();
         let latest = self.transport_latest_snapshot();
@@ -463,11 +487,15 @@ impl GameRuntime {
     }
 
     /// Returns cumulative P50/P90/P95/P99/P99.9/max latency summaries.
+    /// Each entry identifies its transport latency kind. Values are microseconds; percentiles
+    /// are histogram estimates, not exact sorted samples. Zero samples means unavailable.
     pub fn latency_snapshot(&self) -> [LatencyMetricSnapshot; LATENCY_KIND_COUNT] {
         self.network.latency_snapshot()
     }
 
-    /// Atomically rotates the interval latency window for periodic game telemetry.
+    /// Consumes each transport latency kind's interval window for periodic telemetry.
+    /// Cumulative summaries stay intact. Coordinate readers: another drain starts a new window.
+    /// Individual counters rotate atomically, but the full array is not an atomic I/O snapshot.
     pub fn drain_latency_window(&self) -> [LatencyMetricSnapshot; LATENCY_KIND_COUNT] {
         self.network.drain_latency_window()
     }

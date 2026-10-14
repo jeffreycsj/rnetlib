@@ -28,8 +28,12 @@ pub(crate) enum ClockPacket {
 /// microseconds. It is an approximate transport sample, not UTC or a trusted game clock.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClockSyncSample {
+    /// Signed microseconds to add to this client's runtime clock to estimate the server clock.
+    /// Network asymmetry and queueing bias the estimate; it is not suitable for anti-cheat trust.
     pub server_minus_client_us: i64,
+    /// Latest round-trip estimate after subtracting reported server turnaround time.
     pub rtt: Duration,
+    /// Accepted clock replies on this client session; not the heartbeat sample count.
     pub samples: u64,
 }
 
