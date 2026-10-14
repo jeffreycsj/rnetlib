@@ -179,7 +179,7 @@ impl GameRuntimeConfig {
 
     /// Explicitly permits a local server to switch business records to plaintext.
     ///
-    /// This does not enable legacy unauthenticated endpoints. Noise setup and security-control
+    /// This cannot bypass connection authentication. Noise setup and security-control
     /// messages stay authenticated; only subsequent business payloads lose confidentiality and
     /// integrity while the server-selected plaintext mode is active.
     /// Clients need no matching opt-in: they follow their authenticated server's mode.

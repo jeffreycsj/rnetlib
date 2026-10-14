@@ -6,7 +6,7 @@ use rnet_transport::LatencyKind;
 use std::ffi::c_void;
 use std::mem::size_of;
 
-pub const RNET_ABI_VERSION: u32 = 2;
+pub const RNET_ABI_VERSION: u32 = 3;
 pub const RNET_OK: i32 = ErrorCode::Ok as i32;
 pub const RNET_E_INVALID_ARGUMENT: i32 = ErrorCode::InvalidArgument as i32;
 pub const RNET_E_INVALID_HANDLE: i32 = ErrorCode::InvalidHandle as i32;
@@ -183,29 +183,6 @@ impl RnetClientConfig {
     }
 }
 
-#[repr(u32)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RnetEndpointMode {
-    Listener = 1,
-    Client = 2,
-    Datagram = 3,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetEndpointConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub transport: u32,
-    pub mode: u32,
-    pub bind_host: RnetSlice,
-    pub bind_port: u16,
-    pub reserved0: u16,
-    pub remote_host: RnetSlice,
-    pub remote_port: u16,
-    pub reserved1: u16,
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RnetKeypair {
@@ -224,34 +201,6 @@ impl Default for RnetKeypair {
             public_key: [0; 32],
         }
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetListenerConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub transport: u32,
-    pub reserved0: u32,
-    pub bind_host: RnetSlice,
-    pub bind_port: u16,
-    pub reserved1: u16,
-    pub local_private_key: RnetSlice,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetJoinConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub transport: u32,
-    pub reserved0: u32,
-    pub remote_host: RnetSlice,
-    pub remote_port: u16,
-    pub reserved1: u16,
-    pub local_private_key: RnetSlice,
-    pub expected_server_public_key: RnetSlice,
-    pub join_payload: RnetSlice,
 }
 
 #[repr(C)]

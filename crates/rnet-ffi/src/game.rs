@@ -131,9 +131,6 @@ unsafe fn create_game_runtime_from_config(
         if !network.logger.is_null() {
             return invalid_argument("use game config.logger instead of network config.logger");
         }
-        if network.allow_legacy_unauthenticated_endpoints != 0 {
-            return invalid_argument("game runtime forbids legacy unauthenticated endpoints");
-        }
         settings.network = runtime_config(network)?;
         settings
             .network

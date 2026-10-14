@@ -52,6 +52,7 @@ impl NetworkRuntime {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_session(&self, endpoint: Handle, target: SessionTarget) -> Handle {
         self.shared
             .sessions

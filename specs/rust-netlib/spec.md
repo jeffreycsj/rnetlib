@@ -1,5 +1,7 @@
 # Rust Netlib Phase 1 规格说明
 
+> 历史规格：旧 SDK、兼容端点及多版本入口承诺已被 [单一现行接口规格](../single-current-api/spec.md) 取代。下文保留历史设计，不是现行接入契约。
+
 ## 需求概述
 
 在 `/home/jeffsjchen/netlib` 新建一个 Rust workspace，实现设计文档中的 Phase 1：以 Tokio 为异步核心，对 TCP/UDP 提供统一生命周期、有界队列、帧协议、批量事件和可观测性，并通过稳定 C ABI 交付 Rust 静态/动态库、C 头文件、C++ RAII 包装和 Go cgo 包装。KCP 的上层适配边界在本阶段固定，但不在未完成依赖选型、许可审核、fuzz 和弱网测试前声称可生产使用。

@@ -4,9 +4,10 @@ namespace RNet;
 
 internal static unsafe partial class Native
 {
+    internal const uint AbiVersion = 3;
     private const string Library = "rnet";
     internal static void CheckAbi() {
-        if (rnet_abi_version() != 2) throw new NotSupportedException("RNet SDK/native ABI mismatch; rebuild and deploy together");
+        if (rnet_abi_version() != AbiVersion) throw new NotSupportedException("RNet SDK/native ABI mismatch; rebuild and deploy together");
     }
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern uint rnet_abi_version();
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern nint rnet_last_error_message();

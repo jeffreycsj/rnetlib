@@ -19,8 +19,6 @@ pub struct SecurityPolicy {
     /// integrity after authenticated setup. Clients follow the authenticated server's mode;
     /// this is not a client-side minimum encryption requirement.
     pub allow_plaintext_business_data: bool,
-    /// Allows the compatibility TCP/UDP endpoints that do not perform authentication.
-    pub allow_legacy_unauthenticated_endpoints: bool,
     /// Optional time threshold for a server-led automatic rekey.
     pub rekey_after: Option<Duration>,
     /// Optional encrypted application-byte threshold for a server-led automatic rekey.
@@ -31,7 +29,6 @@ impl SecurityPolicy {
     pub const fn production() -> Self {
         Self {
             allow_plaintext_business_data: false,
-            allow_legacy_unauthenticated_endpoints: false,
             rekey_after: Some(Duration::from_secs(60 * 60)),
             rekey_after_bytes: Some(1024 * 1024 * 1024),
         }
@@ -206,12 +203,13 @@ impl RuntimeConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct EndpointConfig {
+// The endpoint task requires an authenticated role; public callers use ServerConfig or
+// ClientConfig and cannot construct a role-less endpoint or bypass the handshake.
+pub(crate) struct EndpointConfig {
     pub transport: Transport,
     pub bind_addr: Option<SocketAddr>,
     pub remote_addr: Option<SocketAddr>,
-    pub listen: bool,
-    pub security: Option<EndpointSecurity>,
+    pub security: EndpointSecurity,
 }
 
 /// Configuration for a server listener.
@@ -322,15 +320,7 @@ impl From<ClientConfig> for EndpointConfig {
 }
 
 #[derive(Clone)]
-pub enum EndpointSecurity {
-    Server {
-        local_key: Keypair,
-    },
-    Client {
-        local_key: Keypair,
-        expected_server_public: Vec<u8>,
-        join_payload: Vec<u8>,
-    },
+pub(crate) enum EndpointSecurity {
     AdaptiveServer {
         local_key: Keypair,
         initial_mode: rnet_protocol::control::SecurityMode,
@@ -343,20 +333,6 @@ pub enum EndpointSecurity {
 impl std::fmt::Debug for EndpointSecurity {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Server { local_key } => formatter
-                .debug_struct("Server")
-                .field("local_key", local_key)
-                .finish(),
-            Self::Client {
-                local_key,
-                expected_server_public,
-                join_payload,
-            } => formatter
-                .debug_struct("Client")
-                .field("local_key", local_key)
-                .field("expected_server_public", expected_server_public)
-                .field("join_payload_len", &join_payload.len())
-                .finish(),
             Self::AdaptiveServer {
                 local_key,
                 initial_mode,
@@ -385,11 +361,10 @@ impl EndpointConfig {
             transport,
             bind_addr: Some(bind_addr),
             remote_addr: None,
-            listen: true,
-            security: Some(EndpointSecurity::AdaptiveServer {
+            security: EndpointSecurity::AdaptiveServer {
                 local_key,
                 initial_mode,
-            }),
+            },
         }
     }
 
@@ -417,125 +392,37 @@ impl EndpointConfig {
             transport,
             bind_addr,
             remote_addr: Some(remote_addr),
-            listen: false,
-            security: Some(EndpointSecurity::AdaptiveClient { join_payload }),
+            security: EndpointSecurity::AdaptiveClient { join_payload },
         }
     }
+}
 
-    pub fn tcp_listener(bind_addr: SocketAddr) -> Self {
-        Self {
-            transport: Transport::Tcp,
-            bind_addr: Some(bind_addr),
-            remote_addr: None,
-            listen: true,
-            security: None,
-        }
-    }
+#[cfg(test)]
+mod endpoint_debug_tests {
+    use super::{ClientConfig, EndpointConfig, ServerConfig};
+    use rnet_core::Transport;
+    use rnet_security::Keypair;
 
-    pub fn tcp_client(remote_addr: SocketAddr) -> Self {
-        Self {
+    #[test]
+    fn internal_endpoint_debug_keeps_credentials_private() {
+        let secret = b"private-credential-marker".to_vec();
+        let client: EndpointConfig = ClientConfig {
             transport: Transport::Tcp,
             bind_addr: None,
-            remote_addr: Some(remote_addr),
-            listen: false,
-            security: None,
+            remote_addr: "127.0.0.1:1".parse().unwrap(),
+            join_payload: secret.clone(),
         }
-    }
-
-    pub fn udp(bind_addr: SocketAddr, remote_addr: Option<SocketAddr>) -> Self {
-        Self {
-            transport: Transport::Udp,
-            bind_addr: Some(bind_addr),
-            remote_addr,
-            listen: false,
-            security: None,
+        .into();
+        assert!(!format!("{client:?}").contains(&format!("{secret:?}")));
+        let key = Keypair::generate().unwrap();
+        let private = format!("{:?}", key.private);
+        let server: EndpointConfig = ServerConfig {
+            transport: Transport::Tcp,
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            local_key: key,
+            initial_security: rnet_protocol::control::SecurityMode::Encrypted,
         }
-    }
-
-    pub fn kcp(bind_addr: SocketAddr) -> Self {
-        Self {
-            transport: Transport::Kcp,
-            bind_addr: Some(bind_addr),
-            remote_addr: None,
-            listen: false,
-            security: None,
-        }
-    }
-
-    pub fn secure_tcp_listener(bind_addr: SocketAddr, local_key: Keypair) -> Self {
-        Self {
-            security: Some(EndpointSecurity::Server { local_key }),
-            ..Self::tcp_listener(bind_addr)
-        }
-    }
-
-    pub fn secure_tcp_client(
-        remote_addr: SocketAddr,
-        local_key: Keypair,
-        expected_server_public: Vec<u8>,
-        join_payload: Vec<u8>,
-    ) -> Self {
-        Self {
-            security: Some(EndpointSecurity::Client {
-                local_key,
-                expected_server_public,
-                join_payload,
-            }),
-            ..Self::tcp_client(remote_addr)
-        }
-    }
-
-    pub fn secure_udp_listener(bind_addr: SocketAddr, local_key: Keypair) -> Self {
-        Self {
-            transport: Transport::Udp,
-            bind_addr: Some(bind_addr),
-            remote_addr: None,
-            listen: true,
-            security: Some(EndpointSecurity::Server { local_key }),
-        }
-    }
-
-    pub fn secure_udp_client(
-        bind_addr: SocketAddr,
-        remote_addr: SocketAddr,
-        local_key: Keypair,
-        expected_server_public: Vec<u8>,
-        join_payload: Vec<u8>,
-    ) -> Self {
-        Self {
-            transport: Transport::Udp,
-            bind_addr: Some(bind_addr),
-            remote_addr: Some(remote_addr),
-            listen: false,
-            security: Some(EndpointSecurity::Client {
-                local_key,
-                expected_server_public,
-                join_payload,
-            }),
-        }
-    }
-
-    pub fn secure_kcp_listener(bind_addr: SocketAddr, local_key: Keypair) -> Self {
-        let mut config = Self::secure_udp_listener(bind_addr, local_key);
-        config.transport = Transport::Kcp;
-        config
-    }
-
-    pub fn secure_kcp_client(
-        bind_addr: SocketAddr,
-        remote_addr: SocketAddr,
-        local_key: Keypair,
-        expected_server_public: Vec<u8>,
-        join_payload: Vec<u8>,
-    ) -> Self {
-        let mut config = Self::secure_udp_client(
-            bind_addr,
-            remote_addr,
-            local_key,
-            expected_server_public,
-            join_payload,
-        );
-        config.transport = Transport::Kcp;
-        config
+        .into();
+        assert!(!format!("{server:?}").contains(&private));
     }
 }

@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define RNET_ABI_VERSION 2u
+#define RNET_ABI_VERSION 3u
 
 typedef uint64_t rnet_runtime_t;
 typedef uint64_t rnet_endpoint_t;
@@ -56,12 +56,6 @@ enum {
 enum {
   RNET_SECURITY_OPERATION_MODE_SWITCH = 1,
   RNET_SECURITY_OPERATION_REKEY = 2
-};
-
-enum {
-  RNET_ENDPOINT_LISTENER = 1,
-  RNET_ENDPOINT_CLIENT = 2,
-  RNET_ENDPOINT_DATAGRAM = 3
 };
 
 enum {
@@ -141,7 +135,6 @@ typedef struct rnet_config {
   uint64_t dns_timeout_ms;
   uint64_t datagram_idle_timeout_ms;
   uint32_t allow_plaintext_business_data;
-  uint32_t allow_legacy_unauthenticated_endpoints;
   uint64_t rekey_after_ms;
   uint64_t rekey_after_bytes;
   const rnet_logger_t *logger;
@@ -192,51 +185,12 @@ typedef struct rnet_client_config {
   rnet_slice_t join_payload;
 } rnet_client_config_t;
 
-/* Server bind hosts are numeric IPv4/IPv6 addresses. Client remote hosts may also be DNS names.
- * Host slices need not be NUL terminated. */
-typedef struct rnet_endpoint_config {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint32_t transport;
-  uint32_t mode;
-  rnet_slice_t bind_host;
-  uint16_t bind_port;
-  uint16_t reserved0;
-  rnet_slice_t remote_host;
-  uint16_t remote_port;
-  uint16_t reserved1;
-} rnet_endpoint_config_t;
-
 typedef struct rnet_keypair {
   uint32_t struct_size;
   uint32_t abi_version;
   uint8_t private_key[32];
   uint8_t public_key[32];
 } rnet_keypair_t;
-
-typedef struct rnet_listener_config {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint32_t transport;
-  uint32_t reserved0;
-  rnet_slice_t bind_host;
-  uint16_t bind_port;
-  uint16_t reserved1;
-  rnet_slice_t local_private_key;
-} rnet_listener_config_t;
-
-typedef struct rnet_join_config {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint32_t transport;
-  uint32_t reserved0;
-  rnet_slice_t remote_host;
-  uint16_t remote_port;
-  uint16_t reserved1;
-  rnet_slice_t local_private_key;
-  rnet_slice_t expected_server_public_key;
-  rnet_slice_t join_payload;
-} rnet_join_config_t;
 
 typedef struct rnet_send_options {
   uint32_t struct_size;
@@ -322,18 +276,9 @@ int32_t rnet_server_listen(rnet_runtime_t runtime,
 int32_t rnet_client_connect(rnet_runtime_t runtime,
                                const rnet_client_config_t *config,
                                rnet_endpoint_t *out);
-int32_t rnet_endpoint_open(rnet_runtime_t runtime,
-                           const rnet_endpoint_config_t *config,
-                           rnet_endpoint_t *out);
 int32_t rnet_keypair_generate(rnet_keypair_t *out);
 int32_t rnet_keypair_from_private(rnet_slice_t private_key,
                                   rnet_keypair_t *out);
-int32_t rnet_listener_open(rnet_runtime_t runtime,
-                           const rnet_listener_config_t *config,
-                           rnet_endpoint_t *out);
-int32_t rnet_client_join(rnet_runtime_t runtime,
-                         const rnet_join_config_t *config,
-                         rnet_endpoint_t *out);
 int32_t rnet_session_auth_decide(rnet_runtime_t runtime,
                                  rnet_session_t session,
                                  uint32_t accept);

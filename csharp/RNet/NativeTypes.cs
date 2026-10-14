@@ -22,7 +22,7 @@ internal static unsafe partial class Native
         public ulong MaxEventBytes, MaxRuntimeBytes, MaxSessionBytes;
         public uint MaxSessions, MaxSessionsPerIp, HandshakeRate, HandshakeBurst, Ipv6Prefix;
         public ulong HandshakeTimeoutMs, ConnectTimeoutMs, DnsTimeoutMs, IdleTimeoutMs;
-        public uint AllowPlaintext, AllowLegacy;
+        public uint AllowPlaintext;
         public ulong RekeyAfterMs, RekeyAfterBytes;
         public nint Logger;
         public uint TcpNoDelay;

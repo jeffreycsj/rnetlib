@@ -70,9 +70,6 @@ func NewRuntimeWithConfig(config Config) (*Runtime, error) {
 	if config.AllowPlaintextBusinessData {
 		native.allow_plaintext_business_data = 1
 	}
-	if config.AllowLegacyEndpoints {
-		native.allow_legacy_unauthenticated_endpoints = 1
-	}
 	native.rekey_after_ms = C.uint64_t(max(config.RekeyAfter.Milliseconds(), 0))
 	native.rekey_after_bytes = C.uint64_t(config.RekeyAfterBytes)
 	var handle C.rnet_runtime_t

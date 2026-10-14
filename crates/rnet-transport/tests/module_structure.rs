@@ -2,6 +2,33 @@ use std::fs;
 use std::path::Path;
 
 #[test]
+fn legacy_secure_execution_modules_are_removed() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for module in ["secure_tcp", "secure_datagram", "secure_kcp", "tcp", "udp"] {
+        assert!(
+            !source.join(format!("{module}.rs")).exists(),
+            "obsolete execution path: {module}"
+        );
+    }
+    let config = fs::read_to_string(source.join("config.rs")).unwrap();
+    for name in [
+        "secure_tcp_listener",
+        "secure_tcp_client",
+        "secure_udp_listener",
+        "secure_udp_client",
+        "secure_kcp_listener",
+        "secure_kcp_client",
+        "pub fn tcp_listener",
+        "pub fn tcp_client",
+        "pub fn udp(",
+        "pub fn kcp(",
+        "allow_legacy_unauthenticated_endpoints",
+    ] {
+        assert!(!config.contains(name), "obsolete constructor: {name}");
+    }
+}
+
+#[test]
 fn transport_implementation_is_split_by_responsibility() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let lib = fs::read_to_string(source.join("lib.rs")).expect("read transport lib.rs");
@@ -16,11 +43,10 @@ fn transport_implementation_is_split_by_responsibility() {
         "lifecycle.rs",
         "metrics.rs",
         "runtime.rs",
-        "secure_datagram.rs",
-        "secure_tcp.rs",
+        "adaptive_datagram.rs",
+        "adaptive_tcp.rs",
+        "adaptive_wire.rs",
         "state.rs",
-        "tcp.rs",
-        "udp.rs",
     ] {
         assert!(source.join(module).is_file(), "missing {module}");
     }

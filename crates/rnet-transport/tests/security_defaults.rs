@@ -1,16 +1,15 @@
 use rnet_core::{ErrorCode, Event, EventType, Transport};
 use rnet_security::Keypair;
 use rnet_transport::{
-    ClientConfig, ClientSecurity, EndpointConfig, NetworkRuntime, RuntimeConfig, SecurityChange,
-    SecurityMode, ServerConfig,
+    ClientConfig, ClientSecurity, NetworkRuntime, RuntimeConfig, SecurityChange, SecurityMode,
+    ServerConfig,
 };
 use std::time::{Duration, Instant};
 
 #[test]
-fn default_policy_disables_plaintext_and_legacy_and_enables_automatic_rekey() {
+fn default_policy_disables_plaintext_and_enables_automatic_rekey() {
     let policy = RuntimeConfig::default().security_policy;
     assert!(!policy.allow_plaintext_business_data);
-    assert!(!policy.allow_legacy_unauthenticated_endpoints);
     assert!(policy
         .rekey_after
         .is_some_and(|duration| !duration.is_zero()));
@@ -27,19 +26,6 @@ fn default_runtime_rejects_unprotected_endpoints_without_consuming_capacity() {
     })
     .unwrap();
     let address = "127.0.0.1:0".parse().unwrap();
-    for config in [
-        EndpointConfig::tcp_listener(address),
-        EndpointConfig::tcp_client("127.0.0.1:9".parse().unwrap()),
-        EndpointConfig::udp(address, None),
-        EndpointConfig::kcp(address),
-    ] {
-        assert_eq!(
-            runtime.open_endpoint(config).unwrap_err().code(),
-            ErrorCode::NotSupported
-        );
-        assert_eq!(runtime.metrics_snapshot().current_endpoints, 0);
-        assert_eq!(runtime.metrics_snapshot().current_sessions, 0);
-    }
     for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
         let key = Keypair::generate().unwrap();
         let config = ServerConfig {
@@ -65,18 +51,42 @@ fn default_runtime_rejects_unprotected_endpoints_without_consuming_capacity() {
 }
 
 #[test]
-fn plaintext_opt_in_does_not_enable_unauthenticated_endpoints() {
+fn plaintext_opt_in_still_rejects_an_unauthenticated_tcp_record() {
+    use std::io::Write;
     let mut config = RuntimeConfig::default();
     config.security_policy.allow_plaintext_business_data = true;
     let runtime = NetworkRuntime::new(config).unwrap();
-    assert_eq!(
-        runtime
-            .open_endpoint(EndpointConfig::tcp_listener("127.0.0.1:0".parse().unwrap()))
-            .unwrap_err()
-            .code(),
-        ErrorCode::NotSupported
-    );
-    assert_eq!(runtime.metrics_snapshot().current_endpoints, 0);
+    let listener = runtime
+        .listen(ServerConfig {
+            transport: Transport::Tcp,
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            local_key: Keypair::generate().unwrap(),
+            initial_security: SecurityMode::Plaintext,
+        })
+        .unwrap();
+    let mut raw =
+        std::net::TcpStream::connect(runtime.endpoint_local_addr(listener).unwrap()).unwrap();
+    raw.write_all(&[0; 4]).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "unauthenticated connection not rejected"
+        );
+        for event in runtime.poll_events(16, Duration::from_millis(10)) {
+            assert!(
+                !matches!(
+                    event.event_type,
+                    EventType::SessionOpened | EventType::Message | EventType::AuthRequest
+                ),
+                "raw input became authorized: {event:?}"
+            );
+            if event.event_type == EventType::SessionClosed {
+                assert_eq!(event.status, ErrorCode::ProtocolError);
+                return;
+            }
+        }
+    }
 }
 
 fn wait_for(runtime: &NetworkRuntime, kind: EventType) -> Event {

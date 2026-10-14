@@ -405,7 +405,7 @@ fn game_runtime_accepts_production_network_capacity_tuning() {
         ..RnetConfig::default()
     };
     let mut rejected = network;
-    rejected.allow_legacy_unauthenticated_endpoints = 1;
+    rejected.abi_version = 2;
     let rejected_config = RnetGameConfig {
         network_config: &rejected,
         ..RnetGameConfig::default()

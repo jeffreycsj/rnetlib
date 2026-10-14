@@ -8,14 +8,22 @@ import (
 
 func TestTCPEchoCrossesCgoBoundary(t *testing.T) {
 	config := DefaultConfig()
-	config.AllowLegacyEndpoints = true
+	serverKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ClientSecurity = &ClientSecurity{LocalKey: clientKey, ExpectedServerPublicKey: serverKey.Public[:]}
 	runtime, err := NewRuntime(config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
 
-	listener, err := runtime.OpenTCPListener("127.0.0.1", 0)
+	listener, err := runtime.Listen(ServerConfig{Transport: TransportTCP, Host: "127.0.0.1", Keypair: serverKey, InitialSecurity: SecurityEncrypted})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +31,7 @@ func TestTCPEchoCrossesCgoBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := runtime.OpenTCPClient("127.0.0.1", port)
+	client, err := runtime.Connect(ClientConfig{Transport: TransportTCP, Host: "127.0.0.1", Port: port})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +44,11 @@ func TestTCPEchoCrossesCgoBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, event := range events {
+			if event.Type == EventAuthRequest {
+				if err := runtime.AuthDecide(event.Session, true); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if event.Type != EventSessionOpened {
 				continue
 			}

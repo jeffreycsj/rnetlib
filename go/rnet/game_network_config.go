@@ -18,9 +18,6 @@ func gameNetworkConfig(config Config) (C.rnet_config_t, error) {
 	if config.Logger != nil || config.ClientSecurity != nil {
 		return native, fmt.Errorf("rnet: game network config cannot carry a transport logger or client identity")
 	}
-	if config.AllowLegacyEndpoints {
-		return native, fmt.Errorf("rnet: game runtime forbids legacy unauthenticated endpoints")
-	}
 	native.worker_threads = C.uint32_t(config.WorkerThreads)
 	native.event_queue_capacity = C.uint32_t(config.EventQueueCapacity)
 	native.write_queue_capacity = C.uint32_t(config.WriteQueueCapacity)
@@ -51,6 +48,5 @@ func gameNetworkConfig(config Config) (C.rnet_config_t, error) {
 	native.tcp_recv_buffer_bytes = C.uint64_t(config.TCPRecvBufferBytes)
 	// RnetGameConfig.AllowPlaintextBusinessData is the only policy switch.
 	native.allow_plaintext_business_data = 0
-	native.allow_legacy_unauthenticated_endpoints = 0
 	return native, nil
 }

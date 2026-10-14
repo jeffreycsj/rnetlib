@@ -263,25 +263,6 @@ static inline int32_t rnet_go_client_connect(
   return rnet_client_connect(runtime, &config, out);
 }
 
-static inline int32_t rnet_go_endpoint_open(
-    rnet_runtime_t runtime, uint32_t transport, uint32_t mode,
-    const uint8_t *bind_host, size_t bind_host_len, uint16_t bind_port,
-    const uint8_t *remote_host, size_t remote_host_len, uint16_t remote_port,
-    rnet_endpoint_t *out) {
-  rnet_endpoint_config_t config = {0};
-  config.struct_size = sizeof(config);
-  config.abi_version = RNET_ABI_VERSION;
-  config.transport = transport;
-  config.mode = mode;
-  config.bind_host.ptr = bind_host;
-  config.bind_host.len = bind_host_len;
-  config.bind_port = bind_port;
-  config.remote_host.ptr = remote_host;
-  config.remote_host.len = remote_host_len;
-  config.remote_port = remote_port;
-  return rnet_endpoint_open(runtime, &config, out);
-}
-
 static inline int32_t rnet_go_send(
     rnet_runtime_t runtime, rnet_session_t session,
     const uint8_t *payload, size_t payload_len) {
@@ -326,43 +307,6 @@ static inline int32_t rnet_go_keypair_generate(uint8_t *private_key,
     memset(keypair.private_key, 0, 32);
   }
   return status;
-}
-
-static inline int32_t rnet_go_listener_open(
-    rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
-    size_t host_len, uint16_t port, const uint8_t *private_key,
-    rnet_endpoint_t *out) {
-  rnet_listener_config_t config = {0};
-  config.struct_size = sizeof(config);
-  config.abi_version = RNET_ABI_VERSION;
-  config.transport = transport;
-  config.bind_host.ptr = host;
-  config.bind_host.len = host_len;
-  config.bind_port = port;
-  config.local_private_key.ptr = private_key;
-  config.local_private_key.len = 32;
-  return rnet_listener_open(runtime, &config, out);
-}
-
-static inline int32_t rnet_go_client_join(
-    rnet_runtime_t runtime, uint32_t transport, const uint8_t *host,
-    size_t host_len, uint16_t port, const uint8_t *private_key,
-    const uint8_t *server_public_key, const uint8_t *payload,
-    size_t payload_len, rnet_endpoint_t *out) {
-  rnet_join_config_t config = {0};
-  config.struct_size = sizeof(config);
-  config.abi_version = RNET_ABI_VERSION;
-  config.transport = transport;
-  config.remote_host.ptr = host;
-  config.remote_host.len = host_len;
-  config.remote_port = port;
-  config.local_private_key.ptr = private_key;
-  config.local_private_key.len = 32;
-  config.expected_server_public_key.ptr = server_public_key;
-  config.expected_server_public_key.len = 32;
-  config.join_payload.ptr = payload;
-  config.join_payload.len = payload_len;
-  return rnet_client_join(runtime, &config, out);
 }
 
 #endif

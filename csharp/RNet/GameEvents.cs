@@ -42,7 +42,7 @@ public sealed unsafe partial class GameRuntime {
     public void Send(ulong session, ReadOnlySpan<byte> payload, GameSendOptions options) {
         ArgumentNullException.ThrowIfNull(options);
         using var h = Lease();
-        var raw = new Native.SendOptions { Size = (uint)sizeof(Native.SendOptions), Abi = 2,
+        var raw = new Native.SendOptions { Size = (uint)sizeof(Native.SendOptions), Abi = Native.AbiVersion,
             HasSequence = options.Sequence.HasValue ? 1u : 0u, Sequence = options.Sequence ?? 0,
             HasTick = options.Tick.HasValue ? 1u : 0u, Tick = options.Tick ?? 0,
             CorrelationId = options.CorrelationId, Priority = (uint)options.Priority, ExpiryMs = options.ExpiryMs };

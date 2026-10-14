@@ -24,7 +24,7 @@ check_max_lines() {
   done
 }
 
-transport_modules=(config cookie kcp lifecycle metrics runtime secure_datagram secure_kcp secure_tcp session state tcp udp)
+transport_modules=(config cookie kcp lifecycle metrics runtime adaptive_datagram adaptive_tcp adaptive_wire session state)
 ffi_modules=(abi endpoint events observe registry runtime session)
 game_modules=(range_api range_runtime range_state realtime_runtime runtime runtime_tests)
 go_modules=(config endpoint event keypair native observe runtime session types)

@@ -494,14 +494,6 @@ pub(crate) fn session_event(event_type: EventType, endpoint: Handle, session: Ha
     event
 }
 
-pub(crate) fn message_event(
-    endpoint: Handle,
-    session: Handle,
-    frame: rnet_protocol::Frame,
-) -> Event {
-    message_event_with_integrity(endpoint, session, frame, false)
-}
-
 pub(crate) fn message_event_with_integrity(
     endpoint: Handle,
     session: Handle,

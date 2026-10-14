@@ -94,10 +94,6 @@ pub(crate) fn runtime_config(config: RnetConfig) -> rnet_core::Result<RuntimeCon
     runtime_config.datagram_idle_timeout = Duration::from_millis(config.datagram_idle_timeout_ms);
     runtime_config.security_policy.allow_plaintext_business_data =
         config.allow_plaintext_business_data != 0;
-    runtime_config
-        .security_policy
-        .allow_legacy_unauthenticated_endpoints =
-        config.allow_legacy_unauthenticated_endpoints != 0;
     runtime_config.security_policy.rekey_after =
         (config.rekey_after_ms != 0).then(|| Duration::from_millis(config.rekey_after_ms));
     runtime_config.security_policy.rekey_after_bytes =

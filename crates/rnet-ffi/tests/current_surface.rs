@@ -63,6 +63,73 @@ fn endpoint_and_poll_symbols_are_current_only() {
 }
 
 #[test]
+fn unauthenticated_endpoint_api_and_opt_in_are_removed() {
+    for (name, source) in [
+        ("header", include_str!("../../../include/rnet.h")),
+        (
+            "exports",
+            include_str!("../../../scripts/expected-exports.txt"),
+        ),
+        ("cgo", include_str!("../../../go/rnet/native.h")),
+    ] {
+        for obsolete in [
+            "rnet_endpoint_open",
+            "rnet_endpoint_config",
+            "RNET_ENDPOINT_LISTENER",
+            "allow_legacy_unauthenticated_endpoints",
+        ] {
+            assert!(!source.contains(obsolete), "obsolete {name}: {obsolete}");
+        }
+    }
+    assert!(!include_str!("../../../go/rnet/config.go").contains("AllowLegacyEndpoints"));
+    assert!(!include_str!("../../../csharp/RNet/NativeTypes.cs").contains("AllowLegacy"));
+    for obsolete in [
+        "open_tcp_listener",
+        "open_tcp_client",
+        "open_udp",
+        "open_endpoint",
+    ] {
+        assert!(!include_str!("../../../cpp/rnet/runtime.hpp").contains(obsolete));
+    }
+    for obsolete in ["OpenTCP", "OpenUDP", "openEndpoint"] {
+        assert!(!include_str!("../../../go/rnet/endpoint.go").contains(obsolete));
+    }
+}
+
+#[test]
+fn legacy_authenticated_endpoints_are_absent_from_all_sdk_surfaces() {
+    let header = include_str!("../../../include/rnet.h");
+    let exports = include_str!("../../../scripts/expected-exports.txt");
+    let cpp = include_str!("../../../cpp/rnet/runtime.hpp");
+    let go = include_str!("../../../go/rnet/endpoint.go");
+    let native = include_str!("../../../go/rnet/native.h");
+    for obsolete in [
+        "rnet_listener_open",
+        "rnet_client_join",
+        "rnet_listener_config",
+        "rnet_join_config",
+    ] {
+        assert!(!header.contains(obsolete), "obsolete C API: {obsolete}");
+        assert!(!exports.contains(obsolete), "obsolete C export: {obsolete}");
+        assert!(
+            !native.contains(obsolete),
+            "obsolete cgo adapter: {obsolete}"
+        );
+    }
+    for obsolete in ["open_secure_", "join_secure"] {
+        assert!(!cpp.contains(obsolete), "obsolete C++ API: {obsolete}");
+    }
+    for obsolete in [
+        "OpenSecure",
+        "JoinSecure",
+        "openSecureListener",
+        "joinSecure",
+    ] {
+        assert!(!go.contains(obsolete), "obsolete Go API: {obsolete}");
+    }
+}
+
+#[test]
 fn game_runtime_and_poll_have_one_complete_layout() {
     let header = include_str!("../../../include/rnet.h");
     for obsolete in [

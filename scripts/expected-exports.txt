@@ -1,11 +1,9 @@
 rnet_abi_version
 rnet_buffer_release
 rnet_client_connect
-rnet_client_join
 rnet_config_init
 rnet_endpoint_close
 rnet_endpoint_local_port
-rnet_endpoint_open
 rnet_game_auth_decide
 rnet_game_buffer_release
 rnet_game_client_connect
@@ -45,7 +43,6 @@ rnet_keypair_from_private
 rnet_keypair_generate
 rnet_last_error_message
 rnet_latency_snapshot
-rnet_listener_open
 rnet_metrics_log_interval_set
 rnet_metrics_snapshot
 rnet_poll_events

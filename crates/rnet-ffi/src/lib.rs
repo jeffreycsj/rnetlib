@@ -27,9 +27,8 @@ mod session;
 pub use abi::*;
 pub use abi_config::*;
 pub use endpoint::{
-    rnet_client_connect, rnet_client_join, rnet_endpoint_close, rnet_endpoint_local_port,
-    rnet_endpoint_open, rnet_keypair_from_private, rnet_keypair_generate, rnet_listener_open,
-    rnet_server_listen,
+    rnet_client_connect, rnet_endpoint_close, rnet_endpoint_local_port, rnet_keypair_from_private,
+    rnet_keypair_generate, rnet_server_listen,
 };
 pub use error::rnet_last_error_message;
 pub use events::{rnet_buffer_release, rnet_poll_events};

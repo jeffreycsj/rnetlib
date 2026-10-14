@@ -10,6 +10,7 @@ fn only_the_current_abi_and_exact_layout_are_accepted() {
     for (abi, size) in [
         (0, std::mem::size_of::<RnetConfig>() as u32),
         (1, std::mem::size_of::<RnetConfig>() as u32),
+        (2, std::mem::size_of::<RnetConfig>() as u32),
         (
             RNET_ABI_VERSION + 1,
             std::mem::size_of::<RnetConfig>() as u32,

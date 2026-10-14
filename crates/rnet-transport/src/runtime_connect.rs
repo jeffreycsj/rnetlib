@@ -37,10 +37,7 @@ impl NetworkRuntime {
                 join_payload: config.join_payload,
             }
             .into();
-            let security = endpoint_config
-                .security
-                .clone()
-                .expect("client security mode");
+            let security = endpoint_config.security.clone();
             return self.open_adaptive_datagram_candidates(endpoint_config, security, remaining);
         }
 
@@ -89,10 +86,7 @@ impl NetworkRuntime {
             join_payload: config.join_payload,
         }
         .into();
-        let security = endpoint_config
-            .security
-            .clone()
-            .expect("client security mode");
+        let security = endpoint_config.security.clone();
         self.open_adaptive_datagram_candidates(endpoint_config, security, remaining)
     }
 

@@ -108,108 +108,6 @@ class Runtime {
     return endpoint;
   }
 
-  rnet_endpoint_t open_tcp_listener(const std::string &host, uint16_t port) {
-    return open_endpoint(RNET_TRANSPORT_TCP, RNET_ENDPOINT_LISTENER, host,
-                         port, std::string(), 0);
-  }
-
-  rnet_endpoint_t open_tcp_client(const std::string &host, uint16_t port) {
-    return open_endpoint(RNET_TRANSPORT_TCP, RNET_ENDPOINT_CLIENT,
-                         std::string(), 0, host, port);
-  }
-
-  rnet_endpoint_t open_udp(const std::string &bind_host, uint16_t bind_port,
-                           const std::string &remote_host = std::string(),
-                           uint16_t remote_port = 0) {
-    return open_endpoint(RNET_TRANSPORT_UDP, RNET_ENDPOINT_DATAGRAM, bind_host,
-                         bind_port, remote_host, remote_port);
-  }
-
-  rnet_endpoint_t open_secure_tcp_listener(const std::string &host,
-                                           uint16_t port,
-                                           const Keypair &keypair) {
-    return open_secure_listener(RNET_TRANSPORT_TCP, host, port, keypair);
-  }
-
-  rnet_endpoint_t open_secure_udp_listener(const std::string &host,
-                                           uint16_t port,
-                                           const Keypair &keypair) {
-    return open_secure_listener(RNET_TRANSPORT_UDP, host, port, keypair);
-  }
-
-  rnet_endpoint_t open_secure_kcp_listener(const std::string &host,
-                                           uint16_t port,
-                                           const Keypair &keypair) {
-    return open_secure_listener(RNET_TRANSPORT_KCP, host, port, keypair);
-  }
-
-  rnet_endpoint_t open_secure_listener(uint32_t transport,
-                                       const std::string &host, uint16_t port,
-                                       const Keypair &keypair) {
-    rnet_listener_config_t config = {};
-    config.struct_size = sizeof(config);
-    config.abi_version = RNET_ABI_VERSION;
-    config.transport = transport;
-    config.bind_host.ptr = reinterpret_cast<const uint8_t *>(host.data());
-    config.bind_host.len = host.size();
-    config.bind_port = port;
-    config.local_private_key.ptr = keypair.private_key();
-    config.local_private_key.len = 32;
-    rnet_endpoint_t endpoint = 0;
-    check(rnet_listener_open(handle_, &config, &endpoint));
-    return endpoint;
-  }
-
-  rnet_endpoint_t join_secure_tcp(const std::string &host, uint16_t port,
-                                  const Keypair &local_key,
-                                  const uint8_t *server_public_key,
-                                  const std::string &join_payload) {
-    return join_secure(RNET_TRANSPORT_TCP, host, port, local_key,
-                       server_public_key, join_payload);
-  }
-
-  rnet_endpoint_t join_secure_udp(const std::string &host, uint16_t port,
-                                  const Keypair &local_key,
-                                  const uint8_t *server_public_key,
-                                  const std::string &join_payload) {
-    return join_secure(RNET_TRANSPORT_UDP, host, port, local_key,
-                       server_public_key, join_payload);
-  }
-
-  rnet_endpoint_t join_secure_kcp(const std::string &host, uint16_t port,
-                                  const Keypair &local_key,
-                                  const uint8_t *server_public_key,
-                                  const std::string &join_payload) {
-    return join_secure(RNET_TRANSPORT_KCP, host, port, local_key,
-                       server_public_key, join_payload);
-  }
-
-  rnet_endpoint_t join_secure(uint32_t transport, const std::string &host,
-                              uint16_t port, const Keypair &local_key,
-                              const uint8_t *server_public_key,
-                              const std::string &join_payload) {
-    if (server_public_key == NULL) {
-      throw std::invalid_argument("server public key is null");
-    }
-    rnet_join_config_t config = {};
-    config.struct_size = sizeof(config);
-    config.abi_version = RNET_ABI_VERSION;
-    config.transport = transport;
-    config.remote_host.ptr = reinterpret_cast<const uint8_t *>(host.data());
-    config.remote_host.len = host.size();
-    config.remote_port = port;
-    config.local_private_key.ptr = local_key.private_key();
-    config.local_private_key.len = 32;
-    config.expected_server_public_key.ptr = server_public_key;
-    config.expected_server_public_key.len = 32;
-    config.join_payload.ptr =
-        reinterpret_cast<const uint8_t *>(join_payload.data());
-    config.join_payload.len = join_payload.size();
-    rnet_endpoint_t endpoint = 0;
-    check(rnet_client_join(handle_, &config, &endpoint));
-    return endpoint;
-  }
-
   void auth_decide(rnet_session_t session, bool accept) const {
     check(rnet_session_auth_decide(handle_, session, accept ? 1u : 0u));
   }
@@ -368,29 +266,6 @@ class Runtime {
   }
 
  private:
-  rnet_endpoint_t open_endpoint(uint32_t transport, uint32_t mode,
-                                const std::string &bind_host,
-                                uint16_t bind_port,
-                                const std::string &remote_host,
-                                uint16_t remote_port) {
-    rnet_endpoint_config_t config{};
-    config.struct_size = sizeof(config);
-    config.abi_version = RNET_ABI_VERSION;
-    config.transport = transport;
-    config.mode = mode;
-    config.bind_host.ptr =
-        reinterpret_cast<const uint8_t *>(bind_host.data());
-    config.bind_host.len = bind_host.size();
-    config.bind_port = bind_port;
-    config.remote_host.ptr =
-        reinterpret_cast<const uint8_t *>(remote_host.data());
-    config.remote_host.len = remote_host.size();
-    config.remote_port = remote_port;
-    rnet_endpoint_t endpoint = 0;
-    check(rnet_endpoint_open(handle_, &config, &endpoint));
-    return endpoint;
-  }
-
   void reset() noexcept {
     if (handle_ == 0) {
       return;

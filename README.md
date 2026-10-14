@@ -23,7 +23,7 @@ See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, a
 
 New deployments should use the transport-neutral `listen`/`connect` APIs. TCP, UDP, or KCP is a configuration value fixed when the endpoint is created; it never appears in the send API. The server chooses the initial application-data security mode and may switch or rekey a live session. Clients follow those authenticated changes automatically.
 
-This branch is migrating to a single current SDK/wire implementation. Old SDKs are **not compatible** with the current ABI; rebuild the SDK and native library together. Legacy endpoint implementations and dual game wire paths have not yet been removed: see [migration status](docs/single-current-api.md).
+This branch is migrating to a single current SDK/wire implementation. Old SDKs are **not compatible** with the current API; rebuild the SDK and native library together. Separate legacy secure TCP/UDP/KCP implementations and their SDK entry points have been removed. Unauthenticated endpoint implementations, their opt-in switch and their SDK APIs have also been removed; only authenticated endpoints remain. The game wire paths still need unification: see [migration status](docs/single-current-api.md).
 
 ## Game API quick start
 

@@ -13,10 +13,13 @@
 - 底层发送为 `rnet_session_send(runtime, session, payload)`；带 correlation 使用 `rnet_session_send_ex(..., options)`。C++11 / Go 同步移除发送消息类型参数及 Legacy 发送方法。
 - Rust 底层同样只使用 `send(session, payload)` / `send_with_options(session, payload, options)`；删除 typed send、`send_legacy`、`send_payload` / `send_payload_with_options` 别名。传输类型在建连时固定，业务类型放入 payload，成功仅表示本地队列接受，不保证对端收到。
 - Rust `RuntimeConfig::default()` 与 `production()` 使用同一安全策略：不允许旧无认证端点、不允许本地服务器选择业务明文，自动轮换密钥开启。删除 `SecurityPolicy::compatibility()` 与 `GameRuntimeConfig::compatibility()`；业务明文通过明确的服务器策略开启，客户端仍自动跟随已认证服务器。
+- 旧 `secure_tcp` / `secure_datagram` / `secure_kcp` 执行模块及 Rust `secure_*` 构造器已删除；C `rnet_listener_open` / `rnet_client_join` 和配置类型、C++ `open_secure_*` / `join_secure*`、Go `OpenSecure*` / `JoinSecure*` 与 cgo 适配同步删除，不保留转发别名。共享 Noise、cookie、KCP 及现行服务器动态切换路径保留。
+
+- 旧无认证 TCP/UDP 执行模块、Rust 公开 `EndpointConfig` / `open_endpoint`、C `rnet_endpoint_open` 和配置/模式类型、C++/Go 包装及 `allow_legacy_unauthenticated_endpoints` 开关均已删除。内部角色不再可空；业务明文仍需服务器明确允许，且始终经过握手和授权。
 
 ## 接入要求
 
-当前 `RNET_ABI_VERSION` 判别值为 2，只有一套实现，值 1 不被接受。C 程序必须先检查 `rnet_abi_version() == RNET_ABI_VERSION`，再调用任何初始化/输出函数；C++11、Go、C# 的创建/密钥入口自动检查。ABI 判别不能替代调用方的指针有效性义务。
+当前 `RNET_ABI_VERSION` 判别值为 3，只有一套实现，值 1 和 2 均不被接受。删除 legacy 配置字段后，即使平台填充导致尺寸不变，也不能与旧 SDK 混用。C 程序必须先检查 `rnet_abi_version() == RNET_ABI_VERSION`，再调用任何初始化/输出函数；C++11、Go、C# 的创建/密钥入口自动检查。ABI 判别不能替代调用方的指针有效性义务。
 
 配置的 `struct_size` 必须与当前头文件精确一致。FFI 先读取公共头，再读取通过校验的完整布局；短旧配置不会被提前当成大结构体复制。空 logger 表示禁用日志；非空 logger 必须有有效回调。logger 结构体只在创建时借用，回调及 user_data 必须有效且线程安全，直到 destroy 返回。不要在日志回调里 stop/destroy。
 
@@ -24,9 +27,8 @@
 
 ## 尚未完成
 
-1. 移除旧 `endpoint_open` / `listener_open` / `client_join`、Rust transport-specific 构造器、无认证及旧 secure 执行模块，迁移它们的有效失败路径测试。
-2. 合并游戏 exact/range 配置及 wire 状态机：统一走业务版本范围协商，精确业务版本表示为 min=max。当前仍有 wire-v3/v4 双路径，不能称为“wire 已统一”。
-3. 最终 SDK/动态库/发布包全套验收、全范围对抗性复查。长稳压测按约定最后执行；跨实例恢复不在范围内。
+1. 合并游戏 exact/range 配置及 wire 状态机：统一走业务版本范围协商，精确业务版本表示为 min=max。当前仍有 wire-v3/v4 双路径，不能称为“wire 已统一”。
+2. 最终 SDK/动态库/发布包全套验收、全范围对抗性复查。长稳压测按约定最后执行；跨实例恢复不在范围内。
 
 ## 阶段对抗性审查
 
@@ -35,9 +37,11 @@
 | 高，已修复 | FFI 配置读取 | 原先完整解引用后才检查大小；现先读公共头并严格验证布局，以 Linux 保护页测试短配置边界。 |
 | 中，已修复 | 延迟查询 | 合并时较新的传输查询会漏掉日志回调样本；累计与窗口各自记录，窗口轮转不清空累计，增加回归。 |
 | 中，已修复 | C++ SDK | ABI 检查仅放在初始创建/密钥入口，不在 noexcept 移动构造中调用可能抛异常的检查。 |
-| 未完成的需求 | 旧端点及游戏 wire | 仍有旧端点和 exact/range wire 双路径；必须迁移功能测试后删除，不能宣称全量去兼容已完成。Rust 旧发送入口已移除，但底层帧和 Rust 原始事件仍有历史字段，待 wire 收敛时一并清理。 |
+| 未完成的需求 | 旧端点及游戏 wire | 旧端点已删除，仍有 exact/range wire 双路径；须统一游戏建连状态机，不能宣称全量去兼容已完成。Rust 旧发送入口已移除，但底层帧和 Rust 原始事件仍有历史字段，待 wire 收敛时一并清理。 |
 
-测试盲区：保护页场景目前只在 Linux 执行；Windows/移动平台、ASan fuzz、独立安全审计和目标环境长稳尚未验收。整体评价：接口布局这一阶段已形成单一现行布局，但整个库的 wire 与旧执行路径清理未完成。历史 ABI/多布局兼容承诺不再适用于本分支。
+测试盲区：保护页场景目前只在 Linux 执行；Windows/移动平台、ASan fuzz、独立安全审计和目标环境长稳尚未验收。整体评价：接口布局这一阶段已形成单一现行布局，但游戏 wire 清理与最终发布资格未完成。历史 ABI/多布局兼容承诺不再适用于本分支。
+
+以下验证记录按阶段保留历史事实；当前剩余项以上方“尚未完成”和最新阶段记录为准。
 
 ## 本阶段验证记录
 
@@ -98,3 +102,44 @@
 当前仍未解决的发布阻塞：旧端点、显式 legacy 开关与旧 secure 模块删除；exact/range 配置和 wire 状态机统一。六项测试迁移不等于已删除旧执行路径。最终必须在完成迁移后的干净提交上重跑发布门禁；历史 ASan/Miri/Go race 与短回环证据不外推，跨实例恢复不实现，目标环境长稳最后执行。
 
 本阶段验证（基于 `30d5304` 后的本地修改树，不是干净发布提交）：串行 `cargo test --offline --workspace -- --test-threads=1` 通过，游戏库单元测试 91 项；严格 workspace/all-targets Clippy、格式、结构、shell 语法和 diff 检查通过。Loom 首次离线运行缺依赖，按锁文件补齐后 `cargo test --locked -p rnet-game --features loom admission::tests -- --test-threads=1` 的两个并发模型通过，未改动锁文件。所有构建/测试由至少保留 15 GiB 可用内存的保护器监控。没有重新执行 C++/Go/C# 独立联调、Go race、ASan/Miri、独立审计或目标环境长稳，也没有重打最终发布包；workspace 内的数秒 soak smoke 仅算回归，不算长稳资格。
+
+## 后续阶段：删除旧 secure 执行路径（2026-10-14）
+
+删除三套旧 secure 模块、运行时分派、安全角色变体及 transport-specific secure 构造器。C 的旧 listener/join 导出和配置类型、C++11/Go 包装及 cgo 适配一并删除，不保留兼容别名；源文件可从 Git 历史恢复。现行 `listen` / `connect` 的 Noise、cookie、KCP、动态加密切换及 rekey 共用实现未删除。
+
+TDD 顺序：先运行原有 C ABI 契约测试；新增旧接口消失门禁并确认它在旧 C 头文件上失败；将 C 的 TCP/UDP/KCP 认证建连测试迁到现行入口并运行通过；最后删除旧模块与 SDK 入口。此前已迁移的六项 Rust secure 回归继续验证现行路径，包括授权前禁止发送、错误公钥拒绝、cookie 先于 Noise 分配和超大 join 拒绝。
+
+### 对抗性复查
+
+| 发现 | 处理 |
+| --- | --- |
+| 原结构检查要求旧 secure 文件存在，与删除目标冲突 | 改为检查现行 adaptive 模块；新增旧模块、构造器及各语言旧 API 不存在的门禁。 |
+| 只检查头文件无法证明二进制不再导出旧 API | 重新构建 release 动态库，实际 `nm` 导出与头文件、预期导出清单逐项核对。 |
+| 安全文档仍指向旧版本化入口并描述固定 KCP conv | 更新为现行入口及 cookie 预检中的随机 conv；明确仍是一 peer 一活动会话，未承诺多路复用。 |
+
+本阶段验证基于 `1dd489c` 加本地修改，不是干净发布提交：工作区串行测试、严格 workspace/all-targets Clippy、格式/结构及 diff 检查通过；`make -j1 cpp-test go-test csharp-test abi-check` 通过，包括 C++11 四个示例、Go 强制重建 native 链接、C# 三传输联调和实际 release 导出检查。构建测试持续受 15 GiB 可用内存保护。
+
+未重新执行 Go race、ASan fuzz、Miri、Loom、独立审计或目标环境长稳，未生成最终发布包。仍须删除无认证 TCP/UDP 入口及 legacy 开关，再统一 exact/range 游戏 wire；上述阶段结果不代表这些剩余项已完成，也不将历史安全专项结果外推到当前代码。长稳仍在功能迁移与发布门禁完成后执行。
+
+## 后续阶段：删除无认证端点（2026-10-14）
+
+旧 `tcp.rs` / `udp.rs` 执行模块、无认证构造器、公开 `open_endpoint`、C `rnet_endpoint_open` / endpoint 配置与模式类型、C++/Go 包装及全部 SDK 的 legacy 开关已删除。内部 `EndpointConfig` / `EndpointSecurity` 不再公开，角色不可空；仅供单元测试构造路由的辅助方法受 `cfg(test)` 限制，不进入 release 库。源文件可从 Git 历史恢复，不提供旧 SDK 转发层。
+
+唯一 ABI 判别值更新为 3，旧值 1/2 均拒绝。删除字段后，64 位结构体填充可能让总尺寸保持不变，因此不能只检查 `struct_size`。C# 同步删除字段，所有显式 ABI 输入改用集中常量；其他 SDK 使用头文件常量。头文件和 native/SDK 必须一起重建。
+
+### 测试迁移与对抗性复查
+
+| 检查点 | 处理与证据 |
+| --- | --- |
+| 删除旧路径会失去预算、关闭及事件顺序保护 | 先运行原 20 项 loopback 与 5 项安全默认值基线；迁移后 17 项 loopback 覆盖现行三传输收发、相关 ID、IPv6、超限、预算、准入拒绝、端口冲突、握手 EOF、监听器可继续使用和生命周期事件不被业务包抢占。 |
+| 旧 UDP 测试假定业务首包自动建会话 | 改为验证关闭后旧业务包不能复活路由，显式重新握手授权后使用新句柄收发。原 TCP/UDP 正常收发合并为三传输测试；两个只针对已删除入口的拒绝测试由源码/符号消失门禁替代，不保留旧语义。 |
+| C ABI 夹具依赖无认证连接 | 夹具改用固定测试密钥、现行 listen/connect 和授权；20 项契约测试继续覆盖日志、延迟、关闭、token 一次释放、错误和并发销毁。原旧 KCP 入口拒绝项由旧 API 消失门禁替代。 |
+| ABI 字段删除可能被平台填充掩盖 | 旧 ABI 2 拒绝测试先失败再通过；保护页短配置测试继续通过。C++/Go/C# 与实际 native 联调验证现行契约。 |
+| 内部类型私有化后易误删凭证脱敏覆盖 | 将 endpoint 调试输出测试移到传输库内部，同时验证 client ticket 与 server 私钥不进入 Debug 输出。 |
+| 业务明文可能被误解为免认证 | 新测试验证开启业务明文仍拒绝无握手 TCP 记录；C++ 明文示例也经过握手授权。现有三传输服务器动态切换/rekey 回归继续通过。 |
+
+旧 API/开关消失测试和 ABI 2 拒绝测试均完成 RED → GREEN。SDK 检查覆盖头文件、预期导出、cgo、C++/Go 包装与 C# 配置；release 实际导出另通过 `nm` 核对，不只依靠源码字符串判断。
+
+本阶段在 `1dd489c` 加当前本地修改树上串行验证通过：`cargo test --offline --workspace -- --test-threads=1`、严格 workspace/all-targets Clippy、格式/结构及 diff 检查、`make -j1 cpp-test go-test csharp-test abi-check`。C++11 四个示例、Go 强制 native 重建、C# 三传输认证/收发/动态切换/恢复/日志/错误路径和 release 导出一致性均通过；所有构建/测试持续保留至少 15 GiB 可用内存。
+
+整体评价：旧端点 API 与执行模块清理已完成，游戏双 wire 尚未统一，仍不是可认证的最终生产发布。未重跑 Go race、ASan fuzz、Miri、Loom 或独立审计，未生成最终发布包；短 soak smoke 只算功能回归。后续先统一 exact/range 配置、协商/恢复状态机与历史帧字段，再在干净发布提交上重跑资格验证，最后执行目标环境长稳。

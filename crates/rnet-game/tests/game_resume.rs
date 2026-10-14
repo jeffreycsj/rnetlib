@@ -5,8 +5,7 @@ use rnet_game::{
 };
 use rnet_security::Keypair;
 use rnet_transport::{
-    AuthRequest, ClientConfig, ClientSecurity, EndpointConfig, HostClientConfig,
-    ResolvedClientConfig,
+    AuthRequest, ClientConfig, ClientSecurity, HostClientConfig, ResolvedClientConfig,
 };
 use std::time::{Duration, Instant};
 
@@ -34,8 +33,6 @@ fn credentials_are_not_in_debug_output() {
         join_payload: secret.clone(),
     };
     assert!(!format!("{client:?}").contains(&secret_debug));
-    let endpoint = EndpointConfig::client(Transport::Tcp, None, client.remote_addr, secret.clone());
-    assert!(!format!("{endpoint:?}").contains(&secret_debug));
     let host = HostClientConfig {
         transport: Transport::Tcp,
         host: "localhost".into(),

@@ -1,5 +1,7 @@
 # Rust Netlib Phase 2 规格说明
 
+> 历史规格：旧 SDK、兼容端点及多版本入口承诺已被 [单一现行接口规格](../single-current-api/spec.md) 取代。下文保留历史设计，不是现行接入契约。
+
 ## 目标
 
 在保持 Phase 1 C ABI 可兼容扩展的前提下，补齐可运行 KCP、C++11 包装、显式客户端 join，以及独立于 TCP/UDP/KCP 连接状态的应用层安全握手。传输类型在 endpoint 创建时确定并在其全部 session 生命周期内不可变；发送 API 不接受 transport 参数。

@@ -2,7 +2,7 @@
 
 RNet supplies bounded runtime behavior and production-test tooling; capacity is accepted only after it is measured on the target kernel, hardware, network, and application event loop.
 
-Current status: candidate, not certified. Legacy execution paths and dual game wires are still being removed; do not ship this migration tree as a production release. Historical green runs do not qualify a later commit. Complete the [single-current migration](single-current-api.md) before final packaging and target soak.
+Current status: candidate, not certified. Legacy endpoint execution paths have been removed, but dual game wires still need unification; do not ship this migration tree as a production release. Historical green runs do not qualify a later commit. Complete the [single-current migration](single-current-api.md) before final packaging and target soak.
 
 ## Required release checks
 
@@ -31,7 +31,7 @@ recorded in `deny.toml` or the security review.
 ## Runtime policy
 
 - Use the single current `rnet_config_t` or game configuration in C/C++/Go/C#, with SDK and native library rebuilt together. Rust `RuntimeConfig::default()` and `RuntimeConfig::production()` share secure defaults. Set explicit runtime-wide endpoint and pending-handshake limits instead of relying only on per-listener capacity.
-- Keep legacy unauthenticated endpoints disabled; they are pending removal and are not a production integration path. Plaintext business mode is a separate, explicit server policy choice that preserves authenticated setup and control traffic but removes payload confidentiality and integrity. Client configuration does not select the server's business-data mode.
+- Unauthenticated endpoints and their opt-in switch no longer exist. Use only the current authenticated listen/connect APIs. Plaintext business mode is a separate, explicit server policy choice that preserves authenticated setup and control traffic but removes payload confidentiality and integrity. Client configuration does not select the server's business-data mode.
 - Continuously poll every game runtime on both peers. Heartbeat scheduling/replies, clock samples and version-negotiation retries/timeouts are poll-driven. There is no background game protocol scheduler: a stalled loop can be timed out by the peer and can process overdue local timeouts when it resumes. Zero-capacity polls advance bounded internal work but do not replace draining application events. Do not block the poll loop on long business operations.
 - `send_latest` is a best-effort pre-transport coalescing path for replaceable snapshots. Poll continuously or explicitly call `flush_realtime`; monitor admission rejection, replacement, close/backpressure drops, send failures, and queued bytes. Keep commands that require reliable delivery on ordinary `send`.
 - Ordinary and advanced game sends use the bounded fair scheduler. Tune Rust `ScheduledQueueConfig`, C `rnet_game_config_t`, C++11's configuration constructor, or Go `GameConfig.ScheduledQueue`; monitor per-priority admission/forwarding, backpressure requeues, expiry and queue-delay percentiles. An expiry is local and cannot recall socket/KCP-owned bytes.

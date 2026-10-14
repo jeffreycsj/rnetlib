@@ -26,7 +26,6 @@ pub struct RnetConfig {
     pub dns_timeout_ms: u64,
     pub datagram_idle_timeout_ms: u64,
     pub allow_plaintext_business_data: u32,
-    pub allow_legacy_unauthenticated_endpoints: u32,
     pub rekey_after_ms: u64,
     pub rekey_after_bytes: u64,
     pub logger: *const RnetLogger,
@@ -61,7 +60,6 @@ impl Default for RnetConfig {
             dns_timeout_ms: defaults.dns_timeout.as_millis() as u64,
             datagram_idle_timeout_ms: defaults.datagram_idle_timeout.as_millis() as u64,
             allow_plaintext_business_data: 0,
-            allow_legacy_unauthenticated_endpoints: 0,
             rekey_after_ms: defaults
                 .security_policy
                 .rekey_after

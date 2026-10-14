@@ -27,14 +27,14 @@ public sealed unsafe partial class GameRuntime : IDisposable {
         nint context = 0;
         try {
             fixed (byte* key = privateKey, expected = expectedServerKey) {
-                var security = new Native.Security { Size = (uint)sizeof(Native.Security), Abi = 2,
+                var security = new Native.Security { Size = (uint)sizeof(Native.Security), Abi = Native.AbiVersion,
                     PrivateKey = new Native.Slice(key, privateKey.Length),
                     ExpectedKey = new Native.Slice(expected, expectedServerKey?.Length ?? 0) };
                 ulong runtime;
                 if (options.Logger != null) {
                     logState = new LogState(options.Logger);
                     context = GCHandle.ToIntPtr(GCHandle.Alloc(logState));
-                    var logger = new Native.Logger { Size = (uint)sizeof(Native.Logger), Abi = 2,
+                    var logger = new Native.Logger { Size = (uint)sizeof(Native.Logger), Abi = Native.AbiVersion,
                         Callback = Marshal.GetFunctionPointerForDelegate(LogBridge.Function),
                         UserData = context, MinLevel = (uint)options.MinimumLogLevel };
                     game.Logger = &logger;

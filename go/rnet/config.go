@@ -27,7 +27,6 @@ type Config struct {
 	TCPRecvBufferBytes         uint64
 	DatagramIdleTimeout        time.Duration
 	AllowPlaintextBusinessData bool
-	AllowLegacyEndpoints       bool
 	RekeyAfter                 time.Duration
 	RekeyAfterBytes            uint64
 	// Logger may be called concurrently. It must return quickly; RNet drops logs under pressure.

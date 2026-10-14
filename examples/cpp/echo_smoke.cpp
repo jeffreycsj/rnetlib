@@ -11,11 +11,20 @@ int main() {
   }
   rnet_config_t config{};
   rnet::check(rnet_config_init(&config));
-  config.allow_legacy_unauthenticated_endpoints = 1;
-  rnet::Runtime runtime(config);
-  const auto listener = runtime.open_tcp_listener("127.0.0.1", 0);
-  const auto client =
-      runtime.open_tcp_client("127.0.0.1", runtime.local_port(listener));
+  config.allow_plaintext_business_data = 1;
+  rnet::ServerOptions server;
+  server.transport = rnet::Transport::Tcp;
+  server.initial_security = rnet::SecurityMode::Plaintext;
+  rnet::Keypair client_key;
+  std::array<uint8_t, 32> expected_server_key;
+  std::copy(server.keypair.public_key(), server.keypair.public_key() + 32,
+            expected_server_key.begin());
+  rnet::Runtime runtime(config, client_key, expected_server_key);
+  const auto listener = runtime.listen(server);
+  rnet::ClientOptions client_options;
+  client_options.transport = rnet::Transport::Tcp;
+  client_options.port = runtime.local_port(listener);
+  const auto client = runtime.connect(client_options);
 
   rnet_session_t client_session = 0;
   rnet_session_t server_session = 0;
@@ -24,6 +33,9 @@ int main() {
   while (std::chrono::steady_clock::now() < deadline &&
          (client_session == 0 || server_session == 0)) {
     for (const auto &event : runtime.poll(16, 50)) {
+      if (event.type == RNET_EVENT_AUTH_REQUEST) {
+        runtime.auth_decide(event.session, true);
+      }
       if (event.type != RNET_EVENT_SESSION_OPENED) {
         continue;
       }

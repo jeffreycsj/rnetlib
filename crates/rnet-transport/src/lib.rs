@@ -1,9 +1,6 @@
 //! Tokio TCP, UDP, and KCP transport runtime.
 
-use std::time::Duration;
-
 const MAX_HANDSHAKE_RECORD: usize = 65_535;
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 mod adaptive_codec;
 mod adaptive_datagram;
@@ -36,19 +33,14 @@ mod runtime_adaptive;
 mod runtime_connect;
 mod runtime_observe;
 mod runtime_registry;
-mod secure_datagram;
-mod secure_kcp;
-mod secure_tcp;
 mod session;
 mod session_close;
 mod state;
-mod tcp;
 mod tcp_socket;
-mod udp;
 
 pub use config::{
-    ClientConfig, ClientSecurity, EndpointConfig, EndpointSecurity, HostClientConfig, PeerVerifier,
-    ResolvedClientConfig, RuntimeConfig, SecurityPolicy, ServerConfig,
+    ClientConfig, ClientSecurity, HostClientConfig, PeerVerifier, ResolvedClientConfig,
+    RuntimeConfig, SecurityPolicy, ServerConfig,
 };
 pub use event::{AuthRequest, SecurityChange, SecurityOperation};
 pub use kcp::{KcpEngine, KcpRetransmissionSnapshot, RustKcpEngine};

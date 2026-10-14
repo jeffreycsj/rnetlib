@@ -1,31 +1,390 @@
 use std::net::{Shutdown, SocketAddr, TcpStream as StdTcpStream};
 use std::time::{Duration, Instant};
 
-use rnet_core::{ErrorCode, Event, EventType};
-use rnet_transport::{EndpointConfig, NetworkRuntime, RuntimeConfig};
+use rnet_core::{ErrorCode, Event, EventType, Handle, Transport};
+use rnet_security::Keypair;
+use rnet_transport::{
+    ClientConfig, ClientSecurity, NetworkRuntime, RuntimeConfig, SecurityMode, ServerConfig,
+};
 
-// Keep legacy-path regression coverage until those implementations are removed. Application
-// defaults must never grant these permissions just to keep compatibility tests working.
-fn legacy_test_config() -> RuntimeConfig {
-    RuntimeConfig {
-        security_policy: rnet_transport::SecurityPolicy {
-            allow_legacy_unauthenticated_endpoints: true,
-            ..rnet_transport::SecurityPolicy::production()
-        },
-        ..RuntimeConfig::default()
-    }
+fn key() -> Keypair {
+    Keypair::from_private(&[7; 32]).unwrap()
+}
+
+fn runtime_with(config: RuntimeConfig) -> NetworkRuntime {
+    let key = key();
+    NetworkRuntime::new_with_client_security(
+        config,
+        Some(ClientSecurity::pinned(key.clone(), key.public.clone())),
+    )
+    .unwrap()
 }
 
 fn test_runtime() -> NetworkRuntime {
-    NetworkRuntime::new(RuntimeConfig {
+    runtime_with(RuntimeConfig {
         worker_threads: 2,
         event_queue_capacity: 64,
         write_queue_capacity: 4,
         max_body_len: 1024,
         max_datagram_size: 1200,
-        ..legacy_test_config()
+        ..RuntimeConfig::default()
     })
-    .unwrap()
+}
+
+fn listener(
+    runtime: &NetworkRuntime,
+    transport: Transport,
+    address: &str,
+) -> rnet_core::Result<Handle> {
+    runtime.listen(ServerConfig {
+        transport,
+        bind_addr: address.parse().unwrap(),
+        local_key: key(),
+        initial_security: SecurityMode::Encrypted,
+    })
+}
+
+fn connect(runtime: &NetworkRuntime, transport: Transport, remote_addr: SocketAddr) -> Handle {
+    runtime
+        .connect(ClientConfig {
+            transport,
+            bind_addr: None,
+            remote_addr,
+            join_payload: b"loopback-ticket".to_vec(),
+        })
+        .unwrap()
+}
+
+fn poll_until(runtime: &NetworkRuntime, mut predicate: impl FnMut(&Event) -> bool) -> Event {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        for event in runtime.poll_events(16, Duration::from_millis(10)) {
+            if predicate(&event) {
+                return event;
+            }
+        }
+    }
+    panic!("event did not arrive: {:?}", runtime.metrics_snapshot());
+}
+
+fn session_pair(runtime: &NetworkRuntime, server: Handle, client: Handle) -> (Handle, Handle) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let (mut server_session, mut client_session) = (None, None);
+    while Instant::now() < deadline {
+        for event in runtime.poll_events(16, Duration::from_millis(10)) {
+            match event.event_type {
+                EventType::AuthRequest => {
+                    assert_eq!(&event.data[32..], b"loopback-ticket");
+                    assert_eq!(
+                        runtime.send(event.session, b"early").unwrap_err().code(),
+                        ErrorCode::HandshakeRequired
+                    );
+                    runtime.auth_decide(event.session, true).unwrap();
+                }
+                EventType::SessionOpened if event.endpoint == server => {
+                    server_session = Some(event.session)
+                }
+                EventType::SessionOpened if event.endpoint == client => {
+                    client_session = Some(event.session)
+                }
+                EventType::Message => panic!("business data preceded session readiness"),
+                EventType::JoinFailed => panic!("join failed: {event:?}"),
+                _ => {}
+            }
+        }
+        if let (Some(server), Some(client)) = (server_session, client_session) {
+            return (server, client);
+        }
+    }
+    panic!("sessions did not open: {:?}", runtime.metrics_snapshot());
+}
+
+fn pair(
+    runtime: &NetworkRuntime,
+    transport: Transport,
+    bind: &str,
+) -> (Handle, Handle, Handle, Handle) {
+    let server = listener(runtime, transport, bind).unwrap();
+    let client = connect(
+        runtime,
+        transport,
+        runtime.endpoint_local_addr(server).unwrap(),
+    );
+    let (ss, cs) = session_pair(runtime, server, client);
+    (server, client, ss, cs)
+}
+
+#[test]
+fn authenticated_transports_exchange_opaque_messages_and_correlation() {
+    for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+        let runtime = test_runtime();
+        let (_, _, ss, cs) = pair(&runtime, transport, "127.0.0.1:0");
+        for (sender, receiver, correlation, payload) in [
+            (cs, ss, 41, b"from-client".as_slice()),
+            (ss, cs, 42, b"from-server".as_slice()),
+        ] {
+            runtime
+                .send_with_options(
+                    sender,
+                    payload,
+                    rnet_transport::SendOptions {
+                        correlation_id: correlation,
+                    },
+                )
+                .unwrap();
+            let event = poll_until(&runtime, |e| {
+                e.event_type == EventType::Message && e.session == receiver
+            });
+            assert_eq!(event.data, payload);
+            assert_eq!(event.request_id, correlation);
+            assert!(event.integrity_verified);
+        }
+        runtime.send(cs, b"opaque").unwrap();
+        let event = poll_until(&runtime, |e| {
+            e.event_type == EventType::Message && e.session == ss
+        });
+        assert_eq!(event.data, b"opaque");
+        assert_eq!(event.request_id, 0);
+        runtime.stop(Duration::from_millis(100)).unwrap();
+        runtime.stop(Duration::ZERO).unwrap();
+    }
+}
+
+#[test]
+fn closed_udp_route_cannot_be_reopened_by_old_business_packets() {
+    let runtime = test_runtime();
+    let (server, client, ss, cs) = pair(&runtime, Transport::Udp, "127.0.0.1:0");
+    runtime.send(cs, b"first").unwrap();
+    poll_until(&runtime, |e| {
+        e.event_type == EventType::Message && e.session == ss
+    });
+    runtime.close_session(ss, ErrorCode::Cancelled).unwrap();
+    poll_until(&runtime, |e| {
+        e.event_type == EventType::SessionClosed && e.session == ss
+    });
+    assert_eq!(
+        runtime.send(ss, b"stale").unwrap_err().code(),
+        ErrorCode::InvalidHandle
+    );
+    runtime.send(cs, b"old-peer").unwrap();
+    let deadline = Instant::now() + Duration::from_millis(100);
+    while Instant::now() < deadline {
+        for event in runtime.poll_events(16, Duration::from_millis(10)) {
+            assert!(
+                !(event.endpoint == server
+                    && matches!(
+                        event.event_type,
+                        EventType::Message | EventType::SessionOpened
+                    )),
+                "old packet resurrected a route: {event:?}"
+            );
+        }
+    }
+    runtime.close_endpoint(client).unwrap();
+    let next = connect(
+        &runtime,
+        Transport::Udp,
+        runtime.endpoint_local_addr(server).unwrap(),
+    );
+    let (next_ss, next_cs) = session_pair(&runtime, server, next);
+    assert_ne!(ss, next_ss);
+    runtime.send(next_cs, b"reauthorized").unwrap();
+    let message = poll_until(&runtime, |e| {
+        e.event_type == EventType::Message && e.session == next_ss
+    });
+    assert_eq!(message.data, b"reauthorized");
+}
+
+#[test]
+fn oversized_message_is_rejected_before_enqueue() {
+    let runtime = test_runtime();
+    let (_, _, _, cs) = pair(&runtime, Transport::Udp, "127.0.0.1:0");
+    assert_eq!(
+        runtime.send(cs, &[0; 1025]).unwrap_err().code(),
+        ErrorCode::MessageTooLarge
+    );
+    assert_eq!(runtime.metrics_snapshot().queued_send_bytes, 0);
+}
+
+#[test]
+fn send_rejects_a_frame_that_exceeds_runtime_or_session_byte_budget() {
+    for (global, session) in [(28, 28), (1024, 28)] {
+        let runtime = runtime_with(RuntimeConfig {
+            max_runtime_queued_bytes: global,
+            max_session_queued_bytes: session,
+            ..RuntimeConfig::default()
+        });
+        let (_, _, _, cs) = pair(&runtime, Transport::Tcp, "127.0.0.1:0");
+        assert_eq!(
+            runtime.send(cs, b"x").unwrap_err().code(),
+            ErrorCode::WouldBlock
+        );
+        assert_eq!(runtime.metrics_snapshot().queued_send_bytes, 0);
+    }
+}
+
+#[test]
+fn endpoint_open_reports_backpressure_and_releases_capacity() {
+    for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+        let runtime = runtime_with(RuntimeConfig {
+            event_queue_capacity: 1,
+            max_endpoints: 1,
+            ..RuntimeConfig::default()
+        });
+        assert_eq!(
+            listener(&runtime, transport, "127.0.0.1:0")
+                .unwrap_err()
+                .code(),
+            ErrorCode::WouldBlock
+        );
+        assert_eq!(runtime.metrics_snapshot().current_endpoints, 0);
+        assert_eq!(
+            runtime.poll_events(1, Duration::ZERO)[0].event_type,
+            EventType::RuntimeStarted
+        );
+        let endpoint = listener(&runtime, transport, "127.0.0.1:0").unwrap();
+        let events = runtime.poll_events(1, Duration::ZERO);
+        assert_eq!(events[0].event_type, EventType::EndpointOpened);
+        assert_eq!(events[0].endpoint, endpoint);
+        runtime.stop(Duration::ZERO).unwrap();
+    }
+}
+
+#[test]
+fn udp_never_delivers_business_data_before_server_session_open() {
+    // Separate queues let the client publish its ready event while the server's one-slot
+    // queue still holds SessionOpened. Application traffic must not evict that lifecycle event.
+    let server = runtime_with(RuntimeConfig {
+        event_queue_capacity: 1,
+        ..RuntimeConfig::default()
+    });
+    let client = test_runtime();
+    server.poll_events(1, Duration::ZERO);
+    let endpoint = listener(&server, Transport::Udp, "127.0.0.1:0").unwrap();
+    server.poll_events(1, Duration::ZERO);
+    connect(
+        &client,
+        Transport::Udp,
+        server.endpoint_local_addr(endpoint).unwrap(),
+    );
+    let auth = poll_until(&server, |e| e.event_type == EventType::AuthRequest);
+    server.auth_decide(auth.session, true).unwrap();
+    let cs = poll_until(&client, |e| e.event_type == EventType::SessionOpened).session;
+    client.send(cs, b"early").unwrap();
+    let opened = poll_until(&server, |_| true);
+    assert_eq!(opened.event_type, EventType::SessionOpened);
+    assert_eq!(opened.session, auth.session);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "UDP did not recover after lifecycle backlog"
+        );
+        client.send(cs, b"later").unwrap();
+        let mut received = false;
+        for event in server.poll_events(1, Duration::from_millis(20)) {
+            assert_eq!(event.event_type, EventType::Message);
+            assert_eq!(event.session, opened.session);
+            received |= event.data == b"later";
+        }
+        if received {
+            break;
+        }
+    }
+}
+
+#[test]
+fn stopped_event_does_not_replace_an_older_lifecycle_event() {
+    let runtime = runtime_with(RuntimeConfig {
+        event_queue_capacity: 1,
+        ..RuntimeConfig::default()
+    });
+    runtime.poll_events(1, Duration::ZERO);
+    listener(&runtime, Transport::Tcp, "127.0.0.1:0").unwrap();
+    runtime.stop(Duration::ZERO).unwrap();
+    assert_eq!(
+        runtime.poll_events(1, Duration::ZERO)[0].event_type,
+        EventType::EndpointOpened
+    );
+    assert_eq!(runtime.metrics_snapshot().lifecycle_events_rejected, 1);
+    runtime.stop(Duration::ZERO).unwrap();
+    assert!(runtime.poll_events(1, Duration::ZERO).is_empty());
+}
+
+#[test]
+fn ipv6_all_transports_are_supported() {
+    for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+        let runtime = test_runtime();
+        let (_, _, ss, cs) = pair(&runtime, transport, "[::1]:0");
+        runtime.send(cs, b"ipv6").unwrap();
+        assert_eq!(
+            poll_until(&runtime, |e| e.event_type == EventType::Message
+                && e.session == ss)
+            .data,
+            b"ipv6"
+        );
+    }
+}
+
+#[test]
+fn tcp_reports_port_conflict_and_unauthenticated_half_close() {
+    let runtime = test_runtime();
+    let endpoint = listener(&runtime, Transport::Tcp, "127.0.0.1:0").unwrap();
+    let address = runtime.endpoint_local_addr(endpoint).unwrap();
+    assert_eq!(
+        listener(&runtime, Transport::Tcp, &address.to_string())
+            .unwrap_err()
+            .code(),
+        ErrorCode::IoError
+    );
+    let stream = StdTcpStream::connect(address).unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    let closed = poll_until(&runtime, |e| {
+        assert_ne!(
+            e.event_type,
+            EventType::SessionOpened,
+            "raw TCP cannot become authorized"
+        );
+        e.event_type == EventType::SessionClosed && e.endpoint == endpoint
+    });
+    assert_eq!(closed.status, ErrorCode::IoError);
+    assert_eq!(
+        runtime
+            .metrics_snapshot()
+            .closed_sessions(ErrorCode::IoError),
+        1
+    );
+    // EOF on one connection must leave the listener usable.
+    let client = connect(&runtime, Transport::Tcp, address);
+    session_pair(&runtime, endpoint, client);
+}
+
+#[test]
+fn authenticated_tcp_listener_enforces_session_admission_limit() {
+    let server = runtime_with(RuntimeConfig {
+        max_sessions_per_endpoint: 1,
+        ..RuntimeConfig::default()
+    });
+    let client = test_runtime();
+    let endpoint = listener(&server, Transport::Tcp, "127.0.0.1:0").unwrap();
+    let address = server.endpoint_local_addr(endpoint).unwrap();
+    connect(&client, Transport::Tcp, address);
+    let auth = poll_until(&server, |e| e.event_type == EventType::AuthRequest);
+    server.auth_decide(auth.session, true).unwrap();
+    poll_until(&server, |e| e.event_type == EventType::SessionOpened);
+    poll_until(&client, |e| e.event_type == EventType::SessionOpened);
+    let _second = StdTcpStream::connect(address).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while server.metrics_snapshot().admission_rejected == 0 {
+        assert!(Instant::now() < deadline, "missing admission rejection");
+        for event in server.poll_events(16, Duration::from_millis(10)) {
+            assert!(!matches!(
+                event.event_type,
+                EventType::SessionOpened | EventType::AuthRequest
+            ));
+        }
+    }
+    assert_eq!(server.metrics_snapshot().current_sessions, 1);
 }
 
 #[test]
@@ -123,15 +482,6 @@ fn stop_rejects_an_unrepresentable_deadline_before_draining() {
 }
 
 #[test]
-fn production_config_rejects_legacy_unauthenticated_endpoints() {
-    let runtime = NetworkRuntime::new(RuntimeConfig::production()).unwrap();
-    let error = runtime
-        .open_endpoint(EndpointConfig::tcp_listener("127.0.0.1:0".parse().unwrap()))
-        .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::NotSupported);
-}
-
-#[test]
 fn stop_without_sessions_does_not_wait_for_the_full_drain_timeout() {
     let runtime = test_runtime();
     let started = Instant::now();
@@ -139,246 +489,6 @@ fn stop_without_sessions_does_not_wait_for_the_full_drain_timeout() {
     runtime.stop(Duration::from_secs(1)).unwrap();
 
     assert!(started.elapsed() < Duration::from_millis(100));
-}
-
-fn poll_until(
-    runtime: &NetworkRuntime,
-    timeout: Duration,
-    mut predicate: impl FnMut(&Event) -> bool,
-) -> Event {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        for event in runtime.poll_events(16, Duration::from_millis(50)) {
-            if predicate(&event) {
-                return event;
-            }
-        }
-    }
-    panic!("event did not arrive before timeout");
-}
-
-fn poll_session_pair(
-    runtime: &NetworkRuntime,
-    first_endpoint: u64,
-    second_endpoint: u64,
-) -> (Event, Event) {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut first = None;
-    let mut second = None;
-    while Instant::now() < deadline && (first.is_none() || second.is_none()) {
-        for event in runtime.poll_events(16, Duration::from_millis(50)) {
-            if event.event_type != EventType::SessionOpened {
-                continue;
-            }
-            if event.endpoint == first_endpoint {
-                first = Some(event);
-            } else if event.endpoint == second_endpoint {
-                second = Some(event);
-            }
-        }
-    }
-    (
-        first.expect("first session did not open"),
-        second.expect("second session did not open"),
-    )
-}
-
-#[test]
-fn tcp_listener_and_client_exchange_framed_messages() {
-    let runtime = test_runtime();
-    let listener = runtime
-        .open_endpoint(EndpointConfig::tcp_listener(
-            "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
-        ))
-        .unwrap();
-    let address = runtime.endpoint_local_addr(listener).unwrap();
-    let client = runtime
-        .open_endpoint(EndpointConfig::tcp_client(address))
-        .unwrap();
-
-    let (client_open, server_open) = poll_session_pair(&runtime, client, listener);
-
-    runtime
-        .send_with_options(
-            client_open.session,
-            b"from-client",
-            rnet_transport::SendOptions { correlation_id: 41 },
-        )
-        .unwrap();
-    let request = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.session == server_open.session
-    });
-    assert_eq!(request.msg_type, 0);
-    assert_eq!(request.stream_id, 0);
-    assert_eq!(request.request_id, 41);
-    assert_eq!(request.data, b"from-client");
-
-    runtime
-        .send_with_options(
-            server_open.session,
-            b"from-server",
-            rnet_transport::SendOptions { correlation_id: 42 },
-        )
-        .unwrap();
-    let response = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.session == client_open.session
-    });
-    assert_eq!(response.data, b"from-server");
-    assert_eq!(response.request_id, 42);
-
-    runtime
-        .send(client_open.session, b"type-owned-by-payload")
-        .unwrap();
-    let payload_only = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.session == server_open.session
-    });
-    assert_eq!(payload_only.msg_type, 0);
-    assert_eq!(payload_only.stream_id, 0);
-    assert_eq!(payload_only.request_id, 0);
-    assert_eq!(payload_only.data, b"type-owned-by-payload");
-    runtime.stop(Duration::from_millis(100)).unwrap();
-    runtime.stop(Duration::ZERO).unwrap();
-}
-
-#[test]
-fn udp_endpoints_exchange_one_frame_per_datagram() {
-    let runtime = test_runtime();
-    let server = runtime
-        .open_endpoint(EndpointConfig::udp("127.0.0.1:0".parse().unwrap(), None))
-        .unwrap();
-    let server_address = runtime.endpoint_local_addr(server).unwrap();
-    let client = runtime
-        .open_endpoint(EndpointConfig::udp(
-            "127.0.0.1:0".parse().unwrap(),
-            Some(server_address),
-        ))
-        .unwrap();
-    let client_open = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == client
-    });
-
-    runtime
-        .send_with_options(
-            client_open.session,
-            b"datagram",
-            rnet_transport::SendOptions { correlation_id: 77 },
-        )
-        .unwrap();
-    let server_message = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.endpoint == server
-    });
-    assert_eq!(server_message.data, b"datagram");
-    assert_eq!(server_message.request_id, 77);
-
-    runtime
-        .send_with_options(
-            server_message.session,
-            b"reply",
-            rnet_transport::SendOptions { correlation_id: 78 },
-        )
-        .unwrap();
-    let reply = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.session == client_open.session
-    });
-    assert_eq!(reply.data, b"reply");
-    assert_eq!(reply.request_id, 78);
-    runtime.stop(Duration::ZERO).unwrap();
-}
-
-#[test]
-fn closing_a_udp_session_never_reuses_its_stale_peer_route() {
-    let runtime = test_runtime();
-    let server = runtime
-        .open_endpoint(EndpointConfig::udp("127.0.0.1:0".parse().unwrap(), None))
-        .unwrap();
-    let client = runtime
-        .open_endpoint(EndpointConfig::udp(
-            "127.0.0.1:0".parse().unwrap(),
-            Some(runtime.endpoint_local_addr(server).unwrap()),
-        ))
-        .unwrap();
-    let client_session = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == client
-    })
-    .session;
-    runtime.send(client_session, b"first").unwrap();
-    let first = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.endpoint == server
-    });
-
-    runtime
-        .close_session(first.session, ErrorCode::Cancelled)
-        .unwrap();
-    let closed = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionClosed && event.session == first.session
-    });
-    assert_eq!(closed.status, ErrorCode::Cancelled);
-
-    runtime.send(client_session, b"second").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut reopened_session = None;
-    let mut message_session = None;
-    while Instant::now() < deadline && message_session.is_none() {
-        for event in runtime.poll_events(8, Duration::from_millis(20)) {
-            if event.event_type == EventType::SessionOpened && event.endpoint == server {
-                reopened_session = Some(event.session);
-            }
-            if event.event_type == EventType::Message && event.data == b"second" {
-                assert!(reopened_session.is_some(), "message preceded SessionOpened");
-                message_session = Some(event.session);
-            }
-        }
-    }
-    let reopened_session = reopened_session.expect("UDP session was not reopened");
-    assert_ne!(reopened_session, first.session);
-    assert_eq!(message_session, Some(reopened_session));
-    runtime.stop(Duration::ZERO).unwrap();
-}
-
-#[test]
-fn oversized_message_is_rejected_before_enqueue() {
-    let runtime = test_runtime();
-    let endpoint = runtime
-        .open_endpoint(EndpointConfig::udp(
-            "127.0.0.1:0".parse().unwrap(),
-            Some("127.0.0.1:9".parse().unwrap()),
-        ))
-        .unwrap();
-    let session = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == endpoint
-    })
-    .session;
-
-    let error = runtime.send(session, &[0; 1025]).unwrap_err();
-    assert_eq!(error.code(), ErrorCode::MessageTooLarge);
-    runtime.stop(Duration::ZERO).unwrap();
-}
-
-#[test]
-fn send_rejects_a_frame_that_exceeds_runtime_or_session_byte_budget() {
-    let runtime = NetworkRuntime::new(RuntimeConfig {
-        worker_threads: 2,
-        max_runtime_queued_bytes: 28,
-        max_session_queued_bytes: 28,
-        ..legacy_test_config()
-    })
-    .unwrap();
-    let listener = runtime
-        .open_endpoint(EndpointConfig::tcp_listener("127.0.0.1:0".parse().unwrap()))
-        .unwrap();
-    let client = runtime
-        .open_endpoint(EndpointConfig::tcp_client(
-            runtime.endpoint_local_addr(listener).unwrap(),
-        ))
-        .unwrap();
-    let client_session = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == client
-    })
-    .session;
-
-    let error = runtime.send(client_session, b"x").unwrap_err();
-    assert_eq!(error.code(), ErrorCode::WouldBlock);
-    assert_eq!(runtime.metrics_snapshot().queued_send_bytes, 0);
 }
 
 #[test]
@@ -390,218 +500,4 @@ fn prometheus_snapshot_exports_resource_and_p999_metrics() {
     assert!(text.contains("rnet_queued_send_bytes 0"));
     assert!(text.contains("quantile=\"0.999\""));
     assert!(text.contains("rnet_admission_rejected_total"));
-}
-
-#[test]
-fn legacy_plaintext_kcp_endpoint_is_explicitly_not_supported() {
-    let runtime = test_runtime();
-    let error = runtime
-        .open_endpoint(EndpointConfig::kcp("127.0.0.1:0".parse().unwrap()))
-        .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::NotSupported);
-    runtime.stop(Duration::ZERO).unwrap();
-}
-
-#[test]
-fn endpoint_open_reports_backpressure_when_its_event_cannot_be_queued() {
-    let runtime = NetworkRuntime::new(RuntimeConfig {
-        event_queue_capacity: 1,
-        ..legacy_test_config()
-    })
-    .unwrap();
-
-    let error = runtime
-        .open_endpoint(EndpointConfig::tcp_listener("127.0.0.1:0".parse().unwrap()))
-        .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::WouldBlock);
-
-    let started = runtime.poll_events(1, Duration::ZERO);
-    assert_eq!(started[0].event_type, EventType::RuntimeStarted);
-    let endpoint = runtime
-        .open_endpoint(EndpointConfig::tcp_listener("127.0.0.1:0".parse().unwrap()))
-        .unwrap();
-    assert_ne!(endpoint, 0);
-    let opened = runtime.poll_events(1, Duration::ZERO);
-    assert_eq!(opened[0].event_type, EventType::EndpointOpened);
-    runtime.stop(Duration::ZERO).unwrap();
-}
-
-#[test]
-fn udp_never_delivers_a_new_peer_message_before_session_open() {
-    let runtime = NetworkRuntime::new(RuntimeConfig {
-        event_queue_capacity: 1,
-        ..legacy_test_config()
-    })
-    .unwrap();
-    runtime.poll_events(1, Duration::ZERO);
-
-    let server = runtime
-        .open_endpoint(EndpointConfig::udp("127.0.0.1:0".parse().unwrap(), None))
-        .unwrap();
-    runtime.poll_events(1, Duration::ZERO);
-    let server_address = runtime.endpoint_local_addr(server).unwrap();
-    let client = runtime
-        .open_endpoint(EndpointConfig::udp(
-            "127.0.0.1:0".parse().unwrap(),
-            Some(server_address),
-        ))
-        .unwrap();
-
-    let opened = runtime.poll_events(1, Duration::from_secs(1));
-    assert_eq!(opened[0].event_type, EventType::EndpointOpened);
-    assert_eq!(opened[0].endpoint, client);
-    let client_session = runtime.poll_events(1, Duration::from_secs(1))[0].session;
-
-    runtime.send(client_session, b"first").unwrap();
-    let server_open = runtime.poll_events(1, Duration::from_secs(1));
-    assert_eq!(server_open[0].event_type, EventType::SessionOpened);
-    assert_eq!(server_open[0].endpoint, server);
-
-    runtime.send(client_session, b"second").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(1);
-    let second = loop {
-        assert!(
-            Instant::now() < deadline,
-            "second UDP message was not delivered"
-        );
-        let events = runtime.poll_events(1, Duration::from_millis(20));
-        if let Some(message) = events.first() {
-            assert_eq!(message.event_type, EventType::Message);
-            assert_eq!(message.session, server_open[0].session);
-            if message.data == b"second" {
-                break message.clone();
-            }
-            assert_eq!(message.data, b"first");
-        }
-    };
-    assert_eq!(second.data, b"second");
-    loop {
-        match runtime.stop(Duration::ZERO) {
-            Ok(()) => break,
-            Err(error) => {
-                assert_eq!(error.code(), ErrorCode::WouldBlock);
-                runtime.poll_events(1, Duration::ZERO);
-            }
-        }
-    }
-}
-
-#[test]
-fn stopped_event_does_not_replace_an_older_lifecycle_event() {
-    let runtime = NetworkRuntime::new(RuntimeConfig {
-        event_queue_capacity: 1,
-        ..legacy_test_config()
-    })
-    .unwrap();
-    runtime.poll_events(1, Duration::ZERO);
-    let endpoint = runtime
-        .open_endpoint(EndpointConfig::tcp_listener("127.0.0.1:0".parse().unwrap()))
-        .unwrap();
-
-    runtime.stop(Duration::ZERO).unwrap();
-    let retained = runtime.poll_events(1, Duration::ZERO);
-    assert_eq!(retained[0].event_type, EventType::EndpointOpened);
-    assert_eq!(runtime.metrics_snapshot().lifecycle_events_rejected, 1);
-    assert_ne!(endpoint, 0);
-    runtime.stop(Duration::ZERO).unwrap();
-    assert!(runtime.poll_events(1, Duration::ZERO).is_empty());
-}
-
-#[test]
-fn ipv6_tcp_and_udp_loopback_are_supported() {
-    let tcp = test_runtime();
-    let listener = tcp
-        .open_endpoint(EndpointConfig::tcp_listener("[::1]:0".parse().unwrap()))
-        .unwrap();
-    let client = tcp
-        .open_endpoint(EndpointConfig::tcp_client(
-            tcp.endpoint_local_addr(listener).unwrap(),
-        ))
-        .unwrap();
-    let (client_open, server_open) = poll_session_pair(&tcp, client, listener);
-    tcp.send(client_open.session, b"ipv6-tcp").unwrap();
-    let message = poll_until(&tcp, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.session == server_open.session
-    });
-    assert_eq!(message.data, b"ipv6-tcp");
-    tcp.stop(Duration::ZERO).unwrap();
-
-    let udp = test_runtime();
-    let server = udp
-        .open_endpoint(EndpointConfig::udp("[::1]:0".parse().unwrap(), None))
-        .unwrap();
-    let client = udp
-        .open_endpoint(EndpointConfig::udp(
-            "[::1]:0".parse().unwrap(),
-            Some(udp.endpoint_local_addr(server).unwrap()),
-        ))
-        .unwrap();
-    let client_session = poll_until(&udp, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == client
-    })
-    .session;
-    udp.send(client_session, b"ipv6-udp").unwrap();
-    let message = poll_until(&udp, Duration::from_secs(2), |event| {
-        event.event_type == EventType::Message && event.endpoint == server
-    });
-    assert_eq!(message.data, b"ipv6-udp");
-    udp.stop(Duration::ZERO).unwrap();
-}
-
-#[test]
-fn tcp_reports_port_conflict_and_remote_half_close() {
-    let runtime = test_runtime();
-    let listener = runtime
-        .open_endpoint(EndpointConfig::tcp_listener("127.0.0.1:0".parse().unwrap()))
-        .unwrap();
-    let address = runtime.endpoint_local_addr(listener).unwrap();
-    let conflict = runtime
-        .open_endpoint(EndpointConfig::tcp_listener(address))
-        .unwrap_err();
-    assert_eq!(conflict.code(), ErrorCode::IoError);
-
-    let stream = StdTcpStream::connect(address).unwrap();
-    let opened = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == listener
-    });
-    stream.shutdown(Shutdown::Write).unwrap();
-    let closed = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionClosed && event.session == opened.session
-    });
-    assert_eq!(closed.endpoint, listener);
-    assert_eq!(closed.status, ErrorCode::IoError);
-    assert_eq!(
-        runtime
-            .metrics_snapshot()
-            .closed_sessions(ErrorCode::IoError),
-        1
-    );
-    runtime.stop(Duration::ZERO).unwrap();
-}
-
-#[test]
-fn compatibility_tcp_listener_enforces_session_admission_limit() {
-    let runtime = NetworkRuntime::new(RuntimeConfig {
-        max_sessions_per_endpoint: 1,
-        ..legacy_test_config()
-    })
-    .unwrap();
-    let listener = runtime
-        .open_endpoint(EndpointConfig::tcp_listener("127.0.0.1:0".parse().unwrap()))
-        .unwrap();
-    let address = runtime.endpoint_local_addr(listener).unwrap();
-    let _first = StdTcpStream::connect(address).unwrap();
-    let _opened = poll_until(&runtime, Duration::from_secs(2), |event| {
-        event.event_type == EventType::SessionOpened && event.endpoint == listener
-    });
-    let _second = StdTcpStream::connect(address).unwrap();
-
-    let unexpected = runtime
-        .poll_events(16, Duration::from_millis(100))
-        .into_iter()
-        .any(|event| event.event_type == EventType::SessionOpened && event.endpoint == listener);
-    assert!(
-        !unexpected,
-        "listener admitted more sessions than configured"
-    );
 }
