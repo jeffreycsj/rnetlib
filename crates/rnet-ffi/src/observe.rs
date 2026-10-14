@@ -281,7 +281,7 @@ pub(crate) fn log_event(entry: &RuntimeEntry, runtime: u64, event: &Event) {
             session: event.session,
             transport,
             error_code: event.status,
-            correlation_id: event.request_id,
+            correlation_id: event.correlation_id,
         });
     }
 }

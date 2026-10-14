@@ -134,14 +134,27 @@ pub enum EventType {
     GameControl = 12,
 }
 
+/// Opaque message events expose correlation, never business type or stream routing.
+///
+/// ```compile_fail
+/// let event = rnet_core::Event::simple(rnet_core::EventType::Message);
+/// let _ = event.msg_type;
+/// ```
+/// ```compile_fail
+/// let event = rnet_core::Event::simple(rnet_core::EventType::Message);
+/// let _ = event.stream_id;
+/// ```
+/// ```compile_fail
+/// let event = rnet_core::Event::simple(rnet_core::EventType::Message);
+/// let _ = event.request_id;
+/// ```
 #[derive(Clone, Eq, PartialEq)]
 pub struct Event {
     pub event_type: EventType,
     pub endpoint: Handle,
     pub session: Handle,
-    pub msg_type: u32,
-    pub stream_id: u32,
-    pub request_id: u64,
+    /// Optional caller correlation carried by message events; zero means unspecified.
+    pub correlation_id: u64,
     pub status: ErrorCode,
     pub data: Vec<u8>,
     /// Whether the transport verified this message record's cryptographic integrity.
@@ -159,9 +172,7 @@ impl std::fmt::Debug for Event {
             .field("event_type", &self.event_type)
             .field("endpoint", &self.endpoint)
             .field("session", &self.session)
-            .field("msg_type", &self.msg_type)
-            .field("stream_id", &self.stream_id)
-            .field("request_id", &self.request_id)
+            .field("correlation_id", &self.correlation_id)
             .field("status", &self.status)
             .field("data_len", &self.data.len())
             .field("integrity_verified", &self.integrity_verified)
@@ -176,9 +187,7 @@ impl Event {
             event_type,
             endpoint: 0,
             session: 0,
-            msg_type: 0,
-            stream_id: 0,
-            request_id: 0,
+            correlation_id: 0,
             status: ErrorCode::Ok,
             data: Vec::new(),
             integrity_verified: false,

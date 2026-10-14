@@ -136,7 +136,7 @@ fn authenticated_transports_exchange_opaque_messages_and_correlation() {
                 e.event_type == EventType::Message && e.session == receiver
             });
             assert_eq!(event.data, payload);
-            assert_eq!(event.request_id, correlation);
+            assert_eq!(event.correlation_id, correlation);
             assert!(event.integrity_verified);
         }
         runtime.send(cs, b"opaque").unwrap();
@@ -144,7 +144,7 @@ fn authenticated_transports_exchange_opaque_messages_and_correlation() {
             e.event_type == EventType::Message && e.session == ss
         });
         assert_eq!(event.data, b"opaque");
-        assert_eq!(event.request_id, 0);
+        assert_eq!(event.correlation_id, 0);
         runtime.stop(Duration::from_millis(100)).unwrap();
         runtime.stop(Duration::ZERO).unwrap();
     }
@@ -208,18 +208,29 @@ fn oversized_message_is_rejected_before_enqueue() {
 
 #[test]
 fn send_rejects_a_frame_that_exceeds_runtime_or_session_byte_budget() {
-    for (global, session) in [(28, 28), (1024, 28)] {
+    let header = rnet_protocol::HEADER_LEN;
+    for (global, session) in [(header, header), (1024, header)] {
         let runtime = runtime_with(RuntimeConfig {
             max_runtime_queued_bytes: global,
             max_session_queued_bytes: session,
             ..RuntimeConfig::default()
         });
-        let (_, _, _, cs) = pair(&runtime, Transport::Tcp, "127.0.0.1:0");
+        let (_, _, ss, cs) = pair(&runtime, Transport::Tcp, "127.0.0.1:0");
         assert_eq!(
             runtime.send(cs, b"x").unwrap_err().code(),
             ErrorCode::WouldBlock
         );
         assert_eq!(runtime.metrics_snapshot().queued_send_bytes, 0);
+        // The header itself fits exactly; adding even one payload byte must exceed the budget.
+        runtime.send(cs, b"").unwrap();
+        let received = poll_until(&runtime, |event| {
+            event.event_type == EventType::Message && event.session == ss
+        });
+        assert!(received.data.is_empty());
+        // Runtime peak includes reservations rolled back after a session-budget rejection.
+        // It is bounded by the global limit, not necessarily the smaller session limit.
+        let peak = runtime.metrics_snapshot().peak_queued_send_bytes;
+        assert!((header as u64..=global as u64).contains(&peak));
     }
 }
 

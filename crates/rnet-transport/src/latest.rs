@@ -213,7 +213,7 @@ impl NetworkRuntime {
                 "runtime is not accepting sends",
             ));
         }
-        let frame = encode_frame(0, 0, 0, 0, payload, self.shared.config.max_body_len)?;
+        let frame = encode_frame(0, 0, payload, self.shared.config.max_body_len)?;
         let (target, session_budget) = {
             let sessions = self.shared.sessions.lock().expect("session table poisoned");
             let route = sessions

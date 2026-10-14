@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 /// Optional message metadata for request/response correlation.
 ///
-/// Stream routing is intentionally owned by the transport. Most callers should use
+/// Transport selection is fixed at endpoint creation. Most callers should use
 /// [`NetworkRuntime::send`]; this type is only needed when a protocol requires a stable
 /// correlation identifier across a request and its response.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -189,8 +189,6 @@ impl NetworkRuntime {
             ));
         }
         let frame = encode_frame(
-            0,
-            0,
             options.correlation_id,
             0,
             payload,
@@ -335,3 +333,7 @@ fn map_datagram_send_error(
         ),
     }
 }
+
+#[cfg(test)]
+#[path = "session_frame_tests.rs"]
+mod tests;

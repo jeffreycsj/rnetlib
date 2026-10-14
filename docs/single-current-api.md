@@ -1,6 +1,6 @@
 # 单一现行 SDK / wire 迁移
 
-本轮是破坏性迁移，**不支持旧 SDK**。业务协议的版本范围协商保留；它不等于维护多套网络库 ABI 或 wire。整体迁移尚未完成，请勿据此发布生产包。
+本轮是破坏性迁移，**不支持旧 SDK**。业务协议的版本范围协商保留；它不等于维护多套网络库 ABI 或 wire。计划内兼容入口、旧执行路径和历史帧字段已清理；最终发布验收尚未完成，请勿据此发布生产包。
 
 ## 已落地的接口
 
@@ -9,7 +9,7 @@
 - 一套结构化 `rnet_logger_t`、完整 `rnet_metrics_t`、含 P99.9 的 `rnet_latency_metric_t`。延迟查询最后一个参数为 `drain_window`：0 查询累计，1 提取并轮转窗口；容量查询不消费窗口。
 - `rnet_server_listen` / `rnet_client_connect` 的配置以 transport 决定 TCP/UDP/KCP。
 - `rnet_poll_events` 和 `rnet_game_poll_events` 均返回状态码，通过 `out_count` 返回数量；零事件不再掩盖无效句柄或输出错误。
-- 单一游戏事件布局直接提供 `correlation_id`，没有嵌套旧事件前缀。C ABI 底层事件也只保留 payload 和 correlation 元数据，不公开业务类型或流编号；Rust 原始事件字段尚待 wire 阶段清理。
+- 单一游戏事件布局直接提供 `correlation_id`，没有嵌套旧事件前缀。C ABI 和 Rust 底层消息事件均只提供 payload 和 correlation 元数据，不公开业务类型或流编号。Rust 原始 `request_id` 同步改为 `correlation_id`，不留别名。
 - 底层发送为 `rnet_session_send(runtime, session, payload)`；带 correlation 使用 `rnet_session_send_ex(..., options)`。C++11 / Go 同步移除发送消息类型参数及 Legacy 发送方法。
 - Rust 底层同样只使用 `send(session, payload)` / `send_with_options(session, payload, options)`；删除 typed send、`send_legacy`、`send_payload` / `send_payload_with_options` 别名。传输类型在建连时固定，业务类型放入 payload，成功仅表示本地队列接受，不保证对端收到。
 - Rust `RuntimeConfig::default()` 与 `production()` 使用同一安全策略：不允许旧无认证端点、不允许本地服务器选择业务明文，自动轮换密钥开启。删除 `SecurityPolicy::compatibility()` 与 `GameRuntimeConfig::compatibility()`；业务明文通过明确的服务器策略开启，客户端仍自动跟随已认证服务器。
@@ -17,6 +17,7 @@
 
 - 旧无认证 TCP/UDP 执行模块、Rust 公开 `EndpointConfig` / `open_endpoint`、C `rnet_endpoint_open` 和配置/模式类型、C++/Go 包装及 `allow_legacy_unauthenticated_endpoints` 开关均已删除。内部角色不再可空；业务明文仍需服务器明确允许，且始终经过握手和授权。
 - 游戏配置已统一为 `GameProtocol` 的 min/max 闭区间；精确版本使用相等边界。Rust/C/C++11/Go/C# 均只保留普通 listen/connect/resume 入口及一套配置，不再导出 range 别名。选定版本查询、授权元数据和恢复时固定原选定版本的约束保留。
+- 逻辑业务帧由 28 字节缩为 20 字节，删除 msg_type/stream_id，只接受帧判别值 2。原值 1 直接拒绝，无兼容解码。外层安全记录与游戏控制格式不变，业务 min/max 不参与网络帧格式协商。
 
 ## 接入要求
 
@@ -26,10 +27,12 @@
 
 头文件、native 库、C++/Go/C# SDK 必须一起重新编译部署。不要复用旧发布目录里的二进制；本阶段不生成最终发布包。示例见 [getting-started.md](getting-started.md)、[game-networking.md](game-networking.md) 和 [C# 指南](csharp.md)。
 
+帧字段清理没有再次改变 C ABI 布局，ABI 仍为 4，但两端 native 库仍必须同时升级。ABI 只校验本地布局，不证明远端 wire 兼容；旧帧可能在握手成功后的首个业务包处被拒绝，而不是在握手前拒绝。
+
 ## 尚未完成
 
-1. 清理底层传输历史帧字段及 Rust 原始事件字段。游戏建连/恢复 wire 和各语言 exact/range 公开配置与入口已统一，精确业务版本表示为 min=max。
-2. 最终 SDK/动态库/发布包全套验收、全范围对抗性复查。长稳压测按约定最后执行；跨实例恢复不在范围内。
+1. 干净发布提交上的 SDK/动态库/发布包全套验收、全范围对抗性复查及安全专项，不能把本地修改树的通过记录当成发布资格。
+2. 目标环境弱网矩阵和长稳压测按约定最后执行；跨实例恢复不在范围内。
 
 ## 阶段对抗性审查
 
@@ -38,9 +41,9 @@
 | 高，已修复 | FFI 配置读取 | 原先完整解引用后才检查大小；现先读公共头并严格验证布局，以 Linux 保护页测试短配置边界。 |
 | 中，已修复 | 延迟查询 | 合并时较新的传输查询会漏掉日志回调样本；累计与窗口各自记录，窗口轮转不清空累计，增加回归。 |
 | 中，已修复 | C++ SDK | ABI 检查仅放在初始创建/密钥入口，不在 noexcept 移动构造中调用可能抛异常的检查。 |
-| 未完成的需求 | 历史帧与发布资格 | 旧端点、旧游戏 wire 和公开 exact/range 双入口已删除；底层帧和 Rust 原始事件仍有历史字段，不能宣称全量去兼容与发布验收已完成。 |
+| 未完成的需求 | 发布资格 | 计划内旧接口、执行路径、历史帧字段已删除；最终干净发布树、多平台、安全专项和目标环境验收未完成。 |
 
-测试盲区：保护页场景目前只在 Linux 执行；Windows/移动平台、ASan fuzz、独立安全审计和目标环境长稳尚未验收。整体评价：接口布局与 SDK 源码 API 已统一，历史帧字段清理与最终发布资格未完成。历史 ABI/多布局兼容承诺不再适用于本分支。
+测试盲区：保护页场景目前只在 Linux 执行；Windows/移动平台、完整 ASan fuzz 验收、独立安全审计和目标环境长稳尚未完成。整体评价：计划内代码收敛已实施，最终发布资格未完成。历史 ABI/多布局兼容承诺不再适用于本分支。
 
 以下验证记录按阶段保留历史事实；当前剩余项以上方“尚未完成”和最新阶段记录为准。
 
@@ -190,3 +193,26 @@ API 审查按本地 SDK 的命名、错误和破坏性兼容契约执行，不�
 验证基于 `75618f6` 加本地修改树，并非干净发布提交：串行 workspace 全量测试、严格 workspace/all-targets Clippy、格式/结构/diff 检查通过；C++11 四个示例、Go 强制 native 重建、C# Linux x86_64/.NET 8 三传输联调和 release 导出一致性通过。另行通过 `go test -a -race -p 1 -count=1 ./go/rnet`；`cargo check --offline --locked --manifest-path fuzz/Cargo.toml --bin game_wire --bin ffi_config` 仅证明 fuzz 入口可构建，没有执行 ASan campaign。最终门禁补强及测试改名后重新运行相关 Rust 回归和严格检查。
 
 构建测试串行并受至少 15 GiB 可用内存保护。本轮没有重跑 ASan fuzz、Miri、Loom 或第三方审计，没有生成最终发布包，也没有执行目标弱网长稳；数秒 soak smoke 仅算功能回归。下一步先清理历史帧字段，完成后在干净提交上执行全套资格验证，最后做目标环境长稳。
+
+## 后续阶段：清理历史逻辑帧与原始事件字段（2026-10-14）
+
+删除底层逻辑帧和 Rust 原始事件中的 msg_type/stream_id；request_id 统一命名为 correlation_id，不保留转接字段。业务帧头从 28 字节缩为 20 字节，每帧减少 8 字节固定开销；这不是吞吐提升的压测结论。帧判别由 1 更新为 2，仅接受 2。外层认证记录、Noise 控制、游戏 join/envelope 及 C ABI 布局未改变；两端 native 必须同步重建。
+
+TDD：先通过协议/传输/游戏基线；新增固定字节向量、旧帧拒绝和旧事件字段编译拒绝测试，在旧实现上按预期失败，再实现并转绿。原拆包、粘包、长度、标志、Protobuf 及 correlation 回归均保留。旧游戏事件元数据用例不再构造已删除字段，改为覆盖现有非成功传输状态的拒绝分支；三个旧字段分别有编译拒绝门禁。
+
+### API 与对抗性审查
+
+| 严重度 | 发现 | 处理 |
+| --- | --- | --- |
+| 中，覆盖修复 | 固定 correlation 使用全 FF 时无法发现端序错误 | 固定向量改用 01..08 非对称字节，并断言独立数值；空值和 u64::MAX 另由帧及三传输回归覆盖。 |
+| 中，覆盖修复 | 旧预算测试写死 28 字节，缩头后不再测试超限 | 以当前头长为预算，验证空包恰好接受、加一字节返回 WouldBlock、拒绝后预算回收。全局峰值包含会话拒绝前的瞬时预留，不错误地要求它等于会话上限。 |
+| 契约核对 | 最初新增 socket 测试误以为所有传输收到旧帧都应关闭 | 阅读现行错误路径后保持原策略：TCP 关闭单会话并携带版本错因；UDP/KCP 增加协议错误计数、无 Message 上抛且原会话仍可收发。六种 transport/security 组合均验证监听可继续建连。 |
+| 部署风险 | 本地 ABI 4 相同不表示远端帧布局兼容 | 文档明确双方 native 同步升级，旧帧可在握手后的数据阶段才拒绝；不声称加入阶段检查能覆盖所有历史 native 二进制。 |
+
+本地 SDK API 审查按命名一致性、破坏性兼容和错误契约执行；这是已授权的去兼容迁移，不引入 REST 资源抽象。未发现本阶段新增的未解决高严重度缺陷。计划内源码迁移已实施；最终发布资格、目标容量和跨平台验收仍未完成。
+
+本阶段验证基于 `376ae21` 加本地修改树：串行 workspace 全量测试（新增紧凑帧 4 项、旧原始字段编译拒绝 3 项、六种真实传输/安全组合）、严格 workspace/all-targets Clippy、格式/结构/diff 检查均通过。`make -j1 cpp-test go-test csharp-test abi-check`、强制 native 重建后的 Go race、Loom 两个 send-admission 模型均通过。固定 `nightly-2026-09-21` 下的 `cargo miri test -p rnet-core -p rnet-protocol -- --test-threads=1` 通过，包括新固定向量测试。所有构建/测试串行并持续保留至少 15 GiB 可用内存。
+
+ASan 专项：相同 nightly 下运行 `cargo fuzz run -s address --target-dir target/fuzz frame_parser -- -max_total_time=20 -max_len=1048576 -rss_limit_mb=2048`，实际 21 秒、675,553 次输入，退出码 0，无崩溃或 AddressSanitizer 报告；fuzzer 报告 RSS 530 MiB。入口同时覆盖 datagram 解码、7 字节分片流解析及成功帧重编码一致性。本次仅重跑 frame_parser，未声称其它五个 fuzz target 已完成本轮 campaign；短 smoke 不是完整安全认证。
+
+没有生成最终发布包或执行目标环境长稳，本记录不是干净提交的完整发布资格，也不是第三方密码协议审计。Linux x86_64/.NET 8 联调不能外推至 Windows、macOS、Unity/IL2CPP、移动平台或 32 位进程。

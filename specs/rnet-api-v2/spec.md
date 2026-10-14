@@ -1,5 +1,7 @@
 # RNet API v2 与延迟可观测性规格说明
 
+> 历史规格：下面的旧 ABI 兼容、msg_type 发送参数及帧内 stream_id/request_id 约定已被 [单一现行接口规格](../single-current-api/spec.md) 取代。不作为当前 SDK 接入契约。
+
 ## 需求概述
 
 在保留 ABI v1 二进制兼容入口的前提下，提供面向普通调用方的精简消息 API，移除基础发送路径中没有实际语义的 `stream_id` 和强制 `request_id`；补齐可诊断的 poll 错误、单 session 关闭、延迟分位统计与周期结构化日志，并让 C++11/Go 包装提供完整、类型安全且默认参数友好的能力。

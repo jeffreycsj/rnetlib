@@ -27,10 +27,10 @@ impl GameRuntime {
     }
 
     fn decode_business_message(&self, event: &Event) -> Result<GameMessage> {
-        if event.msg_type != 0 || event.stream_id != 0 || event.status != ErrorCode::Ok {
+        if event.status != ErrorCode::Ok {
             return Err(RnetError::new(
                 ErrorCode::ProtocolError,
-                "game message contains legacy routing metadata",
+                "game message carries an unsuccessful transport status",
             ));
         }
         match decode(&event.data, self.maximum_envelope_len)? {
@@ -46,7 +46,7 @@ impl GameRuntime {
                     session: event.session,
                     sequence,
                     tick,
-                    correlation_id: event.request_id,
+                    correlation_id: event.correlation_id,
                     payload,
                 })
             }

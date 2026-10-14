@@ -127,14 +127,13 @@ fn opaque_send_preserves_empty_binary_and_full_width_correlation_on_all_transpor
                 .unwrap();
             let received = assert_message(&runtime, payload, "opaque request");
             assert_eq!(received.session, server);
-            assert_eq!(received.request_id, correlation_id);
-            assert_eq!((received.msg_type, received.stream_id), (0, 0));
+            assert_eq!(received.correlation_id, correlation_id);
             assert!(received.integrity_verified);
 
             runtime.send(server, payload).unwrap();
             let reply = assert_message(&runtime, payload, "opaque response");
             assert_eq!(reply.session, client);
-            assert_eq!(reply.request_id, 0);
+            assert_eq!(reply.correlation_id, 0);
             assert!(reply.integrity_verified);
         }
         runtime.close_session(client, ErrorCode::Cancelled).unwrap();

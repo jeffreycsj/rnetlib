@@ -48,7 +48,7 @@ pub unsafe extern "C" fn rnet_poll_events(
                 event_type: event.event_type as u32,
                 endpoint: event.endpoint,
                 session: event.session,
-                correlation_id: event.request_id,
+                correlation_id: event.correlation_id,
                 data: view.map_or(std::ptr::null(), |buffer| buffer.ptr),
                 data_len: view.map_or(0, |buffer| buffer.len),
                 buffer_token: view.map_or(0, |buffer| buffer.token),

@@ -7,18 +7,18 @@ use prost::Message;
 use rnet_core::{ErrorCode, Result, RnetError};
 
 pub const MAGIC: u32 = 0x524e_4554;
-pub const VERSION: u16 = 1;
-pub const HEADER_LEN: usize = 28;
+/// Only this layout is accepted; older SDK frames are never reinterpreted or downgraded.
+pub const VERSION: u16 = 2;
+pub const HEADER_LEN: usize = 20;
 pub const SUPPORTED_FLAGS: u16 = 0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameHeader {
     pub version: u16,
     pub flags: u16,
-    pub msg_type: u32,
-    pub stream_id: u32,
     pub body_len: u32,
-    pub request_id: u64,
+    /// Opaque caller correlation, with zero meaning unspecified; not a routing or dedup key.
+    pub correlation_id: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,9 +76,7 @@ impl FrameCodec {
 }
 
 pub fn encode_frame(
-    msg_type: u32,
-    stream_id: u32,
-    request_id: u64,
+    correlation_id: u64,
     flags: u16,
     body: &[u8],
     max_body_len: usize,
@@ -101,10 +99,8 @@ pub fn encode_frame(
     encoded.put_u32(MAGIC);
     encoded.put_u16(VERSION);
     encoded.put_u16(flags);
-    encoded.put_u32(msg_type);
-    encoded.put_u32(stream_id);
     encoded.put_u32(body.len() as u32);
-    encoded.put_u64(request_id);
+    encoded.put_u64(correlation_id);
     encoded.extend_from_slice(body);
     Ok(encoded.freeze())
 }
@@ -147,7 +143,7 @@ fn parse_header(input: &[u8], max_body_len: usize) -> Result<FrameHeader> {
     }
     let flags = u16::from_be_bytes(input[6..8].try_into().expect("fixed header slice"));
     validate_flags(flags)?;
-    let body_len = u32::from_be_bytes(input[16..20].try_into().expect("fixed header slice"));
+    let body_len = u32::from_be_bytes(input[8..12].try_into().expect("fixed header slice"));
     if body_len as usize > max_body_len {
         return Err(RnetError::new(
             ErrorCode::MessageTooLarge,
@@ -157,10 +153,8 @@ fn parse_header(input: &[u8], max_body_len: usize) -> Result<FrameHeader> {
     Ok(FrameHeader {
         version,
         flags,
-        msg_type: u32::from_be_bytes(input[8..12].try_into().expect("fixed header slice")),
-        stream_id: u32::from_be_bytes(input[12..16].try_into().expect("fixed header slice")),
         body_len,
-        request_id: u64::from_be_bytes(input[20..28].try_into().expect("fixed header slice")),
+        correlation_id: u64::from_be_bytes(input[12..20].try_into().expect("fixed header slice")),
     })
 }
 

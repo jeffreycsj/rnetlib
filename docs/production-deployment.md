@@ -2,7 +2,7 @@
 
 RNet supplies bounded runtime behavior and production-test tooling; capacity is accepted only after it is measured on the target kernel, hardware, network, and application event loop.
 
-Current status: candidate, not certified. Legacy endpoint execution paths have been removed, but dual game wires still need unification; do not ship this migration tree as a production release. Historical green runs do not qualify a later commit. Complete the [single-current migration](single-current-api.md) before final packaging and target soak.
+Current status: candidate, not certified. Planned legacy endpoints, duplicate game APIs/wires and historical frame fields have been removed; final clean-release qualification and packaging are still required. Historical green runs do not qualify a later commit. Follow the [single-current migration record](single-current-api.md) before target soak. Both peers must deploy the current native library: local ABI equality alone does not guarantee remote logical-frame compatibility.
 
 ## Required release checks
 

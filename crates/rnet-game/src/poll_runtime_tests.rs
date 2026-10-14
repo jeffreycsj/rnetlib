@@ -92,7 +92,7 @@ fn malformed_business_data_does_not_consume_early_data_budget() {
                         .unwrap()
                         .to_vec()
                 }
-                2 => event.msg_type = 1,
+                2 => event.status = ErrorCode::ProtocolError,
                 _ => {
                     event.data =
                         crate::envelope::encode_udp_application(b"okay", None, None, 0, 1024)

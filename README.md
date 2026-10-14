@@ -16,14 +16,14 @@ See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, a
 - Stateful encrypted records for ordered TCP and explicit-nonce stateless records with a 64-packet replay window for UDP/KCP.
 - HMAC cookie challenges, bound to the source address and a 60-second time bucket, before UDP/KCP Noise/session allocation.
 - KCP 0.6.0 with one timer loop per endpoint rather than one thread per session, configured MTU, deadline-aware updates, reused hot-path buffers, a random conversation negotiated during cookie preflight, and full modulo-2^32 serial arithmetic. Its core adapter is tested against loss, reordering, stale-conversation isolation, and the signed boundary.
-- A 28-byte logical frame, incremental TCP framing, Protobuf helpers, metrics, bounded asynchronous logging, static/dynamic libraries, and final-link examples.
+- A 20-byte logical frame, incremental TCP framing, Protobuf helpers, metrics, bounded asynchronous logging, static/dynamic libraries, and final-link examples.
 - Fixed-memory latency histograms for connect, Noise handshake, authorization wait, send/event queues, KCP RTT/update delay, and logger callbacks. Window snapshots and periodic summaries include P50/P90/P95/P99/P99.9/max in microseconds.
 - Configurable per-endpoint admission, handshake deadlines, datagram idle reclamation, and session-isolated event backpressure for high-connection deployments.
 - C++11-only public wrapper: no `string_view`, `exchange`, or later language dependency. Binary payloads support `const void * + size_t` and `std::string`.
 
 New deployments should use the transport-neutral `listen`/`connect` APIs. TCP, UDP, or KCP is a configuration value fixed when the endpoint is created; it never appears in the send API. The server chooses the initial application-data security mode and may switch or rekey a live session. Clients follow those authenticated changes automatically.
 
-This branch is migrating to a single current SDK/wire implementation. Old SDKs are **not compatible** with the current API; rebuild the SDK and native library together. Separate legacy secure TCP/UDP/KCP implementations and their SDK entry points have been removed. Unauthenticated endpoint implementations, their opt-in switch and their SDK APIs have also been removed; only authenticated endpoints remain. Game joins use one wire and one public configuration/API across Rust, C, C++11, Go and C#. Historical transport-frame fields and final release qualification still need cleanup: see [migration status](docs/single-current-api.md).
+This branch uses a single current SDK/wire implementation. Old SDKs are **not compatible** with the current API; rebuild the SDK and native library together on both peers. Separate legacy secure TCP/UDP/KCP implementations and their SDK entry points have been removed. Unauthenticated endpoints and their opt-in switch are also removed; only authenticated endpoints remain. Game joins use one wire and one public configuration/API across Rust, C, C++11, Go and C#. Historical frame routing fields are removed; final release qualification remains outstanding: see [migration status](docs/single-current-api.md).
 
 ## Game API quick start
 
@@ -135,14 +135,16 @@ All pointer/length inputs are borrowed only for the call. Key material is copied
 
 ## Wire and transport behavior
 
-The logical business frame remains:
+The current logical business frame uses a 20-byte header, all integers in network byte order:
 
 ```text
-magic:u32 | version:u16 | flags:u16 | msg_type:u32 | stream_id:u32
-body_len:u32 | request_id:u64 | body:[u8; body_len]
+magic:u32 | version:u16 | flags:u16 | body_len:u32 | correlation_id:u64
+body:[u8; body_len]
 ```
 
-For secure sessions the complete logical frame is encrypted, so message type, correlation ID, and body are not visible on the wire. The normal API writes zero to the compatibility `stream_id` and `request_id` fields; advanced correlation reuses `request_id`. TCP adds a bounded record length. UDP carries one encrypted record per datagram. KCP fragments/retransmits the encrypted record and preserves message boundaries.
+The sole accepted logical-frame version is 2, with flags restricted to zero; the previous 28-byte/version-1 format is rejected, not translated. This discriminator is separate from the game join marker and application version range; there is only one implementation of each layer. `send` uses correlation zero; `send_with_options` carries caller correlation without implying deduplication. Rust raw events also use `correlation_id`; no `msg_type`, `stream_id`, or `request_id` compatibility fields remain.
+
+In encrypted mode the complete logical frame is protected, including correlation and body. Server-selected plaintext business data has neither confidentiality nor integrity; authenticated control messages still use Noise. TCP adds a bounded record length. UDP carries one record per datagram. KCP fragments/retransmits the record and preserves message boundaries. The C ABI layout is unchanged by this frame cleanup, but both peers' native libraries must be updated together; passing the local ABI check does not establish remote wire compatibility.
 
 Raw UDP is intentionally unreliable and unordered. KCP is reliable and ordered but does not supply security itself; RNet's Noise layer is above KCP. Event and send queues, handshake state, KCP buffers, frame sizes, and replay windows are bounded.
 

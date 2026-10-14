@@ -134,7 +134,7 @@ fn secure_tcp_requires_server_auth_before_opening_and_exchanging_frames() {
         event.event_type == EventType::Message && event.session == server_session
     });
     assert_eq!(message.data, b"encrypted-frame");
-    assert_eq!(message.request_id, 99);
+    assert_eq!(message.correlation_id, 99);
     assert!(message.integrity_verified);
     runtime
         .send_game_control(client_session, b"reserved")
@@ -195,7 +195,7 @@ fn secure_udp_establishes_a_logical_session_before_delivering_datagrams() {
         event.event_type == EventType::Message && event.session == server_session
     });
     assert_eq!(message.data, b"secure-datagram");
-    assert_eq!(message.request_id, 1);
+    assert_eq!(message.correlation_id, 1);
     assert!(message.integrity_verified);
     runtime.stop(Duration::ZERO).expect("stop");
 }
@@ -230,7 +230,7 @@ fn secure_kcp_establishes_and_exchanges_a_reliable_message() {
         event.event_type == EventType::Message && event.session == server_session
     });
     assert_eq!(message.data, payload);
-    assert_eq!(message.request_id, 2);
+    assert_eq!(message.correlation_id, 2);
     assert!(message.integrity_verified);
     let latencies = runtime.latency_snapshot();
     for kind in [LatencyKind::CryptoHandshake, LatencyKind::AuthWait] {

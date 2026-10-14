@@ -1,7 +1,6 @@
 //! Private game-message envelope carried inside the existing RNet frame body.
 //!
-//! The outer frame keeps its compatibility `msg_type` and `stream_id` fields at zero. Application
-//! bytes begin after this header and remain opaque, so business routing stays in the caller's
+//! Application bytes begin after this header and remain opaque. Business routing stays in the caller's
 //! protobuf or other schema while network controls cannot be confused with application data.
 
 use bytes::{BufMut, Bytes, BytesMut};

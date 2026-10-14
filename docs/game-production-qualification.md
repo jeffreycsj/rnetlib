@@ -4,16 +4,16 @@ This record separates repository qualification from target-environment certifica
 
 ## Current release status (2026-10-14)
 
-**Candidate, not certified; migration incomplete.** The historical results below were recorded
+**Candidate, not certified; code migration implemented, release qualification incomplete.** The historical results below were recorded
 on a dirty 2026-09-23 development tree. They do not qualify the current HEAD or subsequent local
 changes. In particular, the later current-ABI, opaque-send, secure-default and plaintext-error
 changes do not inherit those ASan, Miri, Loom, Go race or packaged-binary results. See the
 [incremental migration record](single-current-api.md) for the narrower checks actually rerun.
 
 Final qualification must reference one clean release commit and its exact native/SDK package
-hashes. Old-endpoint removal, single-wire game negotiation and public exact/range API consolidation
-are implemented; finish historical frame-field cleanup and its failure-path regressions,
-then rerun repository/ABI/multilanguage, Go race, ASan fuzz, Miri and Loom gates; only then perform
+hashes. Old-endpoint removal, single-wire game negotiation, public exact/range API consolidation
+and historical frame-field cleanup are implemented. Rerun repository/ABI/multilanguage,
+Go race, ASan fuzz, Miri and Loom gates on the final release tree; only then perform
 target weak-network tests and 24–72 hour soak. None of these local checks constitutes an
 independent audit of snow, ring or their Noise/KCP integration.
 
