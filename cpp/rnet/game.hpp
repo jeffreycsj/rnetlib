@@ -95,7 +95,8 @@ class GameRuntime {
     config.bind_port = options.port;
     config.local_private_key = {options.keypair.private_key(), 32};
     config.protocol_id = options.protocol.id;
-    config.protocol_version = options.protocol.version;
+    config.min_version = options.protocol.min_version;
+    config.max_version = options.protocol.max_version;
     rnet_endpoint_t endpoint = 0;
     check(rnet_game_server_listen(handle_, &config, &endpoint));
     return endpoint;
@@ -108,37 +109,13 @@ class GameRuntime {
     return endpoint;
   }
 
-  rnet_endpoint_t listen_range(const GameRangeServerOptions &options) const {
-    rnet_game_range_server_config_t config{};
-    config.struct_size = sizeof(config);
-    config.abi_version = RNET_ABI_VERSION;
-    config.transport = static_cast<uint32_t>(options.transport);
-    config.initial_encryption = options.initial_encryption ? 1U : 0U;
-    config.bind_host = bytes(options.host);
-    config.bind_port = options.port;
-    config.local_private_key = {options.keypair.private_key(), 32};
-    config.protocol_id = options.protocol.id;
-    config.min_version = options.protocol.min_version;
-    config.max_version = options.protocol.max_version;
+  rnet_endpoint_t connect_resume(const GameClientOptions &options,
+                                 rnet_session_t old_session,
+                                 const std::vector<uint8_t> &ticket) const {
+    const rnet_game_client_config_t config = client_config(options);
     rnet_endpoint_t endpoint = 0;
-    check(rnet_game_server_listen_range(handle_, &config, &endpoint));
-    return endpoint;
-  }
-
-  rnet_endpoint_t connect_range(const GameRangeClientOptions &options) const {
-    const rnet_game_range_client_config_t config = range_client_config(options);
-    rnet_endpoint_t endpoint = 0;
-    check(rnet_game_client_connect_range(handle_, &config, &endpoint));
-    return endpoint;
-  }
-
-  rnet_endpoint_t connect_range_resume(const GameRangeClientOptions &options,
-                                       rnet_session_t old_session,
-                                       const std::vector<uint8_t> &ticket) const {
-    const rnet_game_range_client_config_t config = range_client_config(options);
-    rnet_endpoint_t endpoint = 0;
-    check(rnet_game_client_resume_connect_range(handle_, &config, old_session,
-                                                bytes(ticket), &endpoint));
+    check(rnet_game_client_resume_connect(handle_, &config, old_session,
+                                         bytes(ticket), &endpoint));
     return endpoint;
   }
 
@@ -168,16 +145,6 @@ class GameRuntime {
     value.admission_message_too_large = raw.admission_message_too_large;
     value.admission_other_failures = raw.admission_other_failures;
     return value;
-  }
-
-  rnet_endpoint_t connect_resume(const GameClientOptions &options,
-                                 rnet_session_t old_session,
-                                 const std::vector<uint8_t> &ticket) const {
-    const rnet_game_client_config_t config = client_config(options);
-    rnet_endpoint_t endpoint = 0;
-    check(rnet_game_client_resume_connect(handle_, &config, old_session,
-                                          bytes(ticket), &endpoint));
-    return endpoint;
   }
 
   void issue_resume_ticket(rnet_session_t session,
@@ -448,23 +415,6 @@ private:
     check(rnet_game_send_ex(handle_, session, payload, &raw));
   }
 
-  static rnet_game_range_client_config_t range_client_config(
-      const GameRangeClientOptions &options) {
-    rnet_game_range_client_config_t config{};
-    config.struct_size = sizeof(config);
-    config.abi_version = RNET_ABI_VERSION;
-    config.transport = static_cast<uint32_t>(options.transport);
-    config.remote_host = bytes(options.host);
-    config.remote_port = options.port;
-    config.join_ticket = bytes(options.join_ticket);
-    config.protocol_id = options.protocol.id;
-    config.min_version = options.protocol.min_version;
-    config.max_version = options.protocol.max_version;
-    config.build_id = options.protocol.build_id;
-    config.capabilities = options.protocol.capabilities;
-    return config;
-  }
-
   static rnet_game_client_config_t client_config(
       const GameClientOptions &options) {
     rnet_game_client_config_t config{};
@@ -475,7 +425,8 @@ private:
     config.remote_port = options.port;
     config.join_ticket = bytes(options.join_ticket);
     config.protocol_id = options.protocol.id;
-    config.protocol_version = options.protocol.version;
+    config.min_version = options.protocol.min_version;
+    config.max_version = options.protocol.max_version;
     config.build_id = options.protocol.build_id;
     config.capabilities = options.protocol.capabilities;
     return config;

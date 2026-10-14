@@ -1,13 +1,14 @@
-use crate::config::{GameProtocol, GameRuntimeConfig};
+use crate::config::GameRuntimeConfig;
 use crate::event::GameEvent;
+use crate::resume::SelectedProtocol;
 use crate::resume::{ResumeRegistry, ResumeScope};
 use crate::runtime::GameRuntime;
 use rnet_core::ErrorCode;
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
-fn protocol() -> GameProtocol {
-    GameProtocol::new(37, 2)
+fn protocol() -> SelectedProtocol {
+    SelectedProtocol::new(37, 2)
 }
 
 fn scope(session: u64, peer_key: [u8; 32]) -> ResumeScope {
@@ -32,7 +33,7 @@ fn ticket_is_bound_to_peer_and_protocol_and_can_be_consumed_once() {
         .consume(&ticket, 10, [8; 32], protocol(), now)
         .is_err());
     assert!(tickets
-        .consume(&ticket, 10, peer, GameProtocol::new(37, 3), now)
+        .consume(&ticket, 10, peer, SelectedProtocol::new(37, 3), now)
         .is_err());
     let claim = tickets.consume(&ticket, 10, peer, protocol(), now).unwrap();
     assert_eq!(claim.old_session, 111);

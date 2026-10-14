@@ -1,22 +1,22 @@
-//! Additive wire-v4 game ABI. Old exact-version structs and symbols are unchanged.
+//! Canonical game endpoint and negotiation telemetry ABI.
 
 use crate::abi::RnetSlice;
 use crate::game_abi::RnetGameTransportLatest;
-use crate::game_config_abi::{RnetGameRangeClientConfig, RnetGameRangeServerConfig};
+use crate::game_config_abi::{RnetGameClientConfig, RnetGameServerConfig};
 use crate::game_range_abi::RnetGameRangeBuffer;
 use crate::game_registry;
 use crate::registry::{copy_key, ffi_status, invalid_argument, parse_address, with_borrowed_slice};
 use rnet_core::{ErrorCode, Result, RnetError, Transport};
-use rnet_game::{GameProtocolRange, GameRangeHostClientConfig, GameRangeServerConfig};
+use rnet_game::{GameHostClientConfig, GameProtocol, GameServerConfig};
 use rnet_security::Keypair;
 use zeroize::Zeroizing;
 
 #[no_mangle]
 /// # Safety
 /// `config`, its slices, and `out` must remain valid for this call.
-pub unsafe extern "C" fn rnet_game_server_listen_range(
+pub unsafe extern "C" fn rnet_game_server_listen(
     runtime: u64,
-    config: *const RnetGameRangeServerConfig,
+    config: *const RnetGameServerConfig,
     out: *mut u64,
 ) -> i32 {
     ffi_status(|| {
@@ -30,20 +30,19 @@ pub unsafe extern "C" fn rnet_game_server_listen_range(
         let private = Zeroizing::new(unsafe { copy_key(config.local_private_key) }?);
         let key = Keypair::from_private(private.as_slice())
             .map_err(|error| RnetError::new(ErrorCode::CryptoError, error.to_string()))?;
-        let endpoint =
-            game_registry::lease(runtime)?
-                .runtime
-                .listen_range(GameRangeServerConfig {
-                    transport: Transport::try_from(config.transport)?,
-                    bind_addr: unsafe { parse_address(config.bind_host, config.bind_port) }?,
-                    local_key: key,
-                    initial_encryption: config.initial_encryption == 1,
-                    protocol: GameProtocolRange::new(
-                        config.protocol_id,
-                        config.min_version,
-                        config.max_version,
-                    ),
-                })?;
+        let endpoint = game_registry::lease(runtime)?
+            .runtime
+            .listen(GameServerConfig {
+                transport: Transport::try_from(config.transport)?,
+                bind_addr: unsafe { parse_address(config.bind_host, config.bind_port) }?,
+                local_key: key,
+                initial_encryption: config.initial_encryption == 1,
+                protocol: GameProtocol::new(
+                    config.protocol_id,
+                    config.min_version,
+                    config.max_version,
+                ),
+            })?;
         unsafe { out.write(endpoint) };
         Ok(())
     })
@@ -52,19 +51,19 @@ pub unsafe extern "C" fn rnet_game_server_listen_range(
 #[no_mangle]
 /// # Safety
 /// `config`, its slices, and `out` must remain valid for this call.
-pub unsafe extern "C" fn rnet_game_client_connect_range(
+pub unsafe extern "C" fn rnet_game_client_connect(
     runtime: u64,
-    config: *const RnetGameRangeClientConfig,
+    config: *const RnetGameClientConfig,
     out: *mut u64,
 ) -> i32 {
     ffi_status(|| {
         if config.is_null() || out.is_null() {
             return invalid_argument("game range client config and output must be non-null");
         }
-        let config = unsafe { parse_range_client(config) }?;
+        let config = unsafe { parse_game_client(config) }?;
         let endpoint = game_registry::lease(runtime)?
             .runtime
-            .connect_host_range(config)?;
+            .connect_host(config)?;
         unsafe { out.write(endpoint) };
         Ok(())
     })
@@ -75,9 +74,9 @@ pub unsafe extern "C" fn rnet_game_client_connect_range(
 ///
 /// # Safety
 /// `config`, all slices, and `out` must remain valid for this call.
-pub unsafe extern "C" fn rnet_game_client_resume_connect_range(
+pub unsafe extern "C" fn rnet_game_client_resume_connect(
     runtime: u64,
-    config: *const RnetGameRangeClientConfig,
+    config: *const RnetGameClientConfig,
     old_session: u64,
     resume_ticket: RnetSlice,
     out: *mut u64,
@@ -86,12 +85,14 @@ pub unsafe extern "C" fn rnet_game_client_resume_connect_range(
         if config.is_null() || out.is_null() {
             return invalid_argument("game range client config and output must be non-null");
         }
-        let config = unsafe { parse_range_client(config) }?;
+        let config = unsafe { parse_game_client(config) }?;
         let endpoint = unsafe {
             with_borrowed_slice(resume_ticket, |ticket| {
-                game_registry::lease(runtime)?
-                    .runtime
-                    .connect_host_range_resume(config, old_session, ticket)
+                game_registry::lease(runtime)?.runtime.connect_host_resume(
+                    config,
+                    old_session,
+                    ticket,
+                )
             })
         }?;
         unsafe { out.write(endpoint) };
@@ -99,9 +100,7 @@ pub unsafe extern "C" fn rnet_game_client_resume_connect_range(
     })
 }
 
-unsafe fn parse_range_client(
-    config: *const RnetGameRangeClientConfig,
-) -> Result<GameRangeHostClientConfig> {
+unsafe fn parse_game_client(config: *const RnetGameClientConfig) -> Result<GameHostClientConfig> {
     let config = unsafe { crate::registry::read_config(config) }?;
     if config.reserved != 0 || config.reserved2 != 0 || config.reserved3 != 0 {
         return invalid_argument("game range client reserved fields must be zero");
@@ -115,12 +114,12 @@ unsafe fn parse_range_client(
     }?;
     let join_ticket =
         unsafe { with_borrowed_slice(config.join_ticket, |bytes| Ok(bytes.to_vec())) }?;
-    Ok(GameRangeHostClientConfig {
+    Ok(GameHostClientConfig {
         transport: Transport::try_from(config.transport)?,
         host,
         port: config.remote_port,
         join_ticket,
-        protocol: GameProtocolRange {
+        protocol: GameProtocol {
             protocol_id: config.protocol_id,
             min_version: config.min_version,
             max_version: config.max_version,

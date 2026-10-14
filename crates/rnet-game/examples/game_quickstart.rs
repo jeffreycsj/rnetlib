@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let server_key = Keypair::generate()?;
     let client_key = Keypair::generate()?;
     let server_public_key = server_key.public.clone();
-    let protocol = GameProtocol::new(0x4741_4d45, 1);
+    let protocol = GameProtocol::new(0x4741_4d45, 1, 1);
 
     // Production normally runs these in different processes. Keeping both runtimes here makes
     // the complete handshake and message path executable as one small example.

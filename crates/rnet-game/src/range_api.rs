@@ -1,9 +1,6 @@
 //! Public endpoint operations for current-wire version negotiation.
 
-use crate::config::{
-    GameClientConfig, GameHostClientConfig, GameProtocol, GameRangeClientConfig,
-    GameRangeHostClientConfig, GameRangeServerConfig,
-};
+use crate::config::{GameClientConfig, GameHostClientConfig, GameServerConfig};
 use crate::join;
 use crate::range_state::ClientPending;
 use crate::resume::TICKET_LEN;
@@ -29,7 +26,8 @@ fn nonce() -> Result<[u8; 16]> {
 
 impl GameRuntime {
     /// Starts a listener supporting the inclusive application version range.
-    pub fn listen_range(&self, config: GameRangeServerConfig) -> Result<Handle> {
+    /// Transport is fixed for its sessions; initial encryption remains server-controlled.
+    pub fn listen(&self, config: GameServerConfig) -> Result<Handle> {
         if !config.protocol.is_valid() {
             return Err(RnetError::new(
                 ErrorCode::InvalidArgument,
@@ -62,8 +60,9 @@ impl GameRuntime {
         Ok(endpoint)
     }
 
-    /// Joins a range listener using a fresh authenticated negotiation nonce.
-    pub fn connect_range(&self, config: GameRangeClientConfig) -> Result<Handle> {
+    /// Starts a numeric-address join using a fresh authenticated negotiation nonce.
+    /// Success returns an endpoint, not a ready session; both peers must continue polling.
+    pub fn connect(&self, config: GameClientConfig) -> Result<Handle> {
         if !config.protocol.is_valid() {
             return Err(RnetError::new(
                 ErrorCode::InvalidArgument,
@@ -81,36 +80,18 @@ impl GameRuntime {
             .endpoint_registration
             .lock()
             .expect("endpoint registration poisoned");
-        let endpoint = self.connect_prepared(
-            GameClientConfig {
-                transport: config.transport,
-                bind_addr: config.bind_addr,
-                remote_addr: config.remote_addr,
-                join_ticket: config.join_ticket,
-                protocol: GameProtocol::new(
-                    config.protocol.protocol_id,
-                    config.protocol.max_version,
-                ),
-            },
-            payload,
-            None,
-        )?;
+        let protocol = config.protocol;
+        let endpoint = self.connect_prepared(config, payload, None)?;
         self.range
             .lock()
             .expect("range state poisoned")
             .client_endpoints
-            .insert(
-                endpoint,
-                ClientPending {
-                    protocol: config.protocol,
-                    nonce,
-                },
-            );
+            .insert(endpoint, ClientPending { protocol, nonce });
         Ok(endpoint)
     }
 
-    /// Hostname variant of `connect_range` with the same authenticated version selection.
-    pub fn connect_host_range(&self, config: GameRangeHostClientConfig) -> Result<Handle> {
+    /// Hostname variant of `connect` with the same authenticated version selection.
+    pub fn connect_host(&self, config: GameHostClientConfig) -> Result<Handle> {
         if !config.protocol.is_valid() {
             return Err(RnetError::new(
                 ErrorCode::InvalidArgument,
@@ -128,38 +109,22 @@ impl GameRuntime {
             .endpoint_registration
             .lock()
             .expect("endpoint registration poisoned");
-        let endpoint = self.connect_host_prepared(
-            GameHostClientConfig {
-                transport: config.transport,
-                host: config.host,
-                port: config.port,
-                join_ticket: config.join_ticket,
-                protocol: GameProtocol::new(
-                    config.protocol.protocol_id,
-                    config.protocol.max_version,
-                ),
-            },
-            payload,
-            None,
-        )?;
+        let protocol = config.protocol;
+        let endpoint = self.connect_host_prepared(config, payload, None)?;
         self.range
             .lock()
             .expect("range state poisoned")
             .client_endpoints
-            .insert(
-                endpoint,
-                ClientPending {
-                    protocol: config.protocol,
-                    nonce,
-                },
-            );
+            .insert(endpoint, ClientPending { protocol, nonce });
         Ok(endpoint)
     }
 
     /// Resumes within this runtime; the ticket pins the original selected version.
-    pub fn connect_range_resume(
+    /// The old handle is local mapping metadata, not authorization. The server verifies its
+    /// ticket and authorizes again; a still-live old session is replaced only after game readiness.
+    pub fn connect_resume(
         &self,
-        config: GameRangeClientConfig,
+        config: GameClientConfig,
         old_session: Handle,
         ticket: &[u8],
     ) -> Result<Handle> {
@@ -181,38 +146,20 @@ impl GameRuntime {
             .endpoint_registration
             .lock()
             .expect("endpoint registration poisoned");
-        let endpoint = self.connect_prepared(
-            GameClientConfig {
-                transport: config.transport,
-                bind_addr: config.bind_addr,
-                remote_addr: config.remote_addr,
-                join_ticket: config.join_ticket,
-                protocol: GameProtocol::new(
-                    config.protocol.protocol_id,
-                    config.protocol.max_version,
-                ),
-            },
-            payload,
-            Some(old_session),
-        )?;
+        let protocol = config.protocol;
+        let endpoint = self.connect_prepared(config, payload, Some(old_session))?;
         self.range
             .lock()
             .expect("range state poisoned")
             .client_endpoints
-            .insert(
-                endpoint,
-                ClientPending {
-                    protocol: config.protocol,
-                    nonce,
-                },
-            );
+            .insert(endpoint, ClientPending { protocol, nonce });
         Ok(endpoint)
     }
 
     /// Hostname variant of single-runtime wire-v4 resume.
-    pub fn connect_host_range_resume(
+    pub fn connect_host_resume(
         &self,
-        config: GameRangeHostClientConfig,
+        config: GameHostClientConfig,
         old_session: Handle,
         ticket: &[u8],
     ) -> Result<Handle> {
@@ -234,31 +181,13 @@ impl GameRuntime {
             .endpoint_registration
             .lock()
             .expect("endpoint registration poisoned");
-        let endpoint = self.connect_host_prepared(
-            GameHostClientConfig {
-                transport: config.transport,
-                host: config.host,
-                port: config.port,
-                join_ticket: config.join_ticket,
-                protocol: GameProtocol::new(
-                    config.protocol.protocol_id,
-                    config.protocol.max_version,
-                ),
-            },
-            payload,
-            Some(old_session),
-        )?;
+        let protocol = config.protocol;
+        let endpoint = self.connect_host_prepared(config, payload, Some(old_session))?;
         self.range
             .lock()
             .expect("range state poisoned")
             .client_endpoints
-            .insert(
-                endpoint,
-                ClientPending {
-                    protocol: config.protocol,
-                    nonce,
-                },
-            );
+            .insert(endpoint, ClientPending { protocol, nonce });
         Ok(endpoint)
     }
 

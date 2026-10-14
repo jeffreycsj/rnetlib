@@ -57,7 +57,9 @@ public sealed class ServerOptions {
     public ushort Port { get; init; }
     public bool InitialEncryption { get; init; } = true;
     public ulong ProtocolId { get; init; } = 1;
-    public uint Version { get; init; } = 1;
+    /// <summary>Inclusive application version bounds. Equal bounds select an exact version.</summary>
+    public uint MinVersion { get; init; } = 1;
+    public uint MaxVersion { get; init; } = 1;
 }
 
 public sealed class ClientOptions {
@@ -66,7 +68,9 @@ public sealed class ClientOptions {
     public ushort Port { get; init; }
     public byte[] JoinTicket { get; init; } = Array.Empty<byte>();
     public ulong ProtocolId { get; init; } = 1;
-    public uint Version { get; init; } = 1;
+    /// <summary>Inclusive application version bounds. Equal bounds select an exact version.</summary>
+    public uint MinVersion { get; init; } = 1;
+    public uint MaxVersion { get; init; } = 1;
     public ulong BuildId { get; init; }
     public ulong Capabilities { get; init; }
     public override string ToString() => $"ClientOptions({Transport}, credentials=<redacted>)";

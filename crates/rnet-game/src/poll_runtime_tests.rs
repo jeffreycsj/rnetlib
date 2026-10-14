@@ -1,7 +1,7 @@
 use super::*;
 use crate::envelope::{encode_application, encode_control, ControlKind};
 use crate::range_state::{Phase, RangeRuntimeState, RangeSession, MAX_BUFFERED_MESSAGES};
-use crate::{GameProtocolRange, GameRuntimeConfig};
+use crate::{GameProtocol, GameRuntimeConfig};
 use std::collections::VecDeque;
 
 fn negotiating_runtime(max_messages: usize, max_bytes: usize) -> GameRuntime {
@@ -12,7 +12,7 @@ fn negotiating_runtime(max_messages: usize, max_bytes: usize) -> GameRuntime {
         2,
         RangeSession {
             endpoint: 1,
-            protocol: GameProtocolRange::new(1, 1, 2),
+            protocol: GameProtocol::new(1, 1, 2),
             nonce: [7; 16],
             selected: Some(2),
             server_handle: 3,

@@ -31,8 +31,8 @@ func TestGameSendExpiryRoundsSubMillisecondDurationsUp(t *testing.T) {
 func TestGameDebugFormattingRedactsCredentials(t *testing.T) {
 	server := GameServerConfig{Keypair: Keypair{Private: [32]byte{1, 2, 3}}}
 	client := GameClientConfig{JoinTicket: []byte("private-ticket")}
-	rangeServer := GameRangeServerConfig{Keypair: Keypair{Private: [32]byte{1, 2, 3}}}
-	rangeClient := GameRangeClientConfig{JoinTicket: []byte("private-ticket")}
+	rangeServer := GameServerConfig{Keypair: Keypair{Private: [32]byte{1, 2, 3}}}
+	rangeClient := GameClientConfig{JoinTicket: []byte("private-ticket")}
 	event := GameEvent{Type: GameResumeRequest, Data: []byte("private-identity"), AuxData: []byte("private-ticket")}
 	for _, formatted := range []string{
 		fmt.Sprintf("%+v", server), fmt.Sprintf("%#v", server),
@@ -66,9 +66,9 @@ func TestGameRangeFacadeNegotiatesVersionAndExposesTransportReplacementMetric(t 
 			t.Error(err)
 		}
 	}()
-	listener, err := runtime.ListenRange(GameRangeServerConfig{
+	listener, err := runtime.Listen(GameServerConfig{
 		Transport: TransportTCP, Host: "127.0.0.1", Keypair: serverKey,
-		Protocol: GameProtocolRange{ID: 92, MinVersion: 2, MaxVersion: 9},
+		Protocol: GameProtocol{ID: 92, MinVersion: 2, MaxVersion: 9},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,9 +77,9 @@ func TestGameRangeFacadeNegotiatesVersionAndExposesTransportReplacementMetric(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := runtime.ConnectRange(GameRangeClientConfig{
+	client, err := runtime.Connect(GameClientConfig{
 		Transport: TransportTCP, Host: "localhost", Port: port,
-		Protocol: GameProtocolRange{ID: 92, MinVersion: 4, MaxVersion: 6},
+		Protocol: GameProtocol{ID: 92, MinVersion: 4, MaxVersion: 6},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 					t.Error(err)
 				}
 			}()
-			protocol := GameProtocol{ID: 91, Version: 1}
+			protocol := GameProtocol{ID: 91, MinVersion: 1, MaxVersion: 1}
 			listener, err := runtime.Listen(GameServerConfig{
 				Transport: transport, Host: "127.0.0.1", Keypair: serverKey,
 				Protocol: protocol,
@@ -430,7 +430,7 @@ func TestGamePlaintextRequiresExplicitServerAndRuntimeOptIn(t *testing.T) {
 	}
 	server := GameServerConfig{
 		Transport: TransportTCP, Host: "127.0.0.1", Keypair: key,
-		InitialSecurity: SecurityPlaintext, Protocol: GameProtocol{ID: 92, Version: 1},
+		InitialSecurity: SecurityPlaintext, Protocol: GameProtocol{ID: 92, MinVersion: 1, MaxVersion: 1},
 	}
 	secureRuntime, err := NewGameRuntime(nil)
 	if err != nil {

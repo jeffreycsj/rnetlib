@@ -3,7 +3,7 @@
 use crate::admission::SendAdmission;
 use crate::clock_sync::ClockSyncTracker;
 use crate::clock_sync_runtime::ClockSyncMetrics;
-use crate::config::{GameClientConfig, GameHostClientConfig, GameRuntimeConfig, GameServerConfig};
+use crate::config::{GameClientConfig, GameHostClientConfig, GameRuntimeConfig};
 use crate::diagnostics::GameDiagnostics;
 use crate::event::GameEvent;
 use crate::heartbeat::HeartbeatTracker;
@@ -146,16 +146,6 @@ impl GameRuntime {
         })
     }
 
-    /// Starts a listener. The selected transport remains immutable for every accepted session.
-    pub fn listen(&self, config: GameServerConfig) -> Result<Handle> {
-        self.listen_range(config.into())
-    }
-
-    /// Starts a numeric-address client connection without exposing an encryption choice.
-    pub fn connect(&self, config: GameClientConfig) -> Result<Handle> {
-        self.connect_range(config.into())
-    }
-
     pub(crate) fn connect_prepared(
         &self,
         config: GameClientConfig,
@@ -197,11 +187,6 @@ impl GameRuntime {
                 .insert(endpoint, old_session);
         }
         Ok(endpoint)
-    }
-
-    /// Resolves a hostname and joins without exposing address-candidate or encryption plumbing.
-    pub fn connect_host(&self, config: GameHostClientConfig) -> Result<Handle> {
-        self.connect_host_range(config.into())
     }
 
     pub(crate) fn connect_host_prepared(

@@ -1,6 +1,6 @@
 use super::*;
 use crate::envelope::{encode_control, ControlKind};
-use crate::GameProtocol;
+use crate::{GameProtocol, GameServerConfig};
 use rnet_core::Transport;
 use rnet_security::Keypair;
 
@@ -79,7 +79,7 @@ fn zero_capacity_poll_stages_public_events_in_the_bounded_completed_queue() {
                 bind_addr: "127.0.0.1:0".parse().expect("address"),
                 local_key: Keypair::generate().expect("key"),
                 initial_encryption: true,
-                protocol: GameProtocol::new(protocol_id, 1),
+                protocol: GameProtocol::new(protocol_id, 1, 1),
             })
             .expect("listener");
     }
@@ -114,7 +114,7 @@ fn completed_backlog_does_not_starve_authenticated_heartbeat_controls() {
             bind_addr: "127.0.0.1:0".parse().expect("address"),
             local_key: key,
             initial_encryption: true,
-            protocol: GameProtocol::new(91, 1),
+            protocol: GameProtocol::new(91, 1, 1),
         })
         .expect("listener");
     let client = runtime
@@ -123,7 +123,7 @@ fn completed_backlog_does_not_starve_authenticated_heartbeat_controls() {
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
             join_ticket: b"join".to_vec(),
-            protocol: GameProtocol::new(91, 1),
+            protocol: GameProtocol::new(91, 1, 1),
         })
         .expect("client");
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -183,7 +183,7 @@ fn zero_capacity_poll_with_completed_backlog_still_consumes_heartbeat_controls()
             bind_addr: "127.0.0.1:0".parse().expect("address"),
             local_key: key,
             initial_encryption: true,
-            protocol: GameProtocol::new(92, 1),
+            protocol: GameProtocol::new(92, 1, 1),
         })
         .expect("listener");
     let _client = runtime
@@ -192,7 +192,7 @@ fn zero_capacity_poll_with_completed_backlog_still_consumes_heartbeat_controls()
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
             join_ticket: b"join".to_vec(),
-            protocol: GameProtocol::new(92, 1),
+            protocol: GameProtocol::new(92, 1, 1),
         })
         .expect("client");
     let ready_deadline = Instant::now() + Duration::from_secs(2);
@@ -375,7 +375,7 @@ fn malformed_plaintext_business_frame_does_not_close_a_ready_session() {
             bind_addr: "127.0.0.1:0".parse().expect("address"),
             local_key: server_key,
             initial_encryption: false,
-            protocol: GameProtocol::new(93, 1),
+            protocol: GameProtocol::new(93, 1, 1),
         })
         .expect("listener");
     let client_endpoint = runtime
@@ -384,7 +384,7 @@ fn malformed_plaintext_business_frame_does_not_close_a_ready_session() {
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
             join_ticket: b"ticket".to_vec(),
-            protocol: GameProtocol::new(93, 1),
+            protocol: GameProtocol::new(93, 1, 1),
         })
         .expect("connect");
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -496,7 +496,7 @@ fn assert_encrypted_business_violation_closes(transport: Transport) {
             bind_addr: "127.0.0.1:0".parse().expect("address"),
             local_key: server_key,
             initial_encryption: false,
-            protocol: GameProtocol::new(94, 1),
+            protocol: GameProtocol::new(94, 1, 1),
         })
         .expect("listener");
     let client_endpoint = runtime
@@ -505,7 +505,7 @@ fn assert_encrypted_business_violation_closes(transport: Transport) {
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
             join_ticket: b"ticket".to_vec(),
-            protocol: GameProtocol::new(94, 1),
+            protocol: GameProtocol::new(94, 1, 1),
         })
         .expect("connect");
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -640,7 +640,7 @@ fn transient_endpoint_error_does_not_erase_listener_protocol_gate() {
             bind_addr: "127.0.0.1:0".parse().expect("address"),
             local_key: Keypair::generate().expect("key"),
             initial_encryption: true,
-            protocol: GameProtocol::new(12, 1),
+            protocol: GameProtocol::new(12, 1, 1),
         })
         .expect("listener");
     let mut error = Event::simple(EventType::EndpointError);
@@ -658,7 +658,7 @@ fn transient_endpoint_error_does_not_erase_listener_protocol_gate() {
             .expect("range state")
             .server_endpoints
             .get(&endpoint),
-        Some(&crate::GameProtocolRange::new(12, 1, 1))
+        Some(&crate::GameProtocol::new(12, 1, 1))
     );
 
     runtime.close_endpoint(endpoint).expect("close listener");

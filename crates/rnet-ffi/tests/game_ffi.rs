@@ -95,10 +95,9 @@ fn game_config_applies_bounded_scheduler_limits() {
 #[test]
 fn range_game_c_abi_selects_highest_common_business_version() {
     use rnet::{
-        rnet_game_client_connect_range, rnet_game_selected_protocol_version,
-        rnet_game_server_listen_range, rnet_game_transport_latest_replacements,
-        rnet_game_transport_latest_snapshot, RnetGameRangeClientConfig, RnetGameRangeServerConfig,
-        RnetGameTransportLatest,
+        rnet_game_client_connect, rnet_game_selected_protocol_version, rnet_game_server_listen,
+        rnet_game_transport_latest_replacements, rnet_game_transport_latest_snapshot,
+        RnetGameClientConfig, RnetGameServerConfig, RnetGameTransportLatest,
     };
     let server_key = Keypair::generate().unwrap();
     let client_key = Keypair::generate().unwrap();
@@ -109,8 +108,8 @@ fn range_game_c_abi_selects_highest_common_business_version() {
         unsafe { rnet_game_runtime_create(&RnetGameConfig::default(), &security, &mut runtime) },
         RNET_OK
     );
-    let server = RnetGameRangeServerConfig {
-        struct_size: size_of::<RnetGameRangeServerConfig>() as u32,
+    let server = RnetGameServerConfig {
+        struct_size: size_of::<RnetGameServerConfig>() as u32,
         abi_version: RNET_ABI_VERSION,
         transport: RNET_TRANSPORT_TCP,
         initial_encryption: 1,
@@ -124,7 +123,7 @@ fn range_game_c_abi_selects_highest_common_business_version() {
     };
     let mut listener = 0;
     assert_eq!(
-        unsafe { rnet_game_server_listen_range(runtime, &server, &mut listener) },
+        unsafe { rnet_game_server_listen(runtime, &server, &mut listener) },
         RNET_OK
     );
     let mut port = 0;
@@ -132,8 +131,8 @@ fn range_game_c_abi_selects_highest_common_business_version() {
         unsafe { rnet_game_endpoint_local_port(runtime, listener, &mut port) },
         RNET_OK
     );
-    let client = RnetGameRangeClientConfig {
-        struct_size: size_of::<RnetGameRangeClientConfig>() as u32,
+    let client = RnetGameClientConfig {
+        struct_size: size_of::<RnetGameClientConfig>() as u32,
         abi_version: RNET_ABI_VERSION,
         transport: RNET_TRANSPORT_TCP,
         reserved: 0,
@@ -150,7 +149,7 @@ fn range_game_c_abi_selects_highest_common_business_version() {
     };
     let mut client_endpoint = 0;
     assert_eq!(
-        unsafe { rnet_game_client_connect_range(runtime, &client, &mut client_endpoint) },
+        unsafe { rnet_game_client_connect(runtime, &client, &mut client_endpoint) },
         RNET_OK
     );
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -434,7 +433,8 @@ fn game_runtime_accepts_production_network_capacity_tuning() {
         reserved: 0,
         local_private_key: slice(&key.private),
         protocol_id: 5,
-        protocol_version: 1,
+        min_version: 1,
+        max_version: 1,
     };
     let mut first = 0;
     assert_eq!(
@@ -488,7 +488,8 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
         reserved: 0,
         local_private_key: slice(&server_key.private),
         protocol_id: 31,
-        protocol_version: 1,
+        min_version: 1,
+        max_version: 1,
     };
     let mut listener = 0;
     assert_eq!(
@@ -510,7 +511,8 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
         reserved2: 0,
         join_ticket: slice(b"login-proof"),
         protocol_id: 31,
-        protocol_version: 1,
+        min_version: 1,
+        max_version: 1,
         reserved3: 0,
         build_id: 0,
         capabilities: 0,

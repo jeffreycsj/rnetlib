@@ -37,22 +37,10 @@ internal static unsafe partial class Native
     internal struct Server {
         public uint Size, Abi, Transport, Encryption;
         public Slice Host; public ushort Port, Reserved; public Slice PrivateKey;
-        public ulong ProtocolId; public uint Version;
-    }
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct Client {
-        public uint Size, Abi, Transport, Reserved;
-        public Slice Host; public ushort Port, Reserved2; public Slice Ticket;
-        public ulong ProtocolId; public uint Version, Reserved3; public ulong BuildId, Capabilities;
-    }
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct RangeServer {
-        public uint Size, Abi, Transport, Encryption;
-        public Slice Host; public ushort Port, Reserved; public Slice PrivateKey;
         public ulong ProtocolId; public uint MinVersion, MaxVersion;
     }
     [StructLayout(LayoutKind.Sequential)]
-    internal struct RangeClient {
+    internal struct Client {
         public uint Size, Abi, Transport, Reserved;
         public Slice Host; public ushort Port, Reserved2; public Slice Ticket;
         public ulong ProtocolId; public uint MinVersion, MaxVersion, Reserved3;

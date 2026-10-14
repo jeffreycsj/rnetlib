@@ -162,3 +162,59 @@ fn runtime_configuration_has_no_compatibility_layout_or_constructor() {
         );
     }
 }
+#[test]
+fn game_connections_have_one_configuration_and_no_range_aliases() {
+    for source in [
+        include_str!("../../../include/rnet.h"),
+        include_str!("../../../scripts/expected-exports.txt"),
+        include_str!("../../../go/rnet/native.h"),
+    ] {
+        for obsolete in [
+            "rnet_game_range_server_config",
+            "rnet_game_range_client_config",
+            "rnet_game_server_listen_range",
+            "rnet_game_client_connect_range",
+            "rnet_game_client_resume_connect_range",
+        ] {
+            assert!(!source.contains(obsolete), "obsolete game API: {obsolete}");
+        }
+    }
+    for source in [
+        include_str!("../../../cpp/rnet/game.hpp"),
+        include_str!("../../../cpp/rnet/game_types.hpp"),
+        include_str!("../../../cpp/rnet/game_profile.hpp"),
+        include_str!("../../../go/rnet/game.go"),
+        include_str!("../../../go/rnet/game_range.go"),
+        include_str!("../../../go/rnet/game_types.go"),
+        include_str!("../../../go/rnet/game_profile.go"),
+        include_str!("../../../csharp/RNet/GameEndpoints.cs"),
+        include_str!("../../../csharp/RNet/Native.cs"),
+        include_str!("../../../csharp/RNet/NativeTypes.cs"),
+    ] {
+        for obsolete in [
+            "GameProtocolRange",
+            "GameRangeServer",
+            "GameRangeClient",
+            "listen_range(",
+            "connect_range(",
+            "connect_range_resume(",
+            "game_range_server_options(",
+            "game_range_client_options(",
+            "ListenRange(",
+            "ConnectRange(",
+            "ConnectRangeResume(",
+            "RangeServerConfigForProfile(",
+            "RangeClientConfigForProfile(",
+            "rnet_game_server_listen_range",
+            "rnet_game_client_connect_range",
+            "rnet_game_client_resume_connect_range",
+            "struct RangeServer",
+            "struct RangeClient",
+        ] {
+            assert!(
+                !source.contains(obsolete),
+                "obsolete SDK game API: {obsolete}"
+            );
+        }
+    }
+}

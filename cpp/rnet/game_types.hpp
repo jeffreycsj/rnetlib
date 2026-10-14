@@ -30,15 +30,8 @@ struct GameSendOptions {
   uint64_t expiry_ms = 0;
 };
 
+// Inclusive application versions; equal bounds select an exact version.
 struct GameProtocol {
-  uint64_t id = 0;
-  uint32_t version = 0;
-  uint64_t build_id = 0;
-  uint64_t capabilities = 0;
-};
-
-// Application version range; ordinary GameProtocol uses the same wire with min=max.
-struct GameProtocolRange {
   uint64_t id = 0;
   uint32_t min_version = 0;
   uint32_t max_version = 0;
@@ -61,23 +54,6 @@ struct GameClientOptions {
   uint16_t port = 0;
   std::vector<uint8_t> join_ticket;
   GameProtocol protocol;
-};
-
-struct GameRangeServerOptions {
-  Transport transport = Transport::Kcp;
-  std::string host = "127.0.0.1";
-  uint16_t port = 0;
-  Keypair keypair;
-  bool initial_encryption = true;
-  GameProtocolRange protocol;
-};
-
-struct GameRangeClientOptions {
-  Transport transport = Transport::Kcp;
-  std::string host = "127.0.0.1";
-  uint16_t port = 0;
-  std::vector<uint8_t> join_ticket;
-  GameProtocolRange protocol;
 };
 
 struct GameEvent {

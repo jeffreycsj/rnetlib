@@ -1,14 +1,13 @@
 use rnet_core::{ErrorCode, Transport};
 use rnet_game::{
-    GameClientConfig, GameEvent, GameProtocol, GameProtocolRange, GameRangeClientConfig,
-    GameRangeServerConfig, GameRuntime, GameRuntimeConfig, GameServerConfig,
+    GameClientConfig, GameEvent, GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig,
 };
 use rnet_security::Keypair;
 use rnet_transport::ClientSecurity;
 use std::time::{Duration, Instant};
 
 #[test]
-fn exact_and_range_entries_share_negotiation_on_every_transport() {
+fn exact_and_range_bounds_share_negotiation_on_every_transport() {
     for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
         for exact_server in [false, true] {
             let key = Keypair::generate().unwrap();
@@ -23,29 +22,29 @@ fn exact_and_range_entries_share_negotiation_on_every_transport() {
                     bind_addr: "127.0.0.1:0".parse().unwrap(),
                     local_key: key,
                     initial_encryption: true,
-                    protocol: GameProtocol::new(71, 5),
+                    protocol: GameProtocol::new(71, 5, 5),
                 })
             } else {
-                runtime.listen_range(GameRangeServerConfig {
+                runtime.listen(GameServerConfig {
                     transport,
                     bind_addr: "127.0.0.1:0".parse().unwrap(),
                     local_key: key,
                     initial_encryption: true,
-                    protocol: GameProtocolRange::new(71, 3, 8),
+                    protocol: GameProtocol::new(71, 3, 8),
                 })
             }
             .unwrap();
             let remote_addr = runtime.endpoint_local_addr(listener).unwrap();
             let client = if exact_server {
-                runtime.connect_range(GameRangeClientConfig {
+                runtime.connect(GameClientConfig {
                     transport,
                     bind_addr: None,
                     remote_addr,
                     join_ticket: b"login".to_vec(),
-                    protocol: GameProtocolRange {
+                    protocol: GameProtocol {
                         build_id: 42,
                         capabilities: 9,
-                        ..GameProtocolRange::new(71, 3, 8)
+                        ..GameProtocol::new(71, 3, 8)
                     },
                 })
             } else {
@@ -57,7 +56,7 @@ fn exact_and_range_entries_share_negotiation_on_every_transport() {
                     protocol: GameProtocol {
                         build_id: 42,
                         capabilities: 9,
-                        ..GameProtocol::new(71, 5)
+                        ..GameProtocol::new(71, 5, 5)
                     },
                 })
             }
@@ -131,21 +130,21 @@ fn v4_range_join_selects_server_highest_common_version_before_ready() {
         )
         .unwrap();
         let listener = runtime
-            .listen_range(GameRangeServerConfig {
+            .listen(GameServerConfig {
                 transport,
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
                 local_key: server_key,
                 initial_encryption: true,
-                protocol: GameProtocolRange::new(71, 3, 8),
+                protocol: GameProtocol::new(71, 3, 8),
             })
             .unwrap();
         let client = runtime
-            .connect_range(GameRangeClientConfig {
+            .connect(GameClientConfig {
                 transport,
                 bind_addr: None,
                 remote_addr: runtime.endpoint_local_addr(listener).unwrap(),
                 join_ticket: b"join".to_vec(),
-                protocol: GameProtocolRange::new(71, 5, 10),
+                protocol: GameProtocol::new(71, 5, 10),
             })
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -210,21 +209,21 @@ fn v4_range_mismatch_is_rejected_before_business_authorization() {
     )
     .unwrap();
     let listener = runtime
-        .listen_range(GameRangeServerConfig {
+        .listen(GameServerConfig {
             transport: Transport::Tcp,
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             local_key: server_key,
             initial_encryption: true,
-            protocol: GameProtocolRange::new(72, 1, 2),
+            protocol: GameProtocol::new(72, 1, 2),
         })
         .unwrap();
     runtime
-        .connect_range(GameRangeClientConfig {
+        .connect(GameClientConfig {
             transport: Transport::Tcp,
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).unwrap(),
             join_ticket: b"join".to_vec(),
-            protocol: GameProtocolRange::new(72, 3, 4),
+            protocol: GameProtocol::new(72, 3, 4),
         })
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -249,22 +248,22 @@ fn v4_resume_keeps_selected_version_and_reauthorizes_with_new_handles() {
     )
     .unwrap();
     let listener = runtime
-        .listen_range(GameRangeServerConfig {
+        .listen(GameServerConfig {
             transport: Transport::Tcp,
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             local_key: server_key,
             initial_encryption: true,
-            protocol: GameProtocolRange::new(73, 1, 9),
+            protocol: GameProtocol::new(73, 1, 9),
         })
         .unwrap();
     let address = runtime.endpoint_local_addr(listener).unwrap();
     let client = runtime
-        .connect_range(GameRangeClientConfig {
+        .connect(GameClientConfig {
             transport: Transport::Tcp,
             bind_addr: None,
             remote_addr: address,
             join_ticket: b"first".to_vec(),
-            protocol: GameProtocolRange::new(73, 2, 6),
+            protocol: GameProtocol::new(73, 2, 6),
         })
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -308,13 +307,13 @@ fn v4_resume_keeps_selected_version_and_reauthorizes_with_new_handles() {
         }
     };
     let invalid = runtime
-        .connect_range_resume(
-            GameRangeClientConfig {
+        .connect_resume(
+            GameClientConfig {
                 transport: Transport::Tcp,
                 bind_addr: None,
                 remote_addr: address,
                 join_ticket: b"wrong-range".to_vec(),
-                protocol: GameProtocolRange::new(73, 7, 8),
+                protocol: GameProtocol::new(73, 7, 8),
             },
             old_client,
             ticket.as_bytes(),
@@ -343,13 +342,13 @@ fn v4_resume_keeps_selected_version_and_reauthorizes_with_new_handles() {
         "closing the failed client endpoint must not revoke the server ticket"
     );
     let resumed_client = runtime
-        .connect_range_resume(
-            GameRangeClientConfig {
+        .connect_resume(
+            GameClientConfig {
                 transport: Transport::Tcp,
                 bind_addr: None,
                 remote_addr: address,
                 join_ticket: b"resume".to_vec(),
-                protocol: GameProtocolRange::new(73, 4, 8),
+                protocol: GameProtocol::new(73, 4, 8),
             },
             old_client,
             ticket.as_bytes(),

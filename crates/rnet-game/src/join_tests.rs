@@ -1,10 +1,10 @@
-use crate::config::GameProtocolRange;
+use crate::config::GameProtocol;
 use crate::join::{decode_range, encode_range, encode_range_resume, select_version};
 use rnet_core::ErrorCode;
 
 #[test]
 fn authenticated_join_metadata_round_trips_without_exposing_ticket_prefix() {
-    let protocol = GameProtocolRange {
+    let protocol = GameProtocol {
         protocol_id: 0x1234_5678,
         min_version: 9,
         max_version: 9,
@@ -20,8 +20,8 @@ fn authenticated_join_metadata_round_trips_without_exposing_ticket_prefix() {
 
 #[test]
 fn malformed_join_lengths_and_magic_are_rejected() {
-    let encoded = encode_range(GameProtocolRange::new(1, 1, 1), [1; 16], b"ticket", 1024)
-        .expect("encode join");
+    let encoded =
+        encode_range(GameProtocol::new(1, 1, 1), [1; 16], b"ticket", 1024).expect("encode join");
     let mut invalid_cases = vec![
         Vec::new(),
         encoded[..53].to_vec(),
@@ -54,20 +54,20 @@ fn malformed_join_lengths_and_magic_are_rejected() {
 #[test]
 fn ticket_size_is_bounded_before_allocation() {
     assert_eq!(
-        encode_range(GameProtocolRange::new(1, 1, 1), [1; 16], &[0; 10], 63)
+        encode_range(GameProtocol::new(1, 1, 1), [1; 16], &[0; 10], 63)
             .expect_err("join is too large")
             .code(),
         ErrorCode::MessageTooLarge
     );
     assert_eq!(
-        encode_range(GameProtocolRange::new(1, 1, 1), [1; 16], &[0; 10], 64)
+        encode_range(GameProtocol::new(1, 1, 1), [1; 16], &[0; 10], 64)
             .unwrap()
             .len(),
         64
     );
     assert_eq!(
         encode_range(
-            GameProtocolRange::new(1, 1, 1),
+            GameProtocol::new(1, 1, 1),
             [1; 16],
             &[0; 65_536],
             usize::MAX
@@ -77,7 +77,7 @@ fn ticket_size_is_bounded_before_allocation() {
         ErrorCode::MessageTooLarge
     );
     assert_eq!(
-        encode_range(GameProtocolRange::new(0, 1, 1), [1; 16], b"", 40)
+        encode_range(GameProtocol::new(0, 1, 1), [1; 16], b"", 40)
             .expect_err("zero ID is reserved")
             .code(),
         ErrorCode::InvalidArgument
@@ -86,7 +86,7 @@ fn ticket_size_is_bounded_before_allocation() {
 
 #[test]
 fn resume_join_uses_explicit_magic_and_keeps_login_ticket_separate() {
-    let protocol = GameProtocolRange::new(42, 2, 2);
+    let protocol = GameProtocol::new(42, 2, 2);
     let resume = [9_u8; 48];
     let encoded = encode_range_resume(protocol, [1; 16], b"login", &resume, 1024).unwrap();
     assert_eq!(&encoded[..4], b"RGR4", "current resume join marker");
@@ -106,7 +106,7 @@ fn resume_join_uses_explicit_magic_and_keeps_login_ticket_separate() {
 
 #[test]
 fn current_join_selects_highest_common_version() {
-    let requested = GameProtocolRange {
+    let requested = GameProtocol {
         protocol_id: 42,
         min_version: 3,
         max_version: 7,
@@ -121,31 +121,25 @@ fn current_join_selects_highest_common_version() {
     assert_eq!(decoded.nonce, nonce);
     assert_eq!(decoded.ticket, b"login");
     assert_eq!(
-        select_version(requested, GameProtocolRange::new(42, 5, 9)),
+        select_version(requested, GameProtocol::new(42, 5, 9)),
         Some(7)
     );
-    assert_eq!(
-        select_version(requested, GameProtocolRange::new(42, 8, 9)),
-        None
-    );
-    assert_eq!(
-        select_version(requested, GameProtocolRange::new(41, 3, 7)),
-        None
-    );
+    assert_eq!(select_version(requested, GameProtocol::new(42, 8, 9)), None);
+    assert_eq!(select_version(requested, GameProtocol::new(41, 3, 7)), None);
 }
 
 #[test]
 fn v4_range_join_rejects_malformed_bounds_lengths_and_nonce() {
-    let protocol = GameProtocolRange::new(42, 3, 7);
+    let protocol = GameProtocol::new(42, 3, 7);
     let encoded = encode_range(protocol, [1; 16], b"x", 1024).unwrap();
     assert_eq!(
-        encode_range(GameProtocolRange::new(42, 0, 7), [1; 16], b"", 1024)
+        encode_range(GameProtocol::new(42, 0, 7), [1; 16], b"", 1024)
             .unwrap_err()
             .code(),
         ErrorCode::InvalidArgument
     );
     assert_eq!(
-        encode_range(GameProtocolRange::new(42, 8, 7), [1; 16], b"", 1024)
+        encode_range(GameProtocol::new(42, 8, 7), [1; 16], b"", 1024)
             .unwrap_err()
             .code(),
         ErrorCode::InvalidArgument
@@ -194,7 +188,7 @@ fn v4_range_join_rejects_malformed_bounds_lengths_and_nonce() {
 
 #[test]
 fn v4_resume_marker_keeps_tickets_disjoint_and_rejects_truncation() {
-    let protocol = GameProtocolRange::new(99, 2, 8);
+    let protocol = GameProtocol::new(99, 2, 8);
     let encoded = encode_range_resume(protocol, [3; 16], b"login", &[7; 48], 1024).unwrap();
     assert_eq!(&encoded[..4], b"RGR4");
     let decoded = decode_range(&encoded).unwrap();
@@ -235,7 +229,7 @@ fn previous_sdk_join_formats_are_rejected_even_with_valid_lengths() {
 #[test]
 fn current_join_debug_does_not_disclose_credentials() {
     let encoded = encode_range_resume(
-        GameProtocolRange::new(42, 1, 3),
+        GameProtocol::new(42, 1, 3),
         [1; 16],
         b"secret-login",
         b"secret-resume",

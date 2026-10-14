@@ -1,7 +1,6 @@
 //! Single-runtime, single-use resume tickets. The registry is protected by the game runtime's
 //! mutex; it deliberately does not imply recovery across a process restart or another server.
 
-use crate::config::GameProtocol;
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
@@ -14,6 +13,26 @@ pub(crate) const TICKET_LEN: usize = NONCE_LEN + 32;
 const SIGNING_CONTEXT: &[u8] = b"rnet-game-resume-v1";
 const MAX_IDENTITY_LEN: usize = 64;
 const MAX_TTL: Duration = Duration::from_secs(300);
+
+/// The already-selected application identity pinned by a ticket; never a second public config.
+#[derive(Clone, Copy)]
+pub(crate) struct SelectedProtocol {
+    pub(crate) protocol_id: u64,
+    pub(crate) version: u32,
+}
+
+impl SelectedProtocol {
+    #[cfg(test)]
+    pub(crate) fn new(protocol_id: u64, version: u32) -> Self {
+        Self {
+            protocol_id,
+            version,
+        }
+    }
+    fn is_valid(self) -> bool {
+        self.protocol_id != 0 && self.version != 0
+    }
+}
 
 pub(crate) struct ResumeClaim {
     pub(crate) old_session: Handle,
@@ -31,7 +50,7 @@ pub(crate) struct ResumeScope {
     pub(crate) endpoint: Handle,
     pub(crate) session: Handle,
     pub(crate) peer_key: [u8; 32],
-    pub(crate) protocol: GameProtocol,
+    pub(crate) protocol: SelectedProtocol,
 }
 
 struct TicketEntry {
@@ -150,7 +169,7 @@ impl ResumeRegistry {
         ticket: &[u8],
         endpoint: Handle,
         peer_key: [u8; 32],
-        protocol: GameProtocol,
+        protocol: SelectedProtocol,
         now: Instant,
     ) -> Result<ResumeClaim> {
         self.prune(now);

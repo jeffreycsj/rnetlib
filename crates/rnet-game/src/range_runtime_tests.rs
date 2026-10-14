@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{GameProtocolRange, GameRangeServerConfig, GameRuntimeConfig};
+use crate::config::{GameProtocol, GameRuntimeConfig, GameServerConfig};
 use crate::range_state::RangeRuntimeState;
 use bytes::Bytes;
 use rnet_core::EventType;
@@ -23,22 +23,20 @@ fn missing_negotiation_state_cannot_fall_back_to_ready() {
 }
 
 #[test]
-fn all_server_entry_points_reject_client_issued_resume_controls() {
+fn server_rejects_client_issued_resume_controls_for_exact_and_range_bounds() {
     for exact in [false, true] {
         let runtime = GameRuntime::new(GameRuntimeConfig::production()).unwrap();
-        let config = crate::GameServerConfig {
+        let mut config = crate::GameServerConfig {
             transport: rnet_core::Transport::Tcp,
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             local_key: rnet_security::Keypair::generate().unwrap(),
             initial_encryption: true,
-            protocol: GameProtocol::new(42, 3),
+            protocol: GameProtocol::new(42, 3, 3),
         };
-        let endpoint = if exact {
-            runtime.listen(config)
-        } else {
-            runtime.listen_range(config.into())
+        if !exact {
+            config.protocol.max_version = 9;
         }
-        .unwrap();
+        let endpoint = runtime.listen(config).unwrap();
         let mut event = Event::simple(EventType::GameControl);
         event.endpoint = endpoint;
         event.session = 99;
@@ -61,7 +59,7 @@ fn late_duplicate_select_does_not_disconnect_a_ready_udp_client() {
     let now = Instant::now();
     let session = RangeSession {
         endpoint: 31,
-        protocol: GameProtocolRange::new(55, 2, 5),
+        protocol: GameProtocol::new(55, 2, 5),
         nonce: [7; 16],
         selected: Some(4),
         server_handle: 99,
@@ -163,12 +161,12 @@ fn closing_range_session_discards_deferred_ready_and_message_events() {
 fn stopping_runtime_clears_v4_listener_policy() {
     let runtime = GameRuntime::new(GameRuntimeConfig::production()).unwrap();
     let listener = runtime
-        .listen_range(GameRangeServerConfig {
+        .listen(GameServerConfig {
             transport: rnet_core::Transport::Tcp,
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             local_key: rnet_security::Keypair::generate().unwrap(),
             initial_encryption: true,
-            protocol: GameProtocolRange::new(3, 1, 2),
+            protocol: GameProtocol::new(3, 1, 2),
         })
         .unwrap();
     assert!(runtime
@@ -185,12 +183,12 @@ fn stopping_runtime_clears_v4_listener_policy() {
 fn failed_join_does_not_remove_v4_listener_policy() {
     let runtime = GameRuntime::new(GameRuntimeConfig::production()).unwrap();
     let listener = runtime
-        .listen_range(GameRangeServerConfig {
+        .listen(GameServerConfig {
             transport: rnet_core::Transport::Tcp,
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             local_key: rnet_security::Keypair::generate().unwrap(),
             initial_encryption: true,
-            protocol: GameProtocolRange::new(4, 1, 3),
+            protocol: GameProtocol::new(4, 1, 3),
         })
         .unwrap();
     let mut failed = Event::simple(EventType::JoinFailed);

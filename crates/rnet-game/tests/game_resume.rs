@@ -51,7 +51,7 @@ fn credentials_are_not_in_debug_output() {
         bind_addr: None,
         remote_addr: client.remote_addr,
         join_ticket: secret.clone(),
-        protocol: GameProtocol::new(1, 1),
+        protocol: GameProtocol::new(1, 1, 1),
     };
     assert!(!format!("{game_client:?}").contains(&secret_debug));
     let game_host = GameHostClientConfig {
@@ -59,11 +59,13 @@ fn credentials_are_not_in_debug_output() {
         host: "localhost".into(),
         port: 1,
         join_ticket: secret,
-        protocol: GameProtocol::new(1, 1),
+        protocol: GameProtocol::new(1, 1, 1),
     };
     assert!(!format!("{game_host:?}").contains(&secret_debug));
-    let range_client = rnet_game::GameRangeClientConfig::from(game_client);
-    let range_host = rnet_game::GameRangeHostClientConfig::from(game_host);
+    let mut range_client = game_client;
+    let mut range_host = game_host;
+    range_client.protocol.max_version = 9;
+    range_host.protocol.max_version = 9;
     assert!(!format!("{range_client:?}").contains(&secret_debug));
     assert!(!format!("{range_host:?}").contains(&secret_debug));
 }
@@ -91,7 +93,7 @@ fn exercise_authorized_resume(transport: Transport) {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             local_key: server_key,
             initial_encryption: true,
-            protocol: GameProtocol::new(0x71, 2),
+            protocol: GameProtocol::new(0x71, 2, 2),
         })
         .unwrap();
     let addr = runtime.endpoint_local_addr(listener).unwrap();
@@ -100,7 +102,7 @@ fn exercise_authorized_resume(transport: Transport) {
         bind_addr: None,
         remote_addr: addr,
         join_ticket: b"fresh-login-proof".to_vec(),
-        protocol: GameProtocol::new(0x71, 2),
+        protocol: GameProtocol::new(0x71, 2, 2),
     };
     let client = runtime.connect(config()).unwrap();
     let mut server_old = None;
@@ -152,7 +154,7 @@ fn exercise_authorized_resume(transport: Transport) {
                     host: "localhost".to_string(),
                     port: addr.port(),
                     join_ticket: b"fresh-login-proof".to_vec(),
-                    protocol: GameProtocol::new(0x71, 2),
+                    protocol: GameProtocol::new(0x71, 2, 2),
                 },
                 client_old,
                 &ticket,

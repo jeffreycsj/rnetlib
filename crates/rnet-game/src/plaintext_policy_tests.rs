@@ -1,7 +1,6 @@
 use crate::envelope::{encode_control, ControlKind};
 use crate::{
-    GameEvent, GameProtocolRange, GameRangeClientConfig, GameRangeServerConfig, GameRuntime,
-    GameRuntimeConfig,
+    GameClientConfig, GameEvent, GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig,
 };
 use rnet_core::{ErrorCode, Transport};
 use rnet_security::Keypair;
@@ -33,9 +32,9 @@ fn verify_client_policy(transport: Transport) {
         ClientSecurity::pinned(Keypair::generate().unwrap(), key.public.clone()),
     )
     .unwrap();
-    let protocol = GameProtocolRange::new(95, 1, 2);
+    let protocol = GameProtocol::new(95, 1, 2);
     let listener = server
-        .listen_range(GameRangeServerConfig {
+        .listen(GameServerConfig {
             transport,
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             local_key: key,
@@ -44,7 +43,7 @@ fn verify_client_policy(transport: Transport) {
         })
         .unwrap();
     client
-        .connect_range(GameRangeClientConfig {
+        .connect(GameClientConfig {
             transport,
             bind_addr: None,
             remote_addr: server.endpoint_local_addr(listener).unwrap(),

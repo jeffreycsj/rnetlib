@@ -117,7 +117,7 @@ impl Connection {
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
                 local_key: key,
                 initial_encryption: true,
-                protocol: GameProtocol::new(99, 1),
+                protocol: GameProtocol::new(99, 1, 1),
             })
             .unwrap();
         let server_addr = runtime.endpoint_local_addr(listener).unwrap();
@@ -128,7 +128,7 @@ impl Connection {
                 bind_addr: None,
                 remote_addr: proxy.socket.local_addr().unwrap(),
                 join_ticket: b"secret-datagram-ticket".to_vec(),
-                protocol: GameProtocol::new(99, 1),
+                protocol: GameProtocol::new(99, 1, 1),
             })
             .unwrap();
         let mut connection = Self {

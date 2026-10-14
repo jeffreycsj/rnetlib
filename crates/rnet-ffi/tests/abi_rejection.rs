@@ -11,6 +11,7 @@ fn only_the_current_abi_and_exact_layout_are_accepted() {
         (0, std::mem::size_of::<RnetConfig>() as u32),
         (1, std::mem::size_of::<RnetConfig>() as u32),
         (2, std::mem::size_of::<RnetConfig>() as u32),
+        (3, std::mem::size_of::<RnetConfig>() as u32),
         (
             RNET_ABI_VERSION + 1,
             std::mem::size_of::<RnetConfig>() as u32,
@@ -118,6 +119,30 @@ fn short_foreign_headers_are_rejected_without_reading_past_the_header() {
     );
     assert_eq!(
         unsafe { rnet_game_send_ex(0, 0, RnetSlice::default(), header.cast()) },
+        RNET_E_INVALID_ARGUMENT
+    );
+    assert_eq!(output, 0);
+    // A previous ABI may have the same size after padding. Check its discriminator before
+    // touching any fields beyond the readable common header, including endpoint configs.
+    unsafe {
+        header.write(std::mem::size_of::<RnetGameServerConfig>() as u32);
+        header.add(1).write(3);
+    }
+    assert_eq!(
+        unsafe { rnet_game_server_listen(0, header.cast(), &mut output) },
+        RNET_E_INVALID_ARGUMENT
+    );
+    unsafe {
+        header.write(std::mem::size_of::<RnetGameClientConfig>() as u32);
+    }
+    assert_eq!(
+        unsafe { rnet_game_client_connect(0, header.cast(), &mut output) },
+        RNET_E_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe {
+            rnet_game_client_resume_connect(0, header.cast(), 1, RnetSlice::default(), &mut output)
+        },
         RNET_E_INVALID_ARGUMENT
     );
     assert_eq!(output, 0);

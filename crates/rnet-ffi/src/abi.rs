@@ -6,7 +6,7 @@ use rnet_transport::LatencyKind;
 use std::ffi::c_void;
 use std::mem::size_of;
 
-pub const RNET_ABI_VERSION: u32 = 3;
+pub const RNET_ABI_VERSION: u32 = 4;
 pub const RNET_OK: i32 = ErrorCode::Ok as i32;
 pub const RNET_E_INVALID_ARGUMENT: i32 = ErrorCode::InvalidArgument as i32;
 pub const RNET_E_INVALID_HANDLE: i32 = ErrorCode::InvalidHandle as i32;

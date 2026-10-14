@@ -1,4 +1,19 @@
 //! Game-oriented session and messaging facade over RNet's transport runtime.
+//!
+//! One inclusive application version configuration serves every connection.
+//! Older SDK source APIs are deliberately rejected:
+//! ```compile_fail
+//! use rnet_game::GameProtocolRange;
+//! ```
+//! ```compile_fail
+//! let _ = rnet_game::GameProtocol::new(42, 3);
+//! ```
+//! ```compile_fail
+//! use rnet_game::{GameRuntime, GameServerConfig};
+//! fn obsolete(runtime: &GameRuntime, config: GameServerConfig) {
+//!     let _ = runtime.listen_range(config);
+//! }
+//! ```
 
 mod admission;
 mod clock_sync;
@@ -38,8 +53,7 @@ mod scheduler_runtime;
 pub use clock_sync::ClockSyncSample;
 pub use clock_sync_runtime::ClockSyncMetricsSnapshot;
 pub use config::{
-    GameClientConfig, GameHostClientConfig, GameProfile, GameProtocol, GameProtocolRange,
-    GameRangeClientConfig, GameRangeHostClientConfig, GameRangeServerConfig, GameRuntimeConfig,
+    GameClientConfig, GameHostClientConfig, GameProfile, GameProtocol, GameRuntimeConfig,
     GameServerConfig,
 };
 pub use diagnostics::GameLoggerSnapshot;

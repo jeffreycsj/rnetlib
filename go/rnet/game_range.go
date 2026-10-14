@@ -11,9 +11,9 @@ import (
 	"unsafe"
 )
 
-// GameProtocolRange describes authenticated application version negotiation.
-// Exact-version GameProtocol connections use the same wire with min=max.
-type GameProtocolRange struct {
+// GameProtocol describes authenticated application version negotiation.
+// Bounds are inclusive and nonzero; equal bounds require that exact version.
+type GameProtocol struct {
 	ID           uint64
 	MinVersion   uint32
 	MaxVersion   uint32
@@ -21,28 +21,29 @@ type GameProtocolRange struct {
 	Capabilities uint64
 }
 
-type GameRangeServerConfig struct {
-	Transport       Transport
-	Host            string
-	Port            uint16
-	Keypair         Keypair
+type GameServerConfig struct {
+	Transport Transport
+	Host      string
+	Port      uint16
+	Keypair   Keypair
+	// Zero selects encrypted business data; plaintext requires explicit server policy.
 	InitialSecurity SecurityMode
-	Protocol        GameProtocolRange
+	Protocol        GameProtocol
 }
 
-func (config GameRangeServerConfig) String() string {
-	return fmt.Sprintf("GameRangeServerConfig{Transport:%d Host:%q Port:%d InitialSecurity:%d ProtocolID:%d Range:[%d,%d] Keypair:<redacted>}",
+func (config GameServerConfig) String() string {
+	return fmt.Sprintf("GameServerConfig{Transport:%d Host:%q Port:%d InitialSecurity:%d ProtocolID:%d Range:[%d,%d] Keypair:<redacted>}",
 		config.Transport, config.Host, config.Port, config.InitialSecurity, config.Protocol.ID, config.Protocol.MinVersion, config.Protocol.MaxVersion)
 }
 
-func (config GameRangeServerConfig) GoString() string { return config.String() }
+func (config GameServerConfig) GoString() string { return config.String() }
 
-type GameRangeClientConfig struct {
+type GameClientConfig struct {
 	Transport  Transport
 	Host       string
 	Port       uint16
 	JoinTicket []byte
-	Protocol   GameProtocolRange
+	Protocol   GameProtocol
 }
 
 // GameTransportLatest is cumulative and runtime-wide. WorkerPickups marks the
@@ -59,14 +60,14 @@ type GameTransportLatest struct {
 	AdmissionOtherFailures     uint64
 }
 
-func (config GameRangeClientConfig) String() string {
-	return fmt.Sprintf("GameRangeClientConfig{Transport:%d Host:%q Port:%d ProtocolID:%d Range:[%d,%d] JoinTicketLen:%d}",
+func (config GameClientConfig) String() string {
+	return fmt.Sprintf("GameClientConfig{Transport:%d Host:%q Port:%d ProtocolID:%d Range:[%d,%d] JoinTicketLen:%d}",
 		config.Transport, config.Host, config.Port, config.Protocol.ID, config.Protocol.MinVersion, config.Protocol.MaxVersion, len(config.JoinTicket))
 }
 
-func (config GameRangeClientConfig) GoString() string { return config.String() }
+func (config GameClientConfig) GoString() string { return config.String() }
 
-func (r *GameRuntime) ListenRange(config GameRangeServerConfig) (Endpoint, error) {
+func (r *GameRuntime) Listen(config GameServerConfig) (Endpoint, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
@@ -80,7 +81,7 @@ func (r *GameRuntime) ListenRange(config GameRangeServerConfig) (Endpoint, error
 		return 0, fmt.Errorf("rnet: invalid game initial security mode")
 	}
 	var endpoint C.rnet_endpoint_t
-	status := C.rnet_go_game_server_listen_range(
+	status := C.rnet_go_game_server_listen(
 		handle, C.uint32_t(config.Transport), bytePointer(host), C.size_t(len(host)),
 		C.uint16_t(config.Port), (*C.uint8_t)(unsafe.Pointer(&config.Keypair.Private[0])),
 		encrypted, C.uint64_t(config.Protocol.ID), C.uint32_t(config.Protocol.MinVersion),
@@ -91,7 +92,7 @@ func (r *GameRuntime) ListenRange(config GameRangeServerConfig) (Endpoint, error
 	return Endpoint(endpoint), statusError(status)
 }
 
-func (r *GameRuntime) ConnectRange(config GameRangeClientConfig) (Endpoint, error) {
+func (r *GameRuntime) Connect(config GameClientConfig) (Endpoint, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
@@ -99,7 +100,7 @@ func (r *GameRuntime) ConnectRange(config GameRangeClientConfig) (Endpoint, erro
 	}
 	host := []byte(config.Host)
 	var endpoint C.rnet_endpoint_t
-	status := C.rnet_go_game_client_connect_range(
+	status := C.rnet_go_game_client_connect(
 		handle, C.uint32_t(config.Transport), bytePointer(host), C.size_t(len(host)),
 		C.uint16_t(config.Port), bytePointer(config.JoinTicket), C.size_t(len(config.JoinTicket)),
 		C.uint64_t(config.Protocol.ID), C.uint32_t(config.Protocol.MinVersion),
@@ -111,7 +112,7 @@ func (r *GameRuntime) ConnectRange(config GameRangeClientConfig) (Endpoint, erro
 	return Endpoint(endpoint), statusError(status)
 }
 
-func (r *GameRuntime) ConnectRangeResume(config GameRangeClientConfig, oldSession Session, ticket []byte) (Endpoint, error) {
+func (r *GameRuntime) ConnectResume(config GameClientConfig, oldSession Session, ticket []byte) (Endpoint, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
@@ -119,7 +120,7 @@ func (r *GameRuntime) ConnectRangeResume(config GameRangeClientConfig, oldSessio
 	}
 	host := []byte(config.Host)
 	var endpoint C.rnet_endpoint_t
-	status := C.rnet_go_game_client_resume_connect_range(
+	status := C.rnet_go_game_client_resume_connect(
 		handle, C.uint32_t(config.Transport), bytePointer(host), C.size_t(len(host)),
 		C.uint16_t(config.Port), bytePointer(config.JoinTicket), C.size_t(len(config.JoinTicket)),
 		C.uint64_t(config.Protocol.ID), C.uint32_t(config.Protocol.MinVersion),

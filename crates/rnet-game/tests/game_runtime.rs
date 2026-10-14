@@ -32,7 +32,7 @@ fn game_send_waits_for_game_ready_event_even_if_transport_handshake_finished() {
             bind_addr: localhost(0),
             local_key: server_key,
             initial_encryption: true,
-            protocol: GameProtocol::new(91, 1),
+            protocol: GameProtocol::new(91, 1, 1),
         })
         .expect("listener");
     runtime
@@ -41,7 +41,7 @@ fn game_send_waits_for_game_ready_event_even_if_transport_handshake_finished() {
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
             join_ticket: b"ticket".to_vec(),
-            protocol: GameProtocol::new(91, 1),
+            protocol: GameProtocol::new(91, 1, 1),
         })
         .expect("client");
     let auth = poll_until(&runtime, |event| {
@@ -93,7 +93,7 @@ fn heartbeat_quality_uses_protected_controls_even_when_business_data_is_plaintex
                 bind_addr: localhost(0),
                 local_key: server_key,
                 initial_encryption: false,
-                protocol: GameProtocol::new(10, 1),
+                protocol: GameProtocol::new(10, 1, 1),
             })
             .expect("listener");
         let client = runtime
@@ -102,7 +102,7 @@ fn heartbeat_quality_uses_protected_controls_even_when_business_data_is_plaintex
                 bind_addr: None,
                 remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
                 join_ticket: b"ticket".to_vec(),
-                protocol: GameProtocol::new(10, 1),
+                protocol: GameProtocol::new(10, 1, 1),
             })
             .expect("client");
         let auth = poll_until(&runtime, |event| {
@@ -229,7 +229,7 @@ fn absent_heartbeat_ack_closes_only_the_unresponsive_session() {
             bind_addr: localhost(0),
             local_key: server_key,
             initial_encryption: true,
-            protocol: GameProtocol::new(11, 1),
+            protocol: GameProtocol::new(11, 1, 1),
         })
         .expect("listener");
     client
@@ -238,7 +238,7 @@ fn absent_heartbeat_ack_closes_only_the_unresponsive_session() {
             bind_addr: None,
             remote_addr: server.endpoint_local_addr(listener).expect("address"),
             join_ticket: b"ticket".to_vec(),
-            protocol: GameProtocol::new(11, 1),
+            protocol: GameProtocol::new(11, 1, 1),
         })
         .expect("client connect");
     let auth = poll_until(&server, |event| {
@@ -291,7 +291,7 @@ fn timely_ack_queued_before_a_late_poll_prevents_false_timeout() {
             bind_addr: localhost(0),
             local_key: server_key,
             initial_encryption: true,
-            protocol: GameProtocol::new(12, 1),
+            protocol: GameProtocol::new(12, 1, 1),
         })
         .expect("listener");
     let client_endpoint = client
@@ -300,7 +300,7 @@ fn timely_ack_queued_before_a_late_poll_prevents_false_timeout() {
             bind_addr: None,
             remote_addr: server.endpoint_local_addr(listener).expect("address"),
             join_ticket: b"ticket".to_vec(),
-            protocol: GameProtocol::new(12, 1),
+            protocol: GameProtocol::new(12, 1, 1),
         })
         .expect("client connect");
     let auth = poll_until(&server, |event| {
@@ -357,7 +357,7 @@ fn exercise_game_session(transport: Transport) {
             bind_addr: localhost(0),
             local_key: server_key,
             initial_encryption: false,
-            protocol: GameProtocol::new(77, 3),
+            protocol: GameProtocol::new(77, 3, 3),
         })
         .expect("listener");
     let client = runtime
@@ -368,7 +368,7 @@ fn exercise_game_session(transport: Transport) {
                 .endpoint_local_addr(listener)
                 .expect("listener address"),
             join_ticket: b"player-ticket".to_vec(),
-            protocol: GameProtocol::new(77, 3),
+            protocol: GameProtocol::new(77, 3, 3),
         })
         .expect("client");
 
@@ -592,7 +592,7 @@ fn incompatible_protocol_is_rejected_before_business_authorization() {
             bind_addr: localhost(0),
             local_key: server_key,
             initial_encryption: true,
-            protocol: GameProtocol::new(77, 3),
+            protocol: GameProtocol::new(77, 3, 3),
         })
         .expect("listener");
     runtime
@@ -601,7 +601,7 @@ fn incompatible_protocol_is_rejected_before_business_authorization() {
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).expect("address"),
             join_ticket: b"secret-ticket".to_vec(),
-            protocol: GameProtocol::new(77, 4),
+            protocol: GameProtocol::new(77, 4, 4),
         })
         .expect("client");
 
@@ -637,7 +637,7 @@ fn client_can_join_by_hostname_without_exposing_transport_on_send() {
             bind_addr: localhost(0),
             local_key: server_key,
             initial_encryption: true,
-            protocol: GameProtocol::new(9, 1),
+            protocol: GameProtocol::new(9, 1, 1),
         })
         .expect("listener");
     let client = runtime
@@ -648,7 +648,7 @@ fn client_can_join_by_hostname_without_exposing_transport_on_send() {
                 .endpoint_local_addr(listener)
                 .expect("address")
                 .port(),
-            protocol: GameProtocol::new(9, 1),
+            protocol: GameProtocol::new(9, 1, 1),
             join_ticket: b"ticket".to_vec(),
         })
         .expect("connect by name");

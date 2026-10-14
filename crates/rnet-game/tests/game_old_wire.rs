@@ -25,7 +25,7 @@ fn old_join_and_resume_wire_never_reach_business_authorization() {
                     bind_addr: "127.0.0.1:0".parse().unwrap(),
                     local_key: key,
                     initial_encryption: true,
-                    protocol: GameProtocol::new(42, 3),
+                    protocol: GameProtocol::new(42, 3, 3),
                 })
                 .unwrap();
             // Literal old-format fixture, not an encoder that could silently follow new wire.

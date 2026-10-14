@@ -5,17 +5,17 @@ use crate::game_abi::{
     RnetGameSendOptions, RNET_GAME_PRIORITY_CRITICAL, RNET_GAME_PRIORITY_HIGH,
     RNET_GAME_PRIORITY_LOW, RNET_GAME_PRIORITY_NORMAL,
 };
-use crate::game_config_abi::{RnetGameClientConfig, RnetGameConfig, RnetGameServerConfig};
+use crate::game_config_abi::RnetGameConfig;
 use crate::game_registry;
 use crate::observe::build_game_logger;
 use crate::registry::{
-    copy_key, ffi_status, invalid_argument, parse_address, validate_struct, with_borrowed_slice,
+    copy_key, ffi_status, invalid_argument, validate_struct, with_borrowed_slice,
 };
 use crate::runtime::runtime_config;
-use rnet_core::{ErrorCode, Result, RnetError, Transport};
+use rnet_core::{ErrorCode, Result, RnetError};
 use rnet_game::{
-    GameHostClientConfig, GamePriority, GameProtocol, GameRuntime, GameRuntimeConfig,
-    GameSendOptions, GameServerConfig, RealtimeQueueConfig, ScheduledQueueConfig,
+    GamePriority, GameRuntime, GameRuntimeConfig, GameSendOptions, RealtimeQueueConfig,
+    ScheduledQueueConfig,
 };
 use rnet_security::Keypair;
 use rnet_transport::ClientSecurity;
@@ -183,120 +183,6 @@ unsafe fn client_security(client: RnetClientSecurity) -> Result<ClientSecurity> 
         let expected = unsafe { copy_key(client.expected_server_public_key) }?;
         Ok(ClientSecurity::pinned(key, expected.to_vec()))
     }
-}
-
-#[no_mangle]
-/// # Safety
-/// `config`, its slices, and `out` must remain valid during the call.
-pub unsafe extern "C" fn rnet_game_server_listen(
-    runtime: u64,
-    config: *const RnetGameServerConfig,
-    out: *mut u64,
-) -> i32 {
-    ffi_status(|| {
-        if config.is_null() || out.is_null() {
-            return invalid_argument("game server config and output must be non-null");
-        }
-        let config = unsafe { crate::registry::read_config(config) }?;
-        if config.reserved != 0 || config.initial_encryption > 1 {
-            return invalid_argument("invalid game server flags");
-        }
-        let private = Zeroizing::new(unsafe { copy_key(config.local_private_key) }?);
-        let key = Keypair::from_private(private.as_slice())
-            .map_err(|error| RnetError::new(ErrorCode::CryptoError, error.to_string()))?;
-        let endpoint = game_registry::lease(runtime)?
-            .runtime
-            .listen(GameServerConfig {
-                transport: Transport::try_from(config.transport)?,
-                bind_addr: unsafe { parse_address(config.bind_host, config.bind_port) }?,
-                local_key: key,
-                initial_encryption: config.initial_encryption == 1,
-                protocol: GameProtocol::new(config.protocol_id, config.protocol_version),
-            })?;
-        unsafe { out.write(endpoint) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// `config`, its slices, and `out` must remain valid during the call.
-pub unsafe extern "C" fn rnet_game_client_connect(
-    runtime: u64,
-    config: *const RnetGameClientConfig,
-    out: *mut u64,
-) -> i32 {
-    ffi_status(|| {
-        if config.is_null() || out.is_null() {
-            return invalid_argument("game client config and output must be non-null");
-        }
-        let config = unsafe { parse_game_client(config) }?;
-        let endpoint = game_registry::lease(runtime)?
-            .runtime
-            .connect_host(config)?;
-        unsafe { out.write(endpoint) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Performs a fresh handshake and requests server-side reauthorization of an old game session.
-///
-/// # Safety
-/// `config`, both slices, and `out` must remain valid during the call. The ticket is a bearer
-/// credential and must never be logged by the caller.
-pub unsafe extern "C" fn rnet_game_client_resume_connect(
-    runtime: u64,
-    config: *const RnetGameClientConfig,
-    old_session: u64,
-    resume_ticket: RnetSlice,
-    out: *mut u64,
-) -> i32 {
-    ffi_status(|| {
-        if config.is_null() || out.is_null() {
-            return invalid_argument("game client config and output must be non-null");
-        }
-        let config = unsafe { parse_game_client(config) }?;
-        let endpoint = unsafe {
-            with_borrowed_slice(resume_ticket, |ticket| {
-                game_registry::lease(runtime)?.runtime.connect_host_resume(
-                    config,
-                    old_session,
-                    ticket,
-                )
-            })
-        }?;
-        unsafe { out.write(endpoint) };
-        Ok(())
-    })
-}
-
-unsafe fn parse_game_client(config: *const RnetGameClientConfig) -> Result<GameHostClientConfig> {
-    let config = unsafe { crate::registry::read_config(config) }?;
-    if config.reserved != 0 || config.reserved2 != 0 || config.reserved3 != 0 {
-        return invalid_argument("game client reserved fields must be zero");
-    }
-    let host = unsafe {
-        with_borrowed_slice(config.remote_host, |bytes| {
-            std::str::from_utf8(bytes)
-                .map(str::to_owned)
-                .map_err(|_| RnetError::new(ErrorCode::InvalidArgument, "host is not UTF-8"))
-        })
-    }?;
-    let join_ticket =
-        unsafe { with_borrowed_slice(config.join_ticket, |bytes| Ok(bytes.to_vec())) }?;
-    Ok(GameHostClientConfig {
-        transport: Transport::try_from(config.transport)?,
-        host,
-        port: config.remote_port,
-        join_ticket,
-        protocol: GameProtocol {
-            protocol_id: config.protocol_id,
-            version: config.protocol_version,
-            build_id: config.build_id,
-            capabilities: config.capabilities,
-        },
-    })
 }
 
 #[no_mangle]

@@ -16,7 +16,7 @@ func TestGameProfileDefaults(t *testing.T) {
 		if err != nil || server.Transport != test.transport || server.InitialSecurity != SecurityEncrypted {
 			t.Fatalf("invalid server defaults for profile %d: %+v, %v", test.profile, server, err)
 		}
-		client, err := GameRangeClientConfigForProfile(test.profile)
+		client, err := GameClientConfigForProfile(test.profile)
 		if err != nil || client.Transport != test.transport {
 			t.Fatalf("invalid client defaults for profile %d: %+v, %v", test.profile, client, err)
 		}

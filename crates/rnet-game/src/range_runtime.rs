@@ -1,12 +1,12 @@
 //! Authenticated wire-v4 selection state machine and retry handling.
 
-use crate::config::GameProtocol;
 use crate::envelope::{encode_control, ControlKind};
 use crate::event::{GameEvent, GameMessage};
 use crate::join;
 use crate::range_state::{
     Phase, RangeSession, ACK, CONTROL_LEN, NEGOTIATION_TIMEOUT, READY, RETRY_INTERVAL, SELECT,
 };
+use crate::resume::SelectedProtocol;
 use crate::resume_runtime::ServerSessionMeta;
 use crate::runtime::GameRuntime;
 use rnet_core::{ErrorCode, Event, Handle, Result, RnetError};
@@ -54,11 +54,9 @@ impl GameRuntime {
                         "resume version is outside the supported range",
                     ));
                 }
-                let exact = GameProtocol {
+                let exact = SelectedProtocol {
                     protocol_id: join.protocol.protocol_id,
                     version,
-                    build_id: join.protocol.build_id,
-                    capabilities: join.protocol.capabilities,
                 };
                 state
                     .tickets
@@ -113,11 +111,9 @@ impl GameRuntime {
             event.session,
             ServerSessionMeta {
                 peer_key: request.client_public_key,
-                protocol: GameProtocol {
+                protocol: SelectedProtocol {
                     protocol_id: join.protocol.protocol_id,
                     version: selected,
-                    build_id: join.protocol.build_id,
-                    capabilities: join.protocol.capabilities,
                 },
             },
         );

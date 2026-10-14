@@ -1,9 +1,8 @@
 //! Server-authoritative resume orchestration; never treats a ticket as application authorization.
 
-use crate::config::{GameClientConfig, GameHostClientConfig, GameProtocol};
 use crate::envelope::{decode, encode_control, ControlKind, DecodedEnvelope};
 use crate::event::{GameEvent, ResumeTicket};
-use crate::resume::{ResumeClaim, ResumeRegistry, ResumeScope, TICKET_LEN};
+use crate::resume::{ResumeClaim, ResumeRegistry, ResumeScope, SelectedProtocol, TICKET_LEN};
 use crate::runtime::GameRuntime;
 use rnet_core::{ErrorCode, Event, Handle, Result, RnetError};
 use rnet_transport::AuthRequest;
@@ -14,7 +13,7 @@ use zeroize::Zeroizing;
 
 pub(crate) struct ServerSessionMeta {
     pub(crate) peer_key: [u8; 32],
-    pub(crate) protocol: GameProtocol,
+    pub(crate) protocol: SelectedProtocol,
 }
 
 pub(crate) struct ResumeRuntimeState {
@@ -108,28 +107,6 @@ impl GameRuntime {
                 .fetch_add(1, Ordering::Relaxed);
         }
         send
-    }
-
-    /// Client-only: performs a fresh Noise handshake with a previously issued resume ticket.
-    /// The old handle is local and only used for the eventual mapping event; the server validates
-    /// the ticket against its own old handle and re-runs application authorization.
-    pub fn connect_resume(
-        &self,
-        config: GameClientConfig,
-        old_session: Handle,
-        ticket: &[u8],
-    ) -> Result<Handle> {
-        self.connect_range_resume(config.into(), old_session, ticket)
-    }
-
-    /// The hostname variant of `connect_resume`; address-candidate fallback stays internal.
-    pub fn connect_host_resume(
-        &self,
-        config: GameHostClientConfig,
-        old_session: Handle,
-        ticket: &[u8],
-    ) -> Result<Handle> {
-        self.connect_host_range_resume(config.into(), old_session, ticket)
     }
 
     pub(crate) fn handle_game_control_event(&self, event: &Event) -> Result<Option<GameEvent>> {

@@ -24,7 +24,7 @@ fn closing_endpoint_releases_ready_state_and_pending_snapshots_without_another_p
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             local_key: server_key,
             initial_encryption: true,
-            protocol: GameProtocol::new(88, 1),
+            protocol: GameProtocol::new(88, 1, 1),
         })
         .unwrap();
     runtime
@@ -33,7 +33,7 @@ fn closing_endpoint_releases_ready_state_and_pending_snapshots_without_another_p
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).unwrap(),
             join_ticket: b"ticket".to_vec(),
-            protocol: GameProtocol::new(88, 1),
+            protocol: GameProtocol::new(88, 1, 1),
         })
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);

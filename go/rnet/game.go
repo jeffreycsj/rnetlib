@@ -109,71 +109,7 @@ func (r *GameRuntime) handleValue() (C.rnet_runtime_t, error) {
 	return r.handle, nil
 }
 
-func (r *GameRuntime) Listen(config GameServerConfig) (Endpoint, error) {
-	defer lockNativeThread()()
-	handle, err := r.handleValue()
-	if err != nil {
-		return 0, err
-	}
-	host := []byte(config.Host)
-	var endpoint C.rnet_endpoint_t
-	var encrypted C.uint32_t = 1
-	if config.InitialSecurity == SecurityPlaintext {
-		encrypted = 0
-	} else if config.InitialSecurity != 0 && config.InitialSecurity != SecurityEncrypted {
-		return 0, fmt.Errorf("rnet: invalid game initial security mode")
-	}
-	status := C.rnet_go_game_server_listen(
-		handle, C.uint32_t(config.Transport), bytePointer(host), C.size_t(len(host)),
-		C.uint16_t(config.Port), (*C.uint8_t)(unsafe.Pointer(&config.Keypair.Private[0])),
-		encrypted, C.uint64_t(config.Protocol.ID), C.uint32_t(config.Protocol.Version), &endpoint,
-	)
-	runtime.KeepAlive(config)
-	runtime.KeepAlive(host)
-	return Endpoint(endpoint), statusError(status)
-}
-
-func (r *GameRuntime) Connect(config GameClientConfig) (Endpoint, error) {
-	defer lockNativeThread()()
-	handle, err := r.handleValue()
-	if err != nil {
-		return 0, err
-	}
-	host := []byte(config.Host)
-	var endpoint C.rnet_endpoint_t
-	status := C.rnet_go_game_client_connect(
-		handle, C.uint32_t(config.Transport), bytePointer(host), C.size_t(len(host)),
-		C.uint16_t(config.Port), bytePointer(config.JoinTicket), C.size_t(len(config.JoinTicket)),
-		C.uint64_t(config.Protocol.ID), C.uint32_t(config.Protocol.Version),
-		C.uint64_t(config.Protocol.BuildID), C.uint64_t(config.Protocol.Capabilities), &endpoint,
-	)
-	runtime.KeepAlive(config)
-	runtime.KeepAlive(host)
-	return Endpoint(endpoint), statusError(status)
-}
-
 // ConnectResume performs a new handshake; a server ResumeRequest still requires AuthDecide.
-func (r *GameRuntime) ConnectResume(config GameClientConfig, oldSession Session, ticket []byte) (Endpoint, error) {
-	defer lockNativeThread()()
-	handle, err := r.handleValue()
-	if err != nil {
-		return 0, err
-	}
-	host := []byte(config.Host)
-	var endpoint C.rnet_endpoint_t
-	status := C.rnet_go_game_client_resume_connect(
-		handle, C.uint32_t(config.Transport), bytePointer(host), C.size_t(len(host)),
-		C.uint16_t(config.Port), bytePointer(config.JoinTicket), C.size_t(len(config.JoinTicket)),
-		C.uint64_t(config.Protocol.ID), C.uint32_t(config.Protocol.Version),
-		C.uint64_t(config.Protocol.BuildID), C.uint64_t(config.Protocol.Capabilities),
-		C.rnet_session_t(oldSession), bytePointer(ticket), C.size_t(len(ticket)), &endpoint,
-	)
-	runtime.KeepAlive(config)
-	runtime.KeepAlive(host)
-	runtime.KeepAlive(ticket)
-	return Endpoint(endpoint), statusError(status)
-}
-
 // IssueResumeTicket sends a one-use, server-authoritative ticket to the ready client.
 // Identity is opaque to RNet and must not be logged.
 func (r *GameRuntime) IssueResumeTicket(session Session, identity []byte) error {

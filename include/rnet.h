@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define RNET_ABI_VERSION 3u
+#define RNET_ABI_VERSION 4
 
 typedef uint64_t rnet_runtime_t;
 typedef uint64_t rnet_endpoint_t;
@@ -366,37 +366,8 @@ typedef struct rnet_game_config {
   const rnet_logger_t *logger;
 } rnet_game_config_t;
 
+/* Inclusive application versions. Equal min/max specifies an exact version. */
 typedef struct rnet_game_server_config {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint32_t transport;
-  uint32_t initial_encryption;
-  rnet_slice_t bind_host; /* Numeric IPv4 or IPv6. */
-  uint16_t bind_port;
-  uint16_t reserved;
-  rnet_slice_t local_private_key;
-  uint64_t protocol_id;
-  uint32_t protocol_version;
-} rnet_game_server_config_t;
-
-typedef struct rnet_game_client_config {
-  uint32_t struct_size;
-  uint32_t abi_version;
-  uint32_t transport;
-  uint32_t reserved;
-  rnet_slice_t remote_host; /* Hostname or numeric address. */
-  uint16_t remote_port;
-  uint16_t reserved2;
-  rnet_slice_t join_ticket;
-  uint64_t protocol_id;
-  uint32_t protocol_version;
-  uint32_t reserved3;
-  uint64_t build_id;
-  uint64_t capabilities;
-} rnet_game_client_config_t;
-
-/* Application version-range configs. Exact-version configs use the same wire with min=max. */
-typedef struct rnet_game_range_server_config {
   uint32_t struct_size;
   uint32_t abi_version;
   uint32_t transport;
@@ -408,9 +379,9 @@ typedef struct rnet_game_range_server_config {
   uint64_t protocol_id;
   uint32_t min_version;
   uint32_t max_version;
-} rnet_game_range_server_config_t;
+} rnet_game_server_config_t;
 
-typedef struct rnet_game_range_client_config {
+typedef struct rnet_game_client_config {
   uint32_t struct_size;
   uint32_t abi_version;
   uint32_t transport;
@@ -425,7 +396,7 @@ typedef struct rnet_game_range_client_config {
   uint32_t reserved3;
   uint64_t build_id;
   uint64_t capabilities;
-} rnet_game_range_client_config_t;
+} rnet_game_client_config_t;
 
 typedef struct rnet_game_event {
   uint32_t struct_size;
@@ -643,23 +614,13 @@ int32_t rnet_game_runtime_create(const rnet_game_config_t *config,
 int32_t rnet_game_server_listen(rnet_runtime_t runtime,
                                 const rnet_game_server_config_t *config,
                                 rnet_endpoint_t *out);
-int32_t rnet_game_server_listen_range(rnet_runtime_t runtime,
-                                      const rnet_game_range_server_config_t *config,
-                                      rnet_endpoint_t *out);
 int32_t rnet_game_client_connect(rnet_runtime_t runtime,
                                  const rnet_game_client_config_t *config,
                                  rnet_endpoint_t *out);
-int32_t rnet_game_client_connect_range(rnet_runtime_t runtime,
-                                       const rnet_game_range_client_config_t *config,
-                                       rnet_endpoint_t *out);
 /* Resume always yields new network handles, then requires another AUTH decision.
  * The server emits RESUME_REQUEST and both sides receive SESSION_RESUMED. */
 int32_t rnet_game_client_resume_connect(
     rnet_runtime_t runtime, const rnet_game_client_config_t *config,
-    rnet_session_t old_session, rnet_slice_t resume_ticket,
-    rnet_endpoint_t *out);
-int32_t rnet_game_client_resume_connect_range(
-    rnet_runtime_t runtime, const rnet_game_range_client_config_t *config,
     rnet_session_t old_session, rnet_slice_t resume_ticket,
     rnet_endpoint_t *out);
 /* Query succeeds for a selected wire-v4 session, including pending server auth. */

@@ -26,7 +26,7 @@ fn clients_sample_protected_clock_offset_on_all_transports() {
                 bind_addr: "127.0.0.1:0".parse().expect("address"),
                 local_key: server_key,
                 initial_encryption: true,
-                protocol: GameProtocol::new(99, 1),
+                protocol: GameProtocol::new(99, 1, 1),
             })
             .expect("listener");
         client
@@ -35,7 +35,7 @@ fn clients_sample_protected_clock_offset_on_all_transports() {
                 bind_addr: None,
                 remote_addr: server.endpoint_local_addr(listener).expect("address"),
                 join_ticket: b"ticket".to_vec(),
-                protocol: GameProtocol::new(99, 1),
+                protocol: GameProtocol::new(99, 1, 1),
             })
             .expect("connect");
         let deadline = Instant::now() + Duration::from_secs(3);

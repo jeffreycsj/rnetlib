@@ -1,6 +1,6 @@
 //! Game join metadata carried inside the Noise-protected client handshake payload.
 
-use crate::config::GameProtocolRange;
+use crate::config::GameProtocol;
 use rnet_core::{ErrorCode, Result, RnetError};
 
 // Only the current SDK wire is accepted, independently of application version ranges.
@@ -10,14 +10,14 @@ pub(crate) const HEADER_LEN: usize = 54;
 const RANGE_RESUME_HEADER_LEN: usize = 56;
 
 pub(crate) struct RangeJoinRequest<'a> {
-    pub protocol: GameProtocolRange,
+    pub protocol: GameProtocol,
     pub nonce: [u8; 16],
     pub ticket: &'a [u8],
     pub resume_ticket: Option<&'a [u8]>,
 }
 
 /// The server selects the highest common version, never a client-preferred downgrade.
-pub(crate) fn select_version(client: GameProtocolRange, server: GameProtocolRange) -> Option<u32> {
+pub(crate) fn select_version(client: GameProtocol, server: GameProtocol) -> Option<u32> {
     if !client.is_valid() || !server.is_valid() || client.protocol_id != server.protocol_id {
         return None;
     }
@@ -28,7 +28,7 @@ pub(crate) fn select_version(client: GameProtocolRange, server: GameProtocolRang
 
 /// Carries a bounded credential and nonce; an exact application version uses equal bounds.
 pub(crate) fn encode_range(
-    protocol: GameProtocolRange,
+    protocol: GameProtocol,
     nonce: [u8; 16],
     ticket: &[u8],
     maximum_len: usize,
@@ -37,7 +37,7 @@ pub(crate) fn encode_range(
 }
 
 pub(crate) fn encode_range_resume(
-    protocol: GameProtocolRange,
+    protocol: GameProtocol,
     nonce: [u8; 16],
     ticket: &[u8],
     resume_ticket: &[u8],
@@ -53,7 +53,7 @@ pub(crate) fn encode_range_resume(
 }
 
 fn encode_range_inner(
-    protocol: GameProtocolRange,
+    protocol: GameProtocol,
     nonce: [u8; 16],
     ticket: &[u8],
     resume_ticket: Option<&[u8]>,
@@ -111,7 +111,7 @@ pub(crate) fn decode_range(input: &[u8]) -> Result<RangeJoinRequest<'_>> {
     {
         return Err(invalid_join());
     }
-    let protocol = GameProtocolRange {
+    let protocol = GameProtocol {
         protocol_id: u64::from_be_bytes(input[4..12].try_into().expect("fixed protocol ID")),
         min_version: u32::from_be_bytes(input[12..16].try_into().expect("fixed minimum")),
         max_version: u32::from_be_bytes(input[16..20].try_into().expect("fixed maximum")),

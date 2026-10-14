@@ -37,13 +37,13 @@ fn verify_auth_diagnostics(range: bool) {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         local_key: server_key,
         initial_encryption: true,
-        protocol: GameProtocol::new(42, 3),
+        protocol: GameProtocol::new(42, 3, 3),
     };
     let listener = if range {
-        let mut config = rnet_game::GameRangeServerConfig::from(config);
+        let mut config = config;
         config.protocol.min_version = 1;
         config.protocol.max_version = 9;
-        runtime.listen_range(config)
+        runtime.listen(config)
     } else {
         runtime.listen(config)
     }
@@ -54,7 +54,7 @@ fn verify_auth_diagnostics(range: bool) {
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).unwrap(),
             join_ticket: b"private-login-proof".to_vec(),
-            protocol: GameProtocol::new(42, 3),
+            protocol: GameProtocol::new(42, 3, 3),
         })
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);

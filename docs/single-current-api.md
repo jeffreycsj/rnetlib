@@ -16,10 +16,11 @@
 - 旧 `secure_tcp` / `secure_datagram` / `secure_kcp` 执行模块及 Rust `secure_*` 构造器已删除；C `rnet_listener_open` / `rnet_client_join` 和配置类型、C++ `open_secure_*` / `join_secure*`、Go `OpenSecure*` / `JoinSecure*` 与 cgo 适配同步删除，不保留转发别名。共享 Noise、cookie、KCP 及现行服务器动态切换路径保留。
 
 - 旧无认证 TCP/UDP 执行模块、Rust 公开 `EndpointConfig` / `open_endpoint`、C `rnet_endpoint_open` 和配置/模式类型、C++/Go 包装及 `allow_legacy_unauthenticated_endpoints` 开关均已删除。内部角色不再可空；业务明文仍需服务器明确允许，且始终经过握手和授权。
+- 游戏配置已统一为 `GameProtocol` 的 min/max 闭区间；精确版本使用相等边界。Rust/C/C++11/Go/C# 均只保留普通 listen/connect/resume 入口及一套配置，不再导出 range 别名。选定版本查询、授权元数据和恢复时固定原选定版本的约束保留。
 
 ## 接入要求
 
-当前 `RNET_ABI_VERSION` 判别值为 3，只有一套实现，值 1 和 2 均不被接受。删除 legacy 配置字段后，即使平台填充导致尺寸不变，也不能与旧 SDK 混用。C 程序必须先检查 `rnet_abi_version() == RNET_ABI_VERSION`，再调用任何初始化/输出函数；C++11、Go、C# 的创建/密钥入口自动检查。ABI 判别不能替代调用方的指针有效性义务。
+当前 `RNET_ABI_VERSION` 判别值为 4，只有一套实现，值 1、2、3 均不被接受。端点配置统一为 min/max 后，即使平台填充导致尺寸不变，也不能与旧 SDK 混用。C 程序必须先检查 `rnet_abi_version() == RNET_ABI_VERSION`，再调用任何初始化/输出函数；C++11、Go、C# 的创建/密钥入口自动检查。ABI 判别不能替代调用方的指针有效性义务。
 
 配置的 `struct_size` 必须与当前头文件精确一致。FFI 先读取公共头，再读取通过校验的完整布局；短旧配置不会被提前当成大结构体复制。空 logger 表示禁用日志；非空 logger 必须有有效回调。logger 结构体只在创建时借用，回调及 user_data 必须有效且线程安全，直到 destroy 返回。不要在日志回调里 stop/destroy。
 
@@ -27,7 +28,7 @@
 
 ## 尚未完成
 
-1. 合并游戏 exact/range 公开配置和入口，并清理历史帧字段。游戏建连与恢复已统一到 wire-v4，精确业务版本表示为 min=max；不再执行 wire-v3，但 SDK 源码 API 收敛尚未完成。
+1. 清理底层传输历史帧字段及 Rust 原始事件字段。游戏建连/恢复 wire 和各语言 exact/range 公开配置与入口已统一，精确业务版本表示为 min=max。
 2. 最终 SDK/动态库/发布包全套验收、全范围对抗性复查。长稳压测按约定最后执行；跨实例恢复不在范围内。
 
 ## 阶段对抗性审查
@@ -37,9 +38,9 @@
 | 高，已修复 | FFI 配置读取 | 原先完整解引用后才检查大小；现先读公共头并严格验证布局，以 Linux 保护页测试短配置边界。 |
 | 中，已修复 | 延迟查询 | 合并时较新的传输查询会漏掉日志回调样本；累计与窗口各自记录，窗口轮转不清空累计，增加回归。 |
 | 中，已修复 | C++ SDK | ABI 检查仅放在初始创建/密钥入口，不在 noexcept 移动构造中调用可能抛异常的检查。 |
-| 未完成的需求 | 旧端点及游戏 wire | 旧端点和旧游戏 wire 路径已删除；须继续合并公开 exact/range 配置和入口，不能宣称全量去兼容已完成。Rust 旧发送入口已移除，但底层帧和 Rust 原始事件仍有历史字段，待 wire 收敛时一并清理。 |
+| 未完成的需求 | 历史帧与发布资格 | 旧端点、旧游戏 wire 和公开 exact/range 双入口已删除；底层帧和 Rust 原始事件仍有历史字段，不能宣称全量去兼容与发布验收已完成。 |
 
-测试盲区：保护页场景目前只在 Linux 执行；Windows/移动平台、ASan fuzz、独立安全审计和目标环境长稳尚未验收。整体评价：接口布局这一阶段已形成单一现行布局，但 SDK 源码 API、历史帧字段清理与最终发布资格未完成。历史 ABI/多布局兼容承诺不再适用于本分支。
+测试盲区：保护页场景目前只在 Linux 执行；Windows/移动平台、ASan fuzz、独立安全审计和目标环境长稳尚未验收。整体评价：接口布局与 SDK 源码 API 已统一，历史帧字段清理与最终发布资格未完成。历史 ABI/多布局兼容承诺不再适用于本分支。
 
 以下验证记录按阶段保留历史事实；当前剩余项以上方“尚未完成”和最新阶段记录为准。
 
@@ -167,3 +168,25 @@ TDD 顺序：先运行原有 C ABI 契约测试；新增旧接口消失门禁并
 在 `c0b54b7` 加本阶段修改树上串行验证通过：workspace 全量测试（游戏单测 96 项）、严格 workspace/all-targets Clippy、格式/结构/diff 检查、`make -j1 cpp-test go-test csharp-test abi-check`。Go 强制重建 native 链接，C# 三传输收发/动态加密/恢复/日志/错误及销毁路径通过，release 实际导出与头文件一致。`cargo check --offline --locked --manifest-path fuzz/Cargo.toml --bin game_wire` 通过，仅表示 fuzz 入口可构建，没有运行 ASan campaign。最终额外核对了新 join 头长度下的恰好预算、差一字节和 u16 票据长度上限回归。
 
 所有构建测试由 15 GiB 可用内存保护器监控。未提交或生成最终发布包，长稳继续后置；不能沿用历史 Go race、ASan fuzz、Miri、Loom 或第三方审计记录作为当前改动的资格证明。
+
+## 后续阶段：各语言游戏建连 API 统一（2026-10-14）
+
+Rust 仅保留 `GameProtocol::new(id, min, max)` 和普通 listen/connect/resume 系列。精确业务版本用相等边界，不再提供 `GameProtocolRange`、独立范围配置、方法别名或精确转范围桥接。C/C++11/Go/C# 同步使用一套 min/max 配置；profile 预设、域名解析、授权元数据、选定版本查询、动态加密和恢复语义保留。内部票据只记录已选定的协议 ID/版本，不再复用公开建连配置。
+
+唯一 ABI 标识更新为 4；不接受旧 SDK 的 1/2/3 布局，所有语言与 native 库须整体重建。此阶段未再次修改游戏 wire 编码，也未清理底层历史帧字段。删除的接口与转换代码可从 Git 历史恢复，不保留运行时兼容路径。
+
+### TDD、API 与对抗性复查
+
+| 检查点 | 处理与证据 |
+| --- | --- |
+| 双 API 容易只改文档、保留转发壳 | 旧类型/符号消失测试先在现有头文件失败，再删除实现；门禁覆盖头文件、导出清单、cgo/C++/Go/C#。Rust 编译拒绝测试验证旧类型、两参数构造和范围方法不可用，release 动态库实际符号另行检查。 |
+| 新字段可能落在旧布局填充中 | ABI 3 拒绝测试先失败再通过；保护页测试用当前尺寸、旧 ABI 头调用 listen/connect/resume，验证读取完整结构前拒绝。 |
+| 合并后测试可能只反复测相同配置 | 保留 TCP/UDP/KCP 上精确/范围交叉协商、不同版本交集及无交集拒绝；普通入口明确设置不同 min/max。恢复测试继续验证固定原版本、新句柄映射和协商失败保留旧会话。 |
+| 多语言改名可能丢失凭证清理/日志脱敏 | 保留 C# 临时私钥擦除、native token 释放、Go/Rust 配置与事件脱敏；各语言真实 native 联调检查收发、动态加密、恢复、日志及错误。Go 初次构建发现漏保留 fmt 导入，修复后重跑普通测试与 race。 |
+| 文档示例与实现不一致 | 当前接入说明改用唯一配置与 ABI 4；历史 additive API 规格明确标注被 single-current-api 取代。C++ 文档按实际字段配置，不声称存在未实现的构造函数。 |
+
+API 审查按本地 SDK 的命名、错误和破坏性兼容契约执行，不引入不适用的 REST 抽象。对抗性复查没有发现本阶段新增的未解决高严重度缺陷；这不是全库独立安全审计。历史帧字段、最终发布资格和平台验证仍是未完成项。
+
+验证基于 `75618f6` 加本地修改树，并非干净发布提交：串行 workspace 全量测试、严格 workspace/all-targets Clippy、格式/结构/diff 检查通过；C++11 四个示例、Go 强制 native 重建、C# Linux x86_64/.NET 8 三传输联调和 release 导出一致性通过。另行通过 `go test -a -race -p 1 -count=1 ./go/rnet`；`cargo check --offline --locked --manifest-path fuzz/Cargo.toml --bin game_wire --bin ffi_config` 仅证明 fuzz 入口可构建，没有执行 ASan campaign。最终门禁补强及测试改名后重新运行相关 Rust 回归和严格检查。
+
+构建测试串行并受至少 15 GiB 可用内存保护。本轮没有重跑 ASan fuzz、Miri、Loom 或第三方审计，没有生成最终发布包，也没有执行目标弱网长稳；数秒 soak smoke 仅算功能回归。下一步先清理历史帧字段，完成后在干净提交上执行全套资格验证，最后做目标环境长稳。

@@ -1,5 +1,7 @@
 # 游戏 wire v4 版本协商与可靠传输待发快照淘汰（已确认）
 
+历史规格：下面的追加式 exact/range API 和旧 SDK 兼容约定已被 [single-current-api](../single-current-api/spec.md) 取代。现行实现仅有一套 `GameProtocol`（min/max）和普通建连/恢复入口，不再保留旧 wire 或 range 别名；本文件保留当时设计记录，不作为当前接入指南。
+
 ## 需求概述
 
 保留现有 wire v3 精确版本 API 和行为，为需要多个业务协议版本的游戏新增受服务端认证的版本协商；同时让 `LatestOnly` 在 TCP/KCP 已进入传输待发队列、但尚未写入 socket 或交给 KCP 协议栈时仍能按 `(session, key)` 尽力替换旧快照。跨实例恢复不在本期范围内。

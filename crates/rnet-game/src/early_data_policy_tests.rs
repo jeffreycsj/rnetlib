@@ -3,8 +3,7 @@
 use crate::envelope::{encode_application, encode_udp_application};
 use crate::range_state::RangeRuntimeState;
 use crate::{
-    GameEvent, GameProtocolRange, GameRangeClientConfig, GameRangeServerConfig, GameRuntime,
-    GameRuntimeConfig,
+    GameClientConfig, GameEvent, GameProtocol, GameRuntime, GameRuntimeConfig, GameServerConfig,
 };
 use rnet_core::{ErrorCode, EventType, Transport};
 use rnet_security::Keypair;
@@ -26,9 +25,9 @@ fn early_data_exhaustion_closes_real_sessions_without_counting_malformed_plainte
                 ClientSecurity::pinned(Keypair::generate().unwrap(), server_key.public.clone()),
             )
             .unwrap();
-            let protocol = GameProtocolRange::new(96, 1, 2);
+            let protocol = GameProtocol::new(96, 1, 2);
             let listener = server
-                .listen_range(GameRangeServerConfig {
+                .listen(GameServerConfig {
                     transport,
                     bind_addr: "127.0.0.1:0".parse().unwrap(),
                     local_key: server_key,
@@ -37,7 +36,7 @@ fn early_data_exhaustion_closes_real_sessions_without_counting_malformed_plainte
                 })
                 .unwrap();
             client
-                .connect_range(GameRangeClientConfig {
+                .connect(GameClientConfig {
                     transport,
                     bind_addr: None,
                     remote_addr: server.endpoint_local_addr(listener).unwrap(),
@@ -47,7 +46,7 @@ fn early_data_exhaustion_closes_real_sessions_without_counting_malformed_plainte
                 .unwrap();
             // Keep the transport queue large, but make the independent game early-data budget
             // one slot. The second empty message must fail admission, not transport enqueueing.
-            // Preserve the pending endpoint policy installed by connect_range.
+            // Preserve the pending endpoint policy installed by connect.
             {
                 let mut range = client.range.lock().unwrap();
                 assert!(range.sessions.is_empty());

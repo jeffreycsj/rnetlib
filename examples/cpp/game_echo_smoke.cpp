@@ -11,7 +11,7 @@ int main() {
   rnet::GameServerOptions server;
   server.transport = rnet::Transport::Tcp;
   server.protocol.id = 77;
-  server.protocol.version = 1;
+  server.protocol.min_version = server.protocol.max_version = 1;
   rnet::Keypair client_key;
   std::array<uint8_t, 32> server_public_key;
   std::copy(server.keypair.public_key(), server.keypair.public_key() + 32,

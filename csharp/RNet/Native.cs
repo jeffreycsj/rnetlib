@@ -4,7 +4,7 @@ namespace RNet;
 
 internal static unsafe partial class Native
 {
-    internal const uint AbiVersion = 3;
+    internal const uint AbiVersion = 4;
     private const string Library = "rnet";
     internal static void CheckAbi() {
         if (rnet_abi_version() != AbiVersion) throw new NotSupportedException("RNet SDK/native ABI mismatch; rebuild and deploy together");
@@ -18,10 +18,7 @@ internal static unsafe partial class Native
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_runtime_create(GameConfig* config, Security* security, out ulong runtime);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_server_listen(ulong runtime, Server* config, out ulong endpoint);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_client_connect(ulong runtime, Client* config, out ulong endpoint);
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_server_listen_range(ulong runtime, RangeServer* config, out ulong endpoint);
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_client_connect_range(ulong runtime, RangeClient* config, out ulong endpoint);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_client_resume_connect(ulong runtime, Client* config, ulong oldSession, Slice ticket, out ulong endpoint);
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_client_resume_connect_range(ulong runtime, RangeClient* config, ulong oldSession, Slice ticket, out ulong endpoint);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_selected_protocol_version(ulong runtime, ulong session, out uint version);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_issue_resume_ticket(ulong runtime, ulong session, Slice identity);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_endpoint_local_port(ulong runtime, ulong endpoint, out ushort port);

@@ -29,7 +29,7 @@ func TestGameConcurrentErrorsRetainTheirNativeCause(t *testing.T) {
 				var got error
 				want := "unknown transport"
 				if rangeError {
-					_, got = r.ListenRange(GameRangeServerConfig{Transport: TransportTCP, Host: "127.0.0.1", Keypair: key})
+					_, got = r.Listen(GameServerConfig{Transport: TransportTCP, Host: "127.0.0.1", Keypair: key})
 					want = "invalid protocol range"
 				} else {
 					// Exact and range versions now share validation. Use another native

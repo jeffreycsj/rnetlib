@@ -38,13 +38,3 @@ func GameClientConfigForProfile(profile GameProfile) (GameClientConfig, error) {
 	transport, _, err := GameProfileDefaults(profile)
 	return GameClientConfig{Transport: transport}, err
 }
-
-func GameRangeServerConfigForProfile(profile GameProfile) (GameRangeServerConfig, error) {
-	transport, security, err := GameProfileDefaults(profile)
-	return GameRangeServerConfig{Transport: transport, InitialSecurity: security}, err
-}
-
-func GameRangeClientConfigForProfile(profile GameProfile) (GameRangeClientConfig, error) {
-	transport, _, err := GameProfileDefaults(profile)
-	return GameRangeClientConfig{Transport: transport}, err
-}

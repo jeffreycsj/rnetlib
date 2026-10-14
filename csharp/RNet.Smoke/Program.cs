@@ -28,9 +28,9 @@ foreach (var transport in new[] { Transport.Tcp, Transport.Udp, Transport.Kcp })
         AllowPlaintextBusinessData = true, HeartbeatIntervalMs = 20, HeartbeatTimeoutMs = 2000
     }, clientKey, serverKey.PublicKey);
     server.SetMetricsLogInterval(1);
-    var listener = server.Listen(new ServerOptions(serverKey) { Transport = transport, ProtocolId = 42, Version = 3 });
+    var listener = server.Listen(new ServerOptions(serverKey) { Transport = transport, ProtocolId = 42, MinVersion = 3, MaxVersion = 3 });
     var connector = client.Connect(new ClientOptions { Transport = transport, Host = "localhost",
-        Port = server.LocalPort(listener), ProtocolId = 42, Version = 3, JoinTicket = Encoding.UTF8.GetBytes("secret-ticket") });
+        Port = server.LocalPort(listener), ProtocolId = 42, MinVersion = 3, MaxVersion = 3, JoinTicket = Encoding.UTF8.GetBytes("secret-ticket") });
     ulong ss = 0, cs = 0;
     Pump(server, client, () => ss != 0 && cs != 0, e => {
         if (e.Type == GameEventType.AuthRequest) {
@@ -80,7 +80,7 @@ foreach (var transport in new[] { Transport.Tcp, Transport.Udp, Transport.Kcp })
     server.IssueResumeTicket(ss, Encoding.UTF8.GetBytes("secret-identity"));
     Pump(server, client, () => ticket != null, null, e => { if (e.Type == GameEventType.ResumeTicket) ticket = e.Data; });
     var oldServer = ss; var oldClient = cs;
-    client.ConnectResume(new ClientOptions { Transport = transport, Port = server.LocalPort(listener), ProtocolId = 42, Version = 3 }, cs, ticket!);
+    client.ConnectResume(new ClientOptions { Transport = transport, Port = server.LocalPort(listener), ProtocolId = 42, MinVersion = 3, MaxVersion = 3 }, cs, ticket!);
     Pump(server, client, () => ss != oldServer && cs != oldClient, e => {
         if (e.Type == GameEventType.ResumeRequest) {
             Require(e.RelatedSession == oldServer && Encoding.UTF8.GetString(e.Data) == "secret-identity", "resume identity/mapping");
@@ -88,8 +88,8 @@ foreach (var transport in new[] { Transport.Tcp, Transport.Udp, Transport.Kcp })
         }
         if (e.Type == GameEventType.SessionResumed) ss = e.Session;
     }, e => { if (e.Type == GameEventType.SessionResumed) { Require(e.RelatedSession == oldClient, "client mapping"); cs = e.Session; } });
-    var rangeListener = server.ListenRange(new ServerOptions(serverKey) { Transport = transport, ProtocolId = 84 }, 1, 5);
-    client.ConnectRange(new ClientOptions { Transport = transport, Port = server.LocalPort(rangeListener), ProtocolId = 84 }, 2, 4);
+    var rangeListener = server.Listen(new ServerOptions(serverKey) { Transport = transport, ProtocolId = 84 , MinVersion = 1, MaxVersion = 5 });
+    client.Connect(new ClientOptions { Transport = transport, Port = server.LocalPort(rangeListener), ProtocolId = 84 , MinVersion = 2, MaxVersion = 4 });
     bool rangeReady = false;
     Pump(server, client, () => rangeReady, e => {
         if (e.Type == GameEventType.AuthRequest) { Require(server.SelectedProtocolVersion(e.Session) == 4, "server selected range"); server.AuthDecide(e.Session, true); }

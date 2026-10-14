@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bind_addr: "127.0.0.1:0".parse()?,
         local_key: server_key,
         initial_encryption: true,
-        protocol: GameProtocol::new(0x4741_4d45, 1),
+        protocol: GameProtocol::new(0x4741_4d45, 1, 1),
     })?;
     let address = runtime.endpoint_local_addr(listener)?;
     let mut client_sessions = Vec::with_capacity(config.clients);
@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             bind_addr: None,
             remote_addr: address,
             join_ticket: (index as u32).to_be_bytes().to_vec(),
-            protocol: GameProtocol::new(0x4741_4d45, 1),
+            protocol: GameProtocol::new(0x4741_4d45, 1, 1),
         })?;
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut ready = None;

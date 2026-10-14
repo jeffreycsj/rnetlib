@@ -70,7 +70,7 @@ fn established_tcp_logs_eof_invalid_framing_and_security_timeout_without_payload
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
                 local_key: key,
                 initial_encryption: true,
-                protocol: GameProtocol::new(99, 1),
+                protocol: GameProtocol::new(99, 1, 1),
             })
             .unwrap();
         let server_addr = runtime.endpoint_local_addr(listener).unwrap();
@@ -102,7 +102,7 @@ fn established_tcp_logs_eof_invalid_framing_and_security_timeout_without_payload
                 bind_addr: None,
                 remote_addr,
                 join_ticket: b"secret-close-ticket".to_vec(),
-                protocol: GameProtocol::new(99, 1),
+                protocol: GameProtocol::new(99, 1, 1),
             })
             .unwrap();
         let (mut server_session, mut client_session) = (0, 0);

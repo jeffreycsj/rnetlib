@@ -36,20 +36,6 @@ inline GameClientOptions game_client_options(GameProfile profile) {
   return options;
 }
 
-inline GameRangeServerOptions game_range_server_options(GameProfile profile) {
-  GameRangeServerOptions options;
-  const GameProfileDefaults defaults = game_profile_defaults(profile);
-  options.transport = defaults.transport;
-  options.initial_encryption = defaults.initial_encryption;
-  return options;
-}
-
-inline GameRangeClientOptions game_range_client_options(GameProfile profile) {
-  GameRangeClientOptions options;
-  options.transport = game_profile_transport(profile);
-  return options;
-}
-
 }  // namespace rnet
 
 #endif

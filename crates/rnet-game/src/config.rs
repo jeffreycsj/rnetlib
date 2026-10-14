@@ -50,41 +50,13 @@ impl TryFrom<u32> for GameProfile {
     }
 }
 
-/// Exact application protocol identity selected by one client connection.
-///
-/// Version zero and protocol ID zero are reserved. The protocol ID must match the listener and
-/// the version must fall within its range; build and capability fields are authenticated join
-/// metadata for application policy, not permission to enable library features.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GameProtocol {
-    pub protocol_id: u64,
-    pub version: u32,
-    pub build_id: u64,
-    pub capabilities: u64,
-}
-
-impl GameProtocol {
-    pub const fn new(protocol_id: u64, version: u32) -> Self {
-        Self {
-            protocol_id,
-            version,
-            build_id: 0,
-            capabilities: 0,
-        }
-    }
-
-    pub(crate) fn is_valid(self) -> bool {
-        self.protocol_id != 0 && self.version != 0
-    }
-}
-
 /// Protocol identity and inclusive version interval for the current authenticated join.
 ///
 /// Build and capability values remain authenticated application metadata. They do not grant
 /// library capabilities. A range is valid only when its ID and both bounds are nonzero and the
 /// lower bound does not exceed the upper bound.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GameProtocolRange {
+pub struct GameProtocol {
     pub protocol_id: u64,
     pub min_version: u32,
     pub max_version: u32,
@@ -92,7 +64,9 @@ pub struct GameProtocolRange {
     pub capabilities: u64,
 }
 
-impl GameProtocolRange {
+impl GameProtocol {
+    /// Describes supported versions; endpoint creation validates the ID and bounds.
+    /// Use equal bounds to require one exact application version.
     pub const fn new(protocol_id: u64, min_version: u32, max_version: u32) -> Self {
         Self {
             protocol_id,
@@ -105,54 +79,6 @@ impl GameProtocolRange {
 
     pub(crate) fn is_valid(self) -> bool {
         self.protocol_id != 0 && self.min_version != 0 && self.min_version <= self.max_version
-    }
-}
-
-impl From<GameProtocol> for GameProtocolRange {
-    fn from(protocol: GameProtocol) -> Self {
-        Self {
-            protocol_id: protocol.protocol_id,
-            min_version: protocol.version,
-            max_version: protocol.version,
-            build_id: protocol.build_id,
-            capabilities: protocol.capabilities,
-        }
-    }
-}
-
-impl From<GameServerConfig> for GameRangeServerConfig {
-    fn from(config: GameServerConfig) -> Self {
-        Self {
-            transport: config.transport,
-            bind_addr: config.bind_addr,
-            local_key: config.local_key,
-            initial_encryption: config.initial_encryption,
-            protocol: config.protocol.into(),
-        }
-    }
-}
-
-impl From<GameClientConfig> for GameRangeClientConfig {
-    fn from(config: GameClientConfig) -> Self {
-        Self {
-            transport: config.transport,
-            bind_addr: config.bind_addr,
-            remote_addr: config.remote_addr,
-            join_ticket: config.join_ticket,
-            protocol: config.protocol.into(),
-        }
-    }
-}
-
-impl From<GameHostClientConfig> for GameRangeHostClientConfig {
-    fn from(config: GameHostClientConfig) -> Self {
-        Self {
-            transport: config.transport,
-            host: config.host,
-            port: config.port,
-            join_ticket: config.join_ticket,
-            protocol: config.protocol.into(),
-        }
     }
 }
 
@@ -251,45 +177,17 @@ pub struct GameServerConfig {
     pub local_key: Keypair,
     /// Initial business-data protection. The server may change it after authorization.
     pub initial_encryption: bool,
-    /// Exact protocol identity and version required before application authorization.
+    /// Inclusive application version range required before application authorization.
     pub protocol: GameProtocol,
 }
 
 impl GameServerConfig {
-    /// Creates an encrypted exact-version listener using the profile's recommended transport.
+    /// Creates an encrypted listener using the profile's recommended transport.
     pub fn for_profile(
         profile: GameProfile,
         bind_addr: SocketAddr,
         local_key: Keypair,
         protocol: GameProtocol,
-    ) -> Self {
-        Self {
-            transport: profile.transport(),
-            bind_addr,
-            local_key,
-            initial_encryption: true,
-            protocol,
-        }
-    }
-}
-
-/// Inclusive application version-range listener; exact versions use the same wire and state machine.
-#[derive(Clone, Debug)]
-pub struct GameRangeServerConfig {
-    pub transport: Transport,
-    pub bind_addr: SocketAddr,
-    pub local_key: Keypair,
-    pub initial_encryption: bool,
-    pub protocol: GameProtocolRange,
-}
-
-impl GameRangeServerConfig {
-    /// Creates an encrypted wire-v4 listener using the profile's recommended transport.
-    pub fn for_profile(
-        profile: GameProfile,
-        bind_addr: SocketAddr,
-        local_key: Keypair,
-        protocol: GameProtocolRange,
     ) -> Self {
         Self {
             transport: profile.transport(),
@@ -319,34 +217,6 @@ impl GameClientConfig {
         remote_addr: SocketAddr,
         join_ticket: Vec<u8>,
         protocol: GameProtocol,
-    ) -> Self {
-        Self {
-            transport: profile.transport(),
-            bind_addr: None,
-            remote_addr,
-            join_ticket,
-            protocol,
-        }
-    }
-}
-
-/// Explicit wire-v4 numeric-address client join.
-#[derive(Clone)]
-pub struct GameRangeClientConfig {
-    pub transport: Transport,
-    pub bind_addr: Option<SocketAddr>,
-    pub remote_addr: SocketAddr,
-    pub join_ticket: Vec<u8>,
-    pub protocol: GameProtocolRange,
-}
-
-impl GameRangeClientConfig {
-    /// Creates a numeric-address wire-v4 join using the profile's recommended transport.
-    pub fn for_profile(
-        profile: GameProfile,
-        remote_addr: SocketAddr,
-        join_ticket: Vec<u8>,
-        protocol: GameProtocolRange,
     ) -> Self {
         Self {
             transport: profile.transport(),
@@ -400,65 +270,10 @@ impl GameHostClientConfig {
     }
 }
 
-/// Explicit wire-v4 hostname client join.
-#[derive(Clone)]
-pub struct GameRangeHostClientConfig {
-    pub transport: Transport,
-    pub host: String,
-    pub port: u16,
-    pub join_ticket: Vec<u8>,
-    pub protocol: GameProtocolRange,
-}
-
-impl GameRangeHostClientConfig {
-    /// Creates a hostname wire-v4 join using the profile's recommended transport.
-    pub fn for_profile(
-        profile: GameProfile,
-        host: String,
-        port: u16,
-        join_ticket: Vec<u8>,
-        protocol: GameProtocolRange,
-    ) -> Self {
-        Self {
-            transport: profile.transport(),
-            host,
-            port,
-            join_ticket,
-            protocol,
-        }
-    }
-}
-
 impl std::fmt::Debug for GameHostClientConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("GameHostClientConfig")
-            .field("transport", &self.transport)
-            .field("host", &self.host)
-            .field("port", &self.port)
-            .field("join_ticket_len", &self.join_ticket.len())
-            .field("protocol", &self.protocol)
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for GameRangeClientConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("GameRangeClientConfig")
-            .field("transport", &self.transport)
-            .field("bind_addr", &self.bind_addr)
-            .field("remote_addr", &self.remote_addr)
-            .field("join_ticket_len", &self.join_ticket.len())
-            .field("protocol", &self.protocol)
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for GameRangeHostClientConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("GameRangeHostClientConfig")
             .field("transport", &self.transport)
             .field("host", &self.host)
             .field("port", &self.port)

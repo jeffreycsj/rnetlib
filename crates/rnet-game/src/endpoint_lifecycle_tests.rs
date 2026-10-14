@@ -1,7 +1,7 @@
 use crate::resume::ResumeScope;
 use crate::{
-    GameClientConfig, GameEvent, GameProtocol, GameProtocolRange, GameRangeServerConfig,
-    GameRuntime, GameRuntimeConfig, GameSendOptions, GameServerConfig,
+    GameClientConfig, GameEvent, GameProtocol, GameRuntime, GameRuntimeConfig, GameSendOptions,
+    GameServerConfig,
 };
 use rnet_core::{ErrorCode, Transport};
 use rnet_security::Keypair;
@@ -27,7 +27,7 @@ fn failed_datagram_join_is_reaped_even_when_only_zero_capacity_game_poll_runs() 
                 bind_addr: None,
                 remote_addr: blackhole.local_addr().unwrap(),
                 join_ticket: Vec::new(),
-                protocol: GameProtocol::new(77, 1),
+                protocol: GameProtocol::new(77, 1, 1),
             })
             .unwrap();
         assert!(runtime
@@ -68,7 +68,7 @@ fn lost_endpoint_notifications_do_not_retain_game_state_or_pending_authorization
                 ClientSecurity::pinned(Keypair::generate().unwrap(), key.public.clone()),
             )
             .unwrap();
-            let protocol = GameProtocol::new(77, 1);
+            let protocol = GameProtocol::new(77, 1, 1);
             let listener = runtime
                 .listen(GameServerConfig {
                     transport: Transport::Udp,
@@ -140,7 +140,10 @@ fn lost_endpoint_notifications_do_not_retain_game_state_or_pending_authorization
                         endpoint: listener,
                         session,
                         peer_key: [7; 32],
-                        protocol,
+                        protocol: crate::resume::SelectedProtocol::new(
+                            protocol.protocol_id,
+                            protocol.min_version,
+                        ),
                     },
                     b"identity",
                     Instant::now(),
@@ -200,7 +203,16 @@ fn lost_endpoint_notifications_do_not_retain_game_state_or_pending_authorization
                 .lock()
                 .unwrap()
                 .tickets
-                .consume(&ticket, listener, [7; 32], protocol, Instant::now(),)
+                .consume(
+                    &ticket,
+                    listener,
+                    [7; 32],
+                    crate::resume::SelectedProtocol::new(
+                        protocol.protocol_id,
+                        protocol.min_version
+                    ),
+                    Instant::now(),
+                )
                 .is_err());
             assert!(runtime.endpoint_local_addr(other).is_ok());
             assert!(runtime
@@ -221,12 +233,12 @@ fn lost_endpoint_notifications_do_not_retain_game_state_or_pending_authorization
 fn lost_empty_range_endpoint_notification_releases_its_policy() {
     let runtime = GameRuntime::new(GameRuntimeConfig::production()).unwrap();
     let endpoint = runtime
-        .listen_range(GameRangeServerConfig {
+        .listen(GameServerConfig {
             transport: Transport::Kcp,
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             local_key: Keypair::generate().unwrap(),
             initial_encryption: true,
-            protocol: GameProtocolRange::new(99, 1, 2),
+            protocol: GameProtocol::new(99, 1, 2),
         })
         .unwrap();
     runtime.network.close_endpoint(endpoint).unwrap();
@@ -269,7 +281,7 @@ fn endpoint_registration_does_not_wait_for_a_blocking_game_poll() {
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
                 local_key: key,
                 initial_encryption: true,
-                protocol: crate::GameProtocol::new(42, 3),
+                protocol: crate::GameProtocol::new(42, 3, 3),
             })
             .unwrap();
         let client = worker_runtime
@@ -278,7 +290,7 @@ fn endpoint_registration_does_not_wait_for_a_blocking_game_poll() {
                 bind_addr: None,
                 remote_addr: worker_runtime.endpoint_local_addr(listener).unwrap(),
                 join_ticket: b"login".to_vec(),
-                protocol: crate::GameProtocol::new(42, 3),
+                protocol: crate::GameProtocol::new(42, 3, 3),
             })
             .unwrap();
         let _ = sender.send((listener, client));

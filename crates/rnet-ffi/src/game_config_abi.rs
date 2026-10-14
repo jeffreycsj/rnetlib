@@ -50,43 +50,10 @@ impl Default for RnetGameConfig {
     }
 }
 
+/// Inclusive application versions; equal bounds select an exact version.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RnetGameServerConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub transport: u32,
-    pub initial_encryption: u32,
-    pub bind_host: RnetSlice,
-    pub bind_port: u16,
-    pub reserved: u16,
-    pub local_private_key: RnetSlice,
-    pub protocol_id: u64,
-    pub protocol_version: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetGameClientConfig {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub transport: u32,
-    pub reserved: u32,
-    pub remote_host: RnetSlice,
-    pub remote_port: u16,
-    pub reserved2: u16,
-    pub join_ticket: RnetSlice,
-    pub protocol_id: u64,
-    pub protocol_version: u32,
-    pub reserved3: u32,
-    pub build_id: u64,
-    pub capabilities: u64,
-}
-
-/// Explicit wire-v4 listener. Existing exact-version game config retains wire v3.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RnetGameRangeServerConfig {
     pub struct_size: u32,
     pub abi_version: u32,
     pub transport: u32,
@@ -103,7 +70,7 @@ pub struct RnetGameRangeServerConfig {
 /// Explicit wire-v4 hostname join, including metadata authenticated in the join payload.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct RnetGameRangeClientConfig {
+pub struct RnetGameClientConfig {
     pub struct_size: u32,
     pub abi_version: u32,
     pub transport: u32,

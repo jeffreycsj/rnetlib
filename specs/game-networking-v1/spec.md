@@ -187,7 +187,7 @@ Connecting -> Handshaking -> AwaitingAuthorization -> Ready
 - README 主入口改为游戏网络库；通用底层接口移动到“Advanced transport API”。
 - 新项目默认使用 `GameRuntimeConfig::production()`；旧 `RuntimeConfig::default()` 的兼容语义不作为游戏层默认值传播。
 - wire v1 外层 frame 不修改；其 `msg_type=0`、`stream_id=0`，game envelope 放入消息体，便于灰度和版本协商且不破坏已有 ABI。
-- 当前实现只保留 wire v4；精确业务版本转换为 min=max，和 `GameProtocolRange` 共用一套协商，由服务端选择交集内最高版本，并通过 Noise 保护的 SELECT/ACK/READY 确认；旧 SDK wire 被拒绝，公开 exact/range 类型合并仍在 single-current-api 迁移范围内。
+- 当前实现只保留 wire v4；统一的 `GameProtocol` 使用 min/max 闭区间，精确业务版本表示为 min=max。各语言仅保留普通建连/恢复入口，由服务端选择交集内最高版本，并通过 Noise 保护的 SELECT/ACK/READY 确认；旧 SDK wire 与 ABI 被拒绝，不保留公开 exact/range 双类型或方法别名。
 
 ### 纯度边界
 

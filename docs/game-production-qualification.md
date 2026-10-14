@@ -11,8 +11,8 @@ changes do not inherit those ASan, Miri, Loom, Go race or packaged-binary result
 [incremental migration record](single-current-api.md) for the narrower checks actually rerun.
 
 Final qualification must reference one clean release commit and its exact native/SDK package
-hashes. Old-endpoint removal and single-wire game negotiation are implemented; finish public
-exact/range API consolidation, historical frame-field cleanup and their failure-path regressions,
+hashes. Old-endpoint removal, single-wire game negotiation and public exact/range API consolidation
+are implemented; finish historical frame-field cleanup and its failure-path regressions,
 then rerun repository/ABI/multilanguage, Go race, ASan fuzz, Miri and Loom gates; only then perform
 target weak-network tests and 24–72 hour soak. None of these local checks constitutes an
 independent audit of snow, ring or their Noise/KCP integration.

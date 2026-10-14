@@ -7,9 +7,7 @@ rnet_endpoint_local_port
 rnet_game_auth_decide
 rnet_game_buffer_release
 rnet_game_client_connect
-rnet_game_client_connect_range
 rnet_game_client_resume_connect
-rnet_game_client_resume_connect_range
 rnet_game_clock_micros
 rnet_game_clock_sync_snapshot
 rnet_game_config_init
@@ -35,7 +33,6 @@ rnet_game_send
 rnet_game_send_ex
 rnet_game_send_latest
 rnet_game_server_listen
-rnet_game_server_listen_range
 rnet_game_session_close
 rnet_game_transport_latest_replacements
 rnet_game_transport_latest_snapshot

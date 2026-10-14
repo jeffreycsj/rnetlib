@@ -23,7 +23,7 @@ See [Game networking quick start](docs/game-networking.md) for Rust, C, C++11, a
 
 New deployments should use the transport-neutral `listen`/`connect` APIs. TCP, UDP, or KCP is a configuration value fixed when the endpoint is created; it never appears in the send API. The server chooses the initial application-data security mode and may switch or rekey a live session. Clients follow those authenticated changes automatically.
 
-This branch is migrating to a single current SDK/wire implementation. Old SDKs are **not compatible** with the current API; rebuild the SDK and native library together. Separate legacy secure TCP/UDP/KCP implementations and their SDK entry points have been removed. Unauthenticated endpoint implementations, their opt-in switch and their SDK APIs have also been removed; only authenticated endpoints remain. Game joins now use one wire; the public exact/range configuration types and entry points still need consolidation: see [migration status](docs/single-current-api.md).
+This branch is migrating to a single current SDK/wire implementation. Old SDKs are **not compatible** with the current API; rebuild the SDK and native library together. Separate legacy secure TCP/UDP/KCP implementations and their SDK entry points have been removed. Unauthenticated endpoint implementations, their opt-in switch and their SDK APIs have also been removed; only authenticated endpoints remain. Game joins use one wire and one public configuration/API across Rust, C, C++11, Go and C#. Historical transport-frame fields and final release qualification still need cleanup: see [migration status](docs/single-current-api.md).
 
 ## Game API quick start
 
@@ -38,7 +38,7 @@ let listener = runtime.listen(GameServerConfig::for_profile(
     GameProfile::ReliableRealtime,
     "127.0.0.1:7000".parse()?,
     Keypair::generate()?,
-    GameProtocol::new(0x4741_4d45, 1),
+    GameProtocol::new(0x4741_4d45, 1, 1),
 ))?;
 ```
 
@@ -87,7 +87,7 @@ The [game networking guide](docs/game-networking.md#sending-and-receiving) conta
 
 For replaceable state snapshots, use `send_latest(session, key, payload)`. Repeated sends with the same `(session, key)` coalesce in a bounded game queue before `poll(...)` or `flush_realtime(capacity)` forwards them. TCP/KCP can also replace a keyed snapshot while it remains in the transport-pending slot; once the I/O worker takes the slot, socket writes and KCP-owned data cannot be recalled. `transport_latest_snapshot()` exposes pending replacements, irreversible worker pickups and admission failures by stable reason. Ordinary reliable sends retain FIFO semantics.
 
-For an application version range, use `GameProtocolRange::new(id, min_version, max_version)` with `listen_range` / `connect_range` (or `connect_host_range`). The server chooses the highest common version under authenticated control, and `selected_protocol_version(session)` exposes it during authorization. `listen` / `connect` also use this negotiation, with min=max; both peers must poll until game readiness. Previous wire-v3 SDKs are rejected. Equivalent additive entry points are `rnet_game_*_range` in C, `rnet::GameRuntime::{listen_range,connect_range}` in C++11, and `GameRuntime.ListenRange` / `ConnectRange` in Go. See the [range integration test](crates/rnet-game/tests/game_range.rs) and [C++11 example](examples/cpp/game_range_smoke.cpp).
+Use `GameProtocol::new(id, min_version, max_version)` with `listen` / `connect` (or `connect_host`). Bounds are inclusive; equal bounds require an exact application version. The server chooses the highest common version under authenticated control, and `selected_protocol_version(session)` exposes it during authorization. Both peers must poll until game readiness. C, C++11, Go and C# use the same min/max configuration through their ordinary listen/connect/resume methods; there are no separate range aliases. Previous SDK wire formats and ABI layouts are rejected; the sole current ABI discriminator is 4. See the [negotiation integration test](crates/rnet-game/tests/game_range.rs) and [C++11 example](examples/cpp/game_range_smoke.cpp).
 
 See the [game networking guide](docs/game-networking.md), the [TCP/UDP/KCP integration test](crates/rnet-game/tests/game_runtime.rs), the [C++11 example](examples/cpp/game_echo_smoke.cpp), and the [Go tests](go/rnet/game_test.go) for client setup, event handling, and security transitions. Raw UDP does not guarantee delivery; choose KCP or TCP if your game requires reliable messages.
 

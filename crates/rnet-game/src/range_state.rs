@@ -1,6 +1,6 @@
 //! Bounded state owned by authenticated wire-v4 protocol negotiation.
 
-use crate::config::GameProtocolRange;
+use crate::config::GameProtocol;
 use crate::event::{GameEvent, GameMessage};
 use rnet_core::{ErrorCode, Handle, Result, RnetError};
 use std::collections::{HashMap, VecDeque};
@@ -34,7 +34,7 @@ pub struct RangeBufferSnapshot {
 
 #[derive(Clone, Copy)]
 pub(crate) struct ClientPending {
-    pub(crate) protocol: GameProtocolRange,
+    pub(crate) protocol: GameProtocol,
     pub(crate) nonce: [u8; 16],
 }
 
@@ -50,7 +50,7 @@ pub(crate) enum Phase {
 
 pub(crate) struct RangeSession {
     pub(crate) endpoint: Handle,
-    pub(crate) protocol: GameProtocolRange,
+    pub(crate) protocol: GameProtocol,
     pub(crate) nonce: [u8; 16],
     pub(crate) selected: Option<u32>,
     pub(crate) server_handle: Handle,
@@ -83,7 +83,7 @@ struct CompletedEvent {
 }
 
 pub(crate) struct RangeRuntimeState {
-    pub(crate) server_endpoints: HashMap<Handle, GameProtocolRange>,
+    pub(crate) server_endpoints: HashMap<Handle, GameProtocol>,
     pub(crate) client_endpoints: HashMap<Handle, ClientPending>,
     pub(crate) sessions: HashMap<Handle, RangeSession>,
     completed: VecDeque<CompletedEvent>,
@@ -364,7 +364,7 @@ mod tests {
     fn session(phase: Phase, now: Instant) -> RangeSession {
         RangeSession {
             endpoint: 1,
-            protocol: GameProtocolRange::new(9, 2, 7),
+            protocol: GameProtocol::new(9, 2, 7),
             nonce: [3; 16],
             selected: Some(6),
             server_handle: 11,

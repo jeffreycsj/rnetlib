@@ -10,14 +10,6 @@ import (
 	"time"
 )
 
-// GameProtocol is an exact application protocol identity, checked before business authorization.
-type GameProtocol struct {
-	ID           uint64
-	Version      uint32
-	BuildID      uint64
-	Capabilities uint64
-}
-
 type GamePriority uint32
 
 const (
@@ -66,38 +58,6 @@ type GameScheduledQueueConfig struct {
 	MaxQueuedMessages     uint64
 	FlushBatch            uint64
 }
-
-type GameServerConfig struct {
-	Transport Transport
-	Host      string
-	Port      uint16
-	Keypair   Keypair
-	// Zero means encrypted; plaintext must be chosen explicitly.
-	InitialSecurity SecurityMode
-	Protocol        GameProtocol
-}
-
-func (config GameServerConfig) String() string {
-	return fmt.Sprintf("GameServerConfig{Transport:%d Host:%q Port:%d InitialSecurity:%d ProtocolID:%d Version:%d Keypair:<redacted>}",
-		config.Transport, config.Host, config.Port, config.InitialSecurity, config.Protocol.ID, config.Protocol.Version)
-}
-
-func (config GameServerConfig) GoString() string { return config.String() }
-
-type GameClientConfig struct {
-	Transport  Transport
-	Host       string
-	Port       uint16
-	JoinTicket []byte
-	Protocol   GameProtocol
-}
-
-func (config GameClientConfig) String() string {
-	return fmt.Sprintf("GameClientConfig{Transport:%d Host:%q Port:%d ProtocolID:%d Version:%d JoinTicketLen:%d}",
-		config.Transport, config.Host, config.Port, config.Protocol.ID, config.Protocol.Version, len(config.JoinTicket))
-}
-
-func (config GameClientConfig) GoString() string { return config.String() }
 
 type GameEventType uint32
 
