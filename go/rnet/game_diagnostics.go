@@ -9,6 +9,7 @@ import "time"
 
 // SetMetricsLogInterval controls cumulative P95/P99 summaries sent to the configured
 // logger by Poll. Zero disables summaries; the default is 30 seconds.
+// Negative values fail; positive values round up to whole milliseconds.
 func (r *GameRuntime) SetMetricsLogInterval(interval time.Duration) error {
 	defer lockNativeThread()()
 	if interval < 0 {

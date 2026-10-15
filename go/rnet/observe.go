@@ -10,41 +10,75 @@ import (
 	"time"
 )
 
+// Metrics combines runtime-wide cumulative counters and instantaneous queue gauges.
+// Concurrent updates mean fields are not one atomic snapshot; reads do not reset counters.
 type Metrics struct {
-	FramesReceived            uint64
-	FramesSent                uint64
-	BytesReceived             uint64
-	BytesSent                 uint64
-	EventsDropped             uint64
-	SendWouldBlock            uint64
-	ProtocolErrors            uint64
-	LifecycleEventsRejected   uint64
-	AdmissionRejected         uint64
-	QueuedSendBytes           uint64
-	PeakQueuedSendBytes       uint64
-	QueuedEventBytes          uint64
-	CurrentEndpoints          uint64
-	CurrentSessions           uint64
-	EstablishedSessions       uint64
-	PendingHandshakes         uint64
-	PeakPendingHandshakes     uint64
+	// FramesReceived cumulative logical frames received, not raw IP packets.
+	FramesReceived uint64
+	// FramesSent cumulative logical frames accepted for transport sending, not remote acknowledgements.
+	FramesSent uint64
+	// BytesReceived cumulative decoded frame body bytes received; excludes outer framing.
+	BytesReceived uint64
+	// BytesSent cumulative logical encoded frame bytes sent; includes logical framing.
+	BytesSent uint64
+	// EventsDropped cumulative transport event queue admission failures.
+	EventsDropped uint64
+	// SendWouldBlock cumulative transport send backpressure rejections.
+	SendWouldBlock uint64
+	// ProtocolErrors cumulative malformed/invalid transport-protocol input observations.
+	ProtocolErrors uint64
+	// LifecycleEventsRejected cumulative failed lifecycle-event admissions; cleanup does not depend on delivery.
+	LifecycleEventsRejected uint64
+	// AdmissionRejected cumulative endpoint/session/handshake admission failures.
+	AdmissionRejected uint64
+	// QueuedSendBytes current send byte reservations; includes framing, not total process RSS.
+	QueuedSendBytes uint64
+	// PeakQueuedSendBytes highest runtime send byte reservation observed.
+	PeakQueuedSendBytes uint64
+	// QueuedEventBytes current payload bytes awaiting transport poll; excludes exported buffer tokens.
+	QueuedEventBytes uint64
+	// CurrentEndpoints current registered endpoints, including listeners and client connections.
+	CurrentEndpoints uint64
+	// CurrentSessions current registered sessions including unfinished handshakes.
+	CurrentSessions uint64
+	// EstablishedSessions current transport-open sessions; not proof of game readiness.
+	EstablishedSessions uint64
+	// PendingHandshakes current sessions awaiting transport handshake/authorization.
+	PendingHandshakes uint64
+	// PeakPendingHandshakes highest pending-handshake count observed.
+	PeakPendingHandshakes uint64
+	// AdmissionRejectedByReason counts: endpoint, endpoint-session, pending, IP-active, IP-rate, IP-table, KCP-peer, unauthenticated.
 	AdmissionRejectedByReason [8]uint64
-	SessionClosedByReason     [19]uint64
-	LogsDropped               uint64
-	LoggerPanics              uint64
+	// SessionClosedByReason cumulative closes indexed by negated error code, 0..18 (zero maps to 0).
+	SessionClosedByReason [19]uint64
+	// LogsDropped cumulative bounded logger admission drops; zero also when no logger is installed.
+	LogsDropped uint64
+	// LoggerPanics cumulative caught Rust logger panics; foreign exceptions must never cross the C boundary.
+	LoggerPanics uint64
 }
 
+// LatencyMetric summarizes one operation's histogram. Durations have native microsecond
+// precision; SampleCount zero means unavailable, not zero latency. Percentiles are estimates.
 type LatencyMetric struct {
-	Kind        LatencyKind
+	// Kind identifies the sampled operation; duration fields use native microsecond precision.
+	Kind LatencyKind
+	// SampleCount samples represented; zero means unavailable, not measured zero latency.
 	SampleCount uint64
-	P50         time.Duration
-	P90         time.Duration
-	P95         time.Duration
-	P99         time.Duration
-	P999        time.Duration
-	Max         time.Duration
+	// P50 estimated median latency; histogram bucket approximation.
+	P50 time.Duration
+	// P90 estimated 90th percentile latency.
+	P90 time.Duration
+	// P95 estimated 95th percentile latency.
+	P95 time.Duration
+	// P99 estimated 99th percentile latency.
+	P99 time.Duration
+	// P999 estimated 99.9th percentile latency.
+	P999 time.Duration
+	// Max largest sampled duration; concurrent snapshots are not atomic across all fields.
+	Max time.Duration
 }
 
+// Metrics returns a copied runtime-wide transport snapshot without resetting counters.
 func (r *Runtime) Metrics() (Metrics, error) {
 	defer lockNativeThread()()
 	var result Metrics
@@ -82,11 +116,14 @@ func (r *Runtime) Metrics() (Metrics, error) {
 	return result, nil
 }
 
+// LatencyMetrics returns cumulative per-kind histograms without rotating them.
+// Check SampleCount before interpreting P95/P99; these are not all end-to-end message latencies.
 func (r *Runtime) LatencyMetrics() ([]LatencyMetric, error) {
 	return r.latencyMetrics(false)
 }
 
-// DrainLatencyMetrics returns and rotates the current interval histogram.
+// DrainLatencyMetrics reads and rotates per-kind interval histograms.
+// Kinds rotate independently, not as one atomic window; concurrent consumers split samples.
 func (r *Runtime) DrainLatencyMetrics() ([]LatencyMetric, error) {
 	return r.latencyMetrics(true)
 }
@@ -125,6 +162,9 @@ func (r *Runtime) latencyMetrics(drain bool) ([]LatencyMetric, error) {
 	return result, nil
 }
 
+// SetMetricsLogInterval changes automatic transport summary logging.
+// interval is truncated to whole milliseconds: zero disables, a negative converted
+// value or uint32-millisecond overflow fails. Install a logger to receive summaries.
 func (r *Runtime) SetMetricsLogInterval(interval time.Duration) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()

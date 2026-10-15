@@ -18,6 +18,9 @@ doc-check:
 	cargo test -p rnet-game -p rnet-observe --doc
 
 cpp-test:
+	mkdir -p target
+	g++ -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp cpp/tests/poll_ownership.cpp -o target/rnet-cpp-poll-ownership
+	./target/rnet-cpp-poll-ownership
 	cargo build -p rnet-ffi
 	g++ -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp examples/cpp/echo_smoke.cpp target/debug/librnet.a -lpthread -ldl -lm -o target/rnet-cpp-echo
 	./target/rnet-cpp-echo
@@ -34,6 +37,8 @@ go-test:
 	cp target/debug/librnet.a lib/librnet.a
 	# Go's cache does not track changes to the externally linked native archive.
 	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 ./go/rnet
+	# Test-only Linux linker interception checks partial exports against real native buffers.
+	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 -tags rnet_test_faults -run TestGamePollFailureReleasesOnlyExportedPrefix ./go/rnet
 
 csharp-test:
 	cargo build -p rnet-ffi

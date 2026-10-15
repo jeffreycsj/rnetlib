@@ -10,7 +10,9 @@ import (
 	"unsafe"
 )
 
-// Listen opens a server endpoint. The transport is selected by config, not by the method name.
+// Listen binds a numeric IP using config's fixed transport and copies its server key.
+// Port zero requests an assigned port, readable with LocalPort. A returned endpoint
+// is not a session: Poll, authorize EventAuthRequest, then await EventSessionOpened.
 func (r *Runtime) Listen(config ServerConfig) (Endpoint, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -28,7 +30,10 @@ func (r *Runtime) Listen(config ServerConfig) (Endpoint, error) {
 	return Endpoint(endpoint), statusError(status)
 }
 
-// Connect starts a client connection; encryption is negotiated and handled internally.
+// Connect starts an authenticated connection using the constructor's ClientSecurity.
+// Host accepts a DNS name or numeric IP, not a URL; DNS resolution can block up to
+// the configured timeout. The returned endpoint is not ready: await EventSessionOpened.
+// JoinPayload is copied; failures may also arrive asynchronously as EventJoinFailed.
 func (r *Runtime) Connect(config ClientConfig) (Endpoint, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -46,6 +51,8 @@ func (r *Runtime) Connect(config ClientConfig) (Endpoint, error) {
 	return Endpoint(endpoint), statusError(status)
 }
 
+// LocalPort returns the bound port for a live endpoint owned by this runtime.
+// It is useful after Listen with port zero; stale or foreign handles are invalid.
 func (r *Runtime) LocalPort(endpoint Endpoint) (uint16, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -57,6 +64,8 @@ func (r *Runtime) LocalPort(endpoint Endpoint) (uint16, error) {
 	return uint16(port), err
 }
 
+// CloseEndpoint closes the given local endpoint and its sessions, including a listener.
+// Previously returned session handles must no longer be used for sends.
 func (r *Runtime) CloseEndpoint(endpoint Endpoint) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()

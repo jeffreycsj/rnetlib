@@ -11,21 +11,35 @@ import (
 	"unsafe"
 )
 
+// Event owns a copied transport payload. Interpret fields according to Type.
+// Erase copied authorization credentials when no longer needed; do not log Data blindly.
 type Event struct {
-	Type          EventType
-	Endpoint      Endpoint
-	Session       Session
+	// Type transport event kind; determines meaningful fields.
+	Type EventType
+	// Endpoint local owning endpoint; zero for runtime-wide events.
+	Endpoint Endpoint
+	// Session local session; zero for runtime/endpoint events or failures before allocation.
+	Session Session
+	// CorrelationID EventMessage request/trace metadata; zero when absent.
 	CorrelationID uint64
-	Status        int32
-	Data          []byte
+	// Status local zero or negative native error codes category; not a peer's business error code.
+	Status int32
+	// Data owned payload/diagnostic bytes. AuthRequest contains client key[32] then join bytes; caller erases credentials.
+	Data []byte
 }
 
+// SecurityChange describes a locally completed security barrier, not a peer delivery receipt.
 type SecurityChange struct {
+	// Operation locally completed mode switch or key rotation.
 	Operation SecurityOperation
-	Mode      SecurityMode
-	Epoch     uint64
+	// Mode resulting business-data protection; controls stay authenticated.
+	Mode SecurityMode
+	// Epoch session-local security generation, not wall time.
+	Epoch uint64
 }
 
+// ClientPublicKey copies the authenticated key from EventAuthRequest.
+// It returns an error for another event type or a truncated authorization payload.
 func (e Event) ClientPublicKey() ([32]byte, error) {
 	var key [32]byte
 	if e.Type != EventAuthRequest || len(e.Data) < len(key) {
@@ -35,6 +49,8 @@ func (e Event) ClientPublicKey() ([32]byte, error) {
 	return key, nil
 }
 
+// JoinPayload copies the opaque authorization bytes from EventAuthRequest.
+// It returns an error for another type or missing key prefix; empty credentials are valid.
 func (e Event) JoinPayload() ([]byte, error) {
 	if e.Type != EventAuthRequest || len(e.Data) < 32 {
 		return nil, fmt.Errorf("rnet: event is not a valid auth request")
@@ -42,6 +58,8 @@ func (e Event) JoinPayload() ([]byte, error) {
 	return append([]byte(nil), e.Data[32:]...), nil
 }
 
+// SecurityChange decodes the ten-byte EventSecurityChanged payload.
+// It rejects other event kinds, malformed lengths and unknown operation tags.
 func (e Event) SecurityChange() (SecurityChange, error) {
 	if e.Type != EventSecurityChanged || len(e.Data) != 10 {
 		return SecurityChange{}, fmt.Errorf("rnet: event is not a valid security change")
@@ -57,6 +75,10 @@ func (e Event) SecurityChange() (SecurityChange, error) {
 	return SecurityChange{Operation: operation, Mode: SecurityMode(e.Data[0]), Epoch: epoch}, nil
 }
 
+// Poll consumes at most capacity events and copies their payloads into Go-owned memory.
+// Negative capacity is invalid; zero validates the runtime but returns no events.
+// timeout is an idle wait, truncated to milliseconds and clamped to [0, MaxUint32],
+// not a total-call deadline. Prefer one event consumer to preserve application order.
 func (r *Runtime) Poll(capacity int, timeout time.Duration) ([]Event, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()

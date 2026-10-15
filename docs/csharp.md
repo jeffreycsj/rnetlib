@@ -15,7 +15,9 @@ LD_LIBRARY_PATH="$PWD/dist/linux-x86_64/lib" dotnet run \
   -p:RNetDll="$PWD/dist/linux-x86_64/lib/RNet.dll"
 ```
 
-应用项目引用 `csharp/RNet/RNet.csproj`。部署时使用同一发布包中的 `RNet.dll` 和 `librnet.so`，把 native 库放在应用控制的、不可被普通用户写入的加载目录；不要混用旧版 `.so`。新增入口不改变 C ABI 版本号，因此 ABI=1 不代表旧库具备全部新符号。发布包提供 SDK 源码、托管 DLL 和可执行测试的源码。
+应用项目引用 `csharp/RNet/RNet.csproj`。部署时使用同一发布包中的 `RNet.dll` 和 `librnet.so`，把 native 库放在应用控制的、不可被普通用户写入的加载目录；不要混用旧版 `.so`。只接受当前 SDK/native ABI，不兼容旧 SDK；ABI 数值相同也不能代替同批发布。发布包提供 SDK 源码、托管 DLL 和可执行测试的源码。
+
+构建自动生成 `RNet.xml`，公开 API 缺少 XML 注释会以 CS1591 构建失败。直接引用 DLL 时将 `RNet.xml` 放在 DLL 同目录，IDE 可展示参数、返回值、单位和生命周期说明；发布脚本会一并收录。文档检查不能代替运行时与平台验证。
 
 以下是同进程的完整收发示例；独立服务器和客户端使用相同 API，仅把各自的 runtime 和 poll 循环分到两端。切换传输只改 `transport`。线上服务器私钥应从安全存储加载，客户端通过可信渠道取得服务器公钥，不能从未认证连接获取公钥后直接信任。
 
@@ -82,11 +84,11 @@ if (!received) throw new TimeoutException("echo did not complete");
 - `Send` 成功仅表示本地入队，**不表示送达**。`RNetException.Code == -4` 表示背压，保留数据并继续 poll 后重试；不能无限忙重试。UDP 仍可能丢包乱序，可靠消息选 TCP/KCP。
 - 所有接收数据已复制成托管数组，SDK 在 `finally` 中释放原生 token。不要把 `Data`、`AuxiliaryData` 或票据写入通用日志。用完敏感数组后主动清零。
 - 创建时通过 `GameOptions` 设置线程数、帧大小、队列字节/条数、连接和握手上限、超时、TCP buffer/NoDelay、rekey 阈值等。nullable 网络选项的 `null` 使用 native 默认；显式非法的零值由 native 校验。游戏队列字段的零值使用默认预算，不能用零取消所有限制。创建参数不支持在活跃会话上随意修改。
-- 服务端 `SetEncryption(session, bool)` / `Rekey(session)` 是异步操作，等待 `SecurityChanged`；客户端没有加密选择项。默认拒绝明文业务。确有需求时两端创建配置均需 `AllowPlaintextBusinessData=true`，服务端才能关闭业务加密；控制消息仍受保护。明文业务**没有机密性或完整性**，不适合公网敏感数据。
+- 服务端 `SetEncryption(session, bool)` / `Rekey(session)` 是异步操作，以 `SecurityChanged` 确认本地完成；请求已经启用的模式可能不产生新事件。客户端没有加密选择项。默认拒绝服务端明文策略；确有需求时服务端 runtime 设置 `AllowPlaintextBusinessData=true`，客户端自动跟随，不要求设置该标记。控制消息仍受保护。明文业务**没有机密性或完整性**，不适合公网敏感数据。
 - `SendLatest` 按 session/key 尽力替换尚未交给 I/O worker 的快照。进入 socket 或 KCP 缓存后不可撤回。带 `GameSendOptions` 的发送可设置 priority、expiry、tick、sequence、correlation；expiry 也只作用于本地暂存。
 - `Listen` / `Connect` 的配置统一使用 `MinVersion` / `MaxVersion` 闭区间，两者相等表示精确业务版本（默认均为 1）。双方须持续 poll 至游戏就绪；`SelectedProtocolVersion` 查询服务端选定版本。没有独立 Range 入口；旧 SDK/ABI 不兼容，必须与当前 native 库一起重建。
 - `IssueResumeTicket` → `ResumeTicket` → `ConnectResume` → 服务端 `ResumeRequest` 再授权 → `SessionResumed`。恢复分配新句柄，通过 `RelatedSession` 映射旧句柄；失败不代表旧会话已失效。票据一次性且限同一服务端 runtime，不能跨进程恢复；新的版本范围须包含票据绑定的原选定版本。
-- `CloseSession` 踢会话，`CloseEndpoint` 关闭端点。`Stop` 的 `-4` 需 poll 后重试；`Dispose` 最终停止并丢弃未交付事件。务必 `using` / 显式 Dispose；不要依赖 GC，特别是 logger 闭包反向引用 runtime 时。与 Dispose 重叠的调用受 SafeHandle lease 保护；Dispose 不保证业务送达。
+- `CloseSession` 踢会话，`CloseEndpoint` 关闭端点。`Stop` 的 `-4` 需 poll 后重试；`Dispose` 最终停止并丢弃未交付事件。务必 `using` / 显式 Dispose；不要依赖 GC，特别是 logger 闭包反向引用 runtime 时。与 Dispose 重叠的调用受 SafeHandle lease 保护，最后一个在途调用结束后才销毁 native，因此 Dispose 返回不一定代表回调已退出；先停止业务调用并协调回调引用的外部资源生命周期。Dispose 不保证送达，也不通过 RNetException 报告 SafeHandle 内部清理失败。
 
 ## 接入自己的日志与监控
 

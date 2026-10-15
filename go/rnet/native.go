@@ -14,11 +14,16 @@ import (
 	"unsafe"
 )
 
+// StatusError preserves a native negative status and its diagnostic at the failure point.
+// Use errors.As to inspect Code; wrapper validation can also return ordinary Go errors.
 type StatusError struct {
-	Code    int32
+	// Code native status category, e.g. -4 WouldBlock, -11 HandshakeRequired; not a peer business error.
+	Code int32
+	// Message owned diagnostic copied from the failing call's OS-thread-local slot.
 	Message string
 }
 
+// Error returns the captured diagnostic, or a status-code description when it is empty.
 func (e StatusError) Error() string {
 	if e.Message != "" {
 		return e.Message

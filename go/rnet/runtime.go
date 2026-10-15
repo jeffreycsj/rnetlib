@@ -14,6 +14,9 @@ import (
 	"unsafe"
 )
 
+// Runtime owns a native transport runtime shared by listeners and outbound connections.
+// Do not copy it after use. Close explicitly; there is no finalizer. Use GameRuntime
+// for game negotiation, heartbeats and recovery. Quiesce callers before shutdown.
 type Runtime struct {
 	mu      sync.RWMutex
 	handle  C.rnet_runtime_t
@@ -21,6 +24,9 @@ type Runtime struct {
 	logger  cgo.Handle
 }
 
+// NewRuntime creates a transport runtime with zero or one configuration.
+// Omitting config uses DefaultConfig; a supplied config replaces all defaults.
+// More than one config, invalid limits or a mismatched native ABI returns an error.
 func NewRuntime(configs ...Config) (*Runtime, error) {
 	if len(configs) > 1 {
 		return nil, fmt.Errorf("rnet: NewRuntime accepts at most one config")
@@ -32,6 +38,9 @@ func NewRuntime(configs ...Config) (*Runtime, error) {
 	return NewRuntimeWithConfig(config)
 }
 
+// NewRuntimeWithConfig validates and copies config, including client keys.
+// Start with DefaultConfig; the zero Config is not valid. Logger is retained until
+// successful Close. Creation starts native workers; no separate start call is needed.
 func NewRuntimeWithConfig(config Config) (*Runtime, error) {
 	if err := checkABI(); err != nil {
 		return nil, err
@@ -104,6 +113,10 @@ func NewRuntimeWithConfig(config Config) (*Runtime, error) {
 	return &Runtime{handle: handle, logger: loggerHandle}, nil
 }
 
+// Stop requests worker shutdown; it does not free the runtime. timeout is truncated
+// to milliseconds and clamped to [0, MaxUint32]; it is not a hard total-call deadline.
+// On backpressure, drain Poll and retry. Already stopped/closed is a no-op.
+// Never call from this runtime's logger callback.
 func (r *Runtime) Stop(timeout time.Duration) error {
 	defer lockNativeThread()()
 	r.mu.Lock()
@@ -128,6 +141,9 @@ func (r *Runtime) Stop(timeout time.Duration) error {
 	return nil
 }
 
+// Close stops and destroys the native runtime and releases its callback reference.
+// It is idempotent after success; on failure the handle remains available for retry.
+// Stop concurrent producers/pollers first. Never call from its logger callback.
 func (r *Runtime) Close() error {
 	defer lockNativeThread()()
 	if err := r.Stop(0); err != nil {

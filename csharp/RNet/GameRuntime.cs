@@ -3,14 +3,30 @@ using System.Security.Cryptography;
 
 namespace RNet;
 
-/// <summary>One runtime can listen and connect using TCP, UDP and KCP. Poll continuously to drive
-/// game controls and queues. Safe to send/query concurrently; polls are serialized natively.
-/// Dispose releases native resources after in-flight calls return; logger sinks must return promptly.</summary>
+/// <summary>Authenticated game client/server runtime for TCP, UDP and KCP.</summary>
+/// <remarks>Both peers must poll continuously for negotiation, heartbeats, clocks and queues. Send/query calls may run
+/// concurrently; native polls serialize. Never copy handles between runtimes. Native failures throw RNetException with
+/// status/detail; native operations after disposal throw ObjectDisposedException. Dispose prevents new calls but
+/// in-flight leases can defer native teardown beyond its return. Logger callbacks must return promptly and never call
+/// Stop/Dispose. Only the current SDK/native ABI pair is accepted; this SDK validates the 64-bit layout.</remarks>
 public sealed unsafe partial class GameRuntime : IDisposable {
     private readonly RuntimeOwner owner;
     private readonly LogState? logState;
+    /// <summary>Cumulative managed logger exceptions caught by the bridge; zero also when no logger is
+    /// installed.</summary>
     public long LoggerExceptions => logState == null ? 0 : Interlocked.Read(ref logState.Exceptions);
 
+    /// <summary>Creates a runtime without listening or connecting.</summary>
+    /// <param name="options">Creation-time settings; null uses defaults.</param>
+    /// <param name="clientKey">Optional client identity copied during construction; null creates server-only
+    /// usage.</param>
+    /// <param name="expectedServerKey">Exactly 32 pinned server public-key bytes; must be supplied together with
+    /// clientKey.</param>
+    /// <remarks>Keys are copied; caller owns its originals. Logger delegate/context is retained until native teardown.
+    /// No network trust bypass is implied by plaintext permission.</remarks>
+    /// <exception cref="ArgumentException">Identity and pin were not supplied together, or configuration arguments are
+    /// invalid.</exception>
+    /// <exception cref="RNetException">Native configuration, key length or resource creation failed.</exception>
     public GameRuntime(GameOptions? options = null, Keypair? clientKey = null, byte[]? expectedServerKey = null) {
         if (IntPtr.Size != 8) throw new PlatformNotSupportedException("This SDK currently validates the 64-bit native ABI only.");
         Native.CheckAbi();
@@ -69,20 +85,53 @@ public sealed unsafe partial class GameRuntime : IDisposable {
     }
 
     private RuntimeLease Lease() => new(owner);
+    /// <summary>Queues server authorization for AuthRequest/ResumeRequest; acceptance is not game readiness.</summary>
+    /// <param name="session">Pending local server session from the request.</param>
+    /// <param name="accept">True authorizes, false rejects.</param>
+    /// <remarks>Wait for SessionReady/SessionResumed before sending business data.</remarks>
     public void AuthDecide(ulong session, bool accept) { using var h = Lease(); Native.Check(Native.rnet_game_auth_decide(h.Value, session, accept ? 1u : 0u)); }
+    /// <summary>Closes a peer, drops staged work and revokes its resume state; listener remains open.</summary>
+    /// <param name="session">Local session owned by this runtime.</param>
     public void CloseSession(ulong session) { using var h = Lease(); Native.Check(Native.rnet_game_session_close(h.Value, session)); }
+    /// <summary>Closes an endpoint and its sessions; runtime remains usable.</summary>
+    /// <param name="endpoint">Local listener or outbound endpoint, not a session handle.</param>
     public void CloseEndpoint(ulong endpoint) { using var h = Lease(); Native.Check(Native.rnet_game_endpoint_close(h.Value, endpoint)); }
-    /// <summary>Server-only; wait for SecurityChanged. Controls stay authenticated in plaintext mode.</summary>
+    /// <summary>Queues a server-led business encryption change; clients follow automatically.</summary>
+    /// <param name="session">Established local server-side session.</param>
+    /// <param name="encrypted">False requires AllowPlaintextBusinessData; plaintext lacks confidentiality and
+    /// integrity.</param>
+    /// <remarks>Controls stay protected. SecurityChanged reports local commit, not peer completion. Requesting an
+    /// already active mode may succeed without another event.</remarks>
     public void SetEncryption(ulong session, bool encrypted) { using var h = Lease(); Native.Check(Native.rnet_game_security_set(h.Value, session, encrypted ? 1u : 0u)); }
+    /// <summary>Queues server key rotation without changing business encryption policy.</summary>
+    /// <param name="session">Established local server-side session.</param>
+    /// <remarks>Wait for SecurityChanged with SecurityOperation=2 for local commit; success only admits the
+    /// request.</remarks>
     public void Rekey(ulong session) { using var h = Lease(); Native.Check(Native.rnet_game_rekey(h.Value, session)); }
+    /// <summary>Queries a live endpoint's bound port.</summary>
+    /// <param name="endpoint">Local endpoint returned by Listen/Connect.</param>
+    /// <returns>The actual port, including the OS-selected port for Listen with Port=0.</returns>
     public ushort LocalPort(ulong endpoint) { using var h = Lease(); Native.Check(Native.rnet_game_endpoint_local_port(h.Value, endpoint, out var port)); return port; }
+    /// <summary>Queries the selected business version; selection may precede game readiness.</summary>
+    /// <param name="session">Local session with a selected version.</param>
+    /// <returns>Selected version; native failure is thrown if unavailable.</returns>
     public uint SelectedProtocolVersion(ulong session) { using var h = Lease(); Native.Check(Native.rnet_game_selected_protocol_version(h.Value, session, out var version)); return version; }
+    /// <summary>Changes the poll-driven cumulative latency-summary log interval.</summary>
+    /// <param name="intervalMs">Milliseconds; default 30000, zero disables summaries.</param>
     public void SetMetricsLogInterval(ulong intervalMs) { using var h = Lease(); Native.Check(Native.rnet_game_metrics_log_interval_set(h.Value, intervalMs)); }
-    /// <summary>Stops admission and drains within the deadline. Code -4 requires polling and retry.
-    /// Dispose always performs final zero-timeout stop and drops remaining undelivered events.</summary>
+    /// <summary>Stops admission/I/O with a transport send-drain budget; retains handle for final polling.</summary>
+    /// <param name="drainTimeoutMs">Milliseconds for send draining; zero skips draining. Not a hard upper bound on
+    /// total call duration.</param>
+    /// <remarks>Code -4 requires polling pending events then retrying. Do not call from a logger callback. Use Dispose
+    /// for final resource cleanup; stopped runtimes cannot restart.</remarks>
     public void Stop(uint drainTimeoutMs = 0) {
         RejectCallbackShutdown(); using var h = Lease(); Native.Check(Native.rnet_game_runtime_stop(h.Value, drainTimeoutMs));
     }
+    /// <summary>Closes the managed handle; native cleanup follows once in-flight leases finish.</summary>
+    /// <remarks>Idempotent outside callbacks. Remaining events may be discarded. Native cleanup failures are not
+    /// surfaced as RNetException by SafeHandle; use Stop to observe stop errors. Concurrent calls may delay native
+    /// teardown/callback completion beyond this return.</remarks>
+    /// <exception cref="InvalidOperationException">Called from a native logger callback.</exception>
     public void Dispose() { RejectCallbackShutdown(); owner.Dispose(); }
     private static void RejectCallbackShutdown() {
         if (LogBridge.InCallback) throw new InvalidOperationException("Stop/Dispose cannot run in a native logger callback.");

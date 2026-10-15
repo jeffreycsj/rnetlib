@@ -128,6 +128,19 @@ for _, event := range events {
 
 See [`game_test.go`](../go/rnet/game_test.go) for TCP, UDP and KCP examples.
 
+Public methods, constants and fields have GoDoc contracts, including units, zero
+values, payload ownership and asynchronous completion. From the repository root,
+use `go doc ./go/rnet GameRuntime.Poll` or `go doc ./go/rnet GameConfig` for details.
+`make go-test` checks public documentation presence as well as runtime regressions;
+presence checks do not prove the comments are semantically correct.
+
+The zero `GameConfig` selects defaults, but a supplied transport `Config` must start
+from `DefaultConfig()`. Positive game expiry/log-summary durations round up to
+milliseconds; heartbeat configuration and poll waits truncate to milliseconds.
+Game `Poll(0, ...)` still drives maintenance but does not drain application events.
+Always close runtimes explicitly after stopping concurrent callers, and never call
+`Stop`/`Close` from their logger callbacks. Clear your own credential copies.
+
 ### C ABI
 
 The C ABI borrows send bytes only for the duration of `rnet_game_send`. Poll payloads remain owned by the runtime until both nonzero event tokens are released. Process or copy the bytes first:

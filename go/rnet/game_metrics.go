@@ -10,77 +10,186 @@ import "time"
 // GameRealtimeQueue reports runtime-wide LatestOnly staging; Forwarded means
 // admitted to the transport queue, not delivered to the peer.
 type GameRealtimeQueue struct {
-	QueuedMessages      uint64
-	QueuedBytes         uint64
-	AdmissionRejected   uint64
-	Replaced            uint64
-	ClosedDropped       uint64
+	// QueuedMessages current distinct pending (session,key) entries in game staging.
+	QueuedMessages uint64
+	// QueuedBytes current payload plus game-envelope reservations, not allocator RSS.
+	QueuedBytes uint64
+	// AdmissionRejected cumulative staging budget/key-cap rejections, including failed requeues.
+	AdmissionRejected uint64
+	// Replaced cumulative old pending snapshots superseded by newer same-key values.
+	Replaced uint64
+	// ClosedDropped cumulative staged values discarded during session cleanup/shutdown.
+	ClosedDropped uint64
+	// BackpressureDropped cumulative values unable to reenter staging after transport backpressure.
 	BackpressureDropped uint64
-	SendFailed          uint64
-	Forwarded           uint64
+	// SendFailed cumulative values discarded after non-backpressure forwarding failures.
+	SendFailed uint64
+	// Forwarded cumulative snapshots accepted by transport, not delivered to the peer.
+	Forwarded uint64
 }
 
+// GameScheduledQueue combines current staging gauges with cumulative scheduler outcomes.
+// Forwarded is local transport admission, not delivery; counters do not reset on read.
 type GameScheduledQueue struct {
-	QueuedMessages                                                             uint64
-	QueuedBytes                                                                uint64
-	AdmissionRejected                                                          uint64
-	ExpiredDropped                                                             uint64
-	ClosedDropped                                                              uint64
-	SendFailed                                                                 uint64
-	Forwarded                                                                  uint64
-	BackpressureRequeued                                                       uint64
-	AdmittedByPriority                                                         [4]uint64
-	ForwardedByPriority                                                        [4]uint64
-	QueueDelaySamples                                                          uint64
-	QueueDelayP90, QueueDelayP95, QueueDelayP99, QueueDelayMax                 time.Duration
-	TickQueueDelaySamples                                                      uint64
-	TickQueueDelayP90, TickQueueDelayP95, TickQueueDelayP99, TickQueueDelayMax time.Duration
+	// QueuedMessages current admitted messages awaiting forwarding or drop.
+	QueuedMessages uint64
+	// QueuedBytes current payload plus worst-case game-envelope reservations.
+	QueuedBytes uint64
+	// AdmissionRejected cumulative staging byte/message budget rejections.
+	AdmissionRejected uint64
+	// ExpiredDropped cumulative messages expiring locally before forwarding.
+	ExpiredDropped uint64
+	// ClosedDropped cumulative messages discarded on session cleanup/shutdown.
+	ClosedDropped uint64
+	// SendFailed cumulative non-backpressure transport forwarding failures.
+	SendFailed uint64
+	// Forwarded cumulative transport admissions, not deliveries.
+	Forwarded uint64
+	// BackpressureRequeued cumulative retries returned to staging; one message can be counted repeatedly.
+	BackpressureRequeued uint64
+	// AdmittedByPriority cumulative admissions indexed low, normal, high, critical.
+	AdmittedByPriority [4]uint64
+	// ForwardedByPriority cumulative transport forwards in low, normal, high, critical order.
+	ForwardedByPriority [4]uint64
+	// QueueDelaySamples cumulative successful-forward delay samples; admission to transport, not delivery.
+	QueueDelaySamples uint64
+	// QueueDelayP90 estimated cumulative local queue-delay P90 as a time.Duration (native microsecond precision).
+	QueueDelayP90 time.Duration
+	// QueueDelayP95 estimated cumulative local queue-delay P95 as a time.Duration (native microsecond precision).
+	QueueDelayP95 time.Duration
+	// QueueDelayP99 estimated cumulative local queue-delay P99 as a time.Duration (native microsecond precision).
+	QueueDelayP99 time.Duration
+	// QueueDelayMax largest sampled local queue delay as a time.Duration (native microsecond precision).
+	QueueDelayMax time.Duration
+	// TickQueueDelaySamples same delay sample count, restricted to messages carrying a tick.
+	TickQueueDelaySamples uint64
+	// TickQueueDelayP90 tick-bearing messages' estimated cumulative queue-delay P90, converted from native microseconds.
+	TickQueueDelayP90 time.Duration
+	// TickQueueDelayP95 tick-bearing messages' estimated cumulative queue-delay P95, converted from native microseconds.
+	TickQueueDelayP95 time.Duration
+	// TickQueueDelayP99 tick-bearing messages' estimated cumulative queue-delay P99, converted from native microseconds.
+	TickQueueDelayP99 time.Duration
+	// TickQueueDelayMax largest sampled tick-bearing message queue delay, converted from native microseconds.
+	TickQueueDelayMax time.Duration
 }
 
-// GameRangeBuffer reports runtime-wide wire-v4 early-data usage and rejection totals.
+// GameRangeBuffer reports runtime-wide early-data gauges and cumulative negotiation-buffer rejections.
 type GameRangeBuffer struct {
-	BufferedMessages         uint64
-	BufferedBytes            uint64
-	PeakBufferedMessages     uint64
-	PeakBufferedBytes        uint64
-	MaxBufferedMessages      uint64
-	MaxBufferedBytes         uint64
+	// BufferedMessages current early messages retained, including ready-but-not-yet-polled messages.
+	BufferedMessages uint64
+	// BufferedBytes current early payload bytes; excludes framing/allocator overhead.
+	BufferedBytes uint64
+	// PeakBufferedMessages highest retained early-message count observed.
+	PeakBufferedMessages uint64
+	// PeakBufferedBytes highest retained early payload bytes observed.
+	PeakBufferedBytes uint64
+	// MaxBufferedMessages runtime-wide cap inherited from configured event queue capacity.
+	MaxBufferedMessages uint64
+	// MaxBufferedBytes runtime-wide cap inherited from configured event-byte budget.
+	MaxBufferedBytes uint64
+	// SessionAdmissionRejected cumulative per-session early-data budget rejections.
 	SessionAdmissionRejected uint64
+	// RuntimeAdmissionRejected cumulative runtime-wide early-data budget rejections.
 	RuntimeAdmissionRejected uint64
 }
 
-// GameMetrics is cumulative, process-local telemetry without player labels.
-// LoggerAvailable distinguishes disabled logging from zero dropped records.
+// GameMetrics contains runtime-scoped cumulative game counters without player labels.
+// LoggerAvailable distinguishes a disabled logger from a logger with zero drops.
 type GameMetrics struct {
+	// LoggerAvailable whether a logger is installed; distinguishes disabled logging from zero drops.
 	LoggerAvailable bool
-	Heartbeat       GameHeartbeatMetrics
-	Resume          GameResumeMetrics
-	Clock           GameClockMetrics
-	Logger          GameLoggerMetrics
+	// Heartbeat cumulative protected heartbeat counters and RTT samples.
+	Heartbeat GameHeartbeatMetrics
+	// Resume cumulative recovery outcomes plus a live retained-ticket gauge, scoped to this runtime.
+	Resume GameResumeMetrics
+	// Clock cumulative approximate clock-sampling counters.
+	Clock GameClockMetrics
+	// Logger cumulative bounded logger counters and callback timing; includes recovered Go sink panics.
+	Logger GameLoggerMetrics
 }
 
+// GameHeartbeatMetrics counts probes, acknowledgements and heartbeat failure outcomes since creation.
 type GameHeartbeatMetrics struct {
-	ProbesSent, ProbeSendFailures, RepliesSent, ReplySendFailures uint64
-	RepliesMatched, RepliesRejected, ProbesRateLimited, Timeouts  uint64
-	RTTSamples                                                    uint64
-	RTTP50, RTTP90, RTTP95, RTTP99, RTTP999, RTTMax               time.Duration
+	// ProbesSent cumulative protected probes admitted locally, not confirmed delivered.
+	ProbesSent uint64
+	// ProbeSendFailures cumulative failed local probe sends.
+	ProbeSendFailures uint64
+	// RepliesSent cumulative protected replies admitted locally.
+	RepliesSent uint64
+	// ReplySendFailures cumulative failed local reply sends.
+	ReplySendFailures uint64
+	// RepliesMatched cumulative timely replies matching outstanding local challenges.
+	RepliesMatched uint64
+	// RepliesRejected cumulative invalid/late challenge replies; do not refresh liveness.
+	RepliesRejected uint64
+	// ProbesRateLimited cumulative inbound probes suppressed by response rate limits.
+	ProbesRateLimited uint64
+	// Timeouts cumulative heartbeat deadlines causing session-close requests.
+	Timeouts uint64
+	// RTTSamples cumulative accepted RTT samples; zero means unavailable.
+	RTTSamples uint64
+	// RTTP50 cumulative estimated heartbeat RTT median as a time.Duration (native microsecond precision).
+	RTTP50 time.Duration
+	// RTTP90 cumulative estimated heartbeat RTT P90 as a time.Duration (native microsecond precision).
+	RTTP90 time.Duration
+	// RTTP95 cumulative estimated heartbeat RTT P95 as a time.Duration (native microsecond precision).
+	RTTP95 time.Duration
+	// RTTP99 cumulative estimated heartbeat RTT P99 as a time.Duration (native microsecond precision).
+	RTTP99 time.Duration
+	// RTTP999 cumulative estimated heartbeat RTT P99.9 as a time.Duration (native microsecond precision).
+	RTTP999 time.Duration
+	// RTTMax maximum sampled heartbeat RTT as a time.Duration (native microsecond precision).
+	RTTMax time.Duration
 }
 
+// GameResumeMetrics counts same-runtime one-use recovery ticket and takeover outcomes.
 type GameResumeMetrics struct {
-	TicketsIssued, RequestsReceived, TicketsRejected                         uint64
-	AuthorizationDenied, PendingRevoked, SessionsResumed, OutstandingTickets uint64
+	// TicketsIssued cumulative tickets issued and admitted to protected send, not confirmed delivered.
+	TicketsIssued uint64
+	// RequestsReceived cumulative decoded resume joins reaching ticket validation.
+	RequestsReceived uint64
+	// TicketsRejected cumulative invalid, expired, replayed or incompatible ticket claims.
+	TicketsRejected uint64
+	// AuthorizationDenied cumulative valid resume claims denied by business authorization.
+	AuthorizationDenied uint64
+	// PendingRevoked cumulative pending/in-flight resume claims revoked by explicit cleanup.
+	PendingRevoked uint64
+	// SessionsResumed cumulative completed resume publications on this runtime.
+	SessionsResumed uint64
+	// OutstandingTickets current retained registry entries; expiry cleanup is opportunistic.
+	OutstandingTickets uint64
 }
 
+// GameClockMetrics counts protected approximate clock-sampling outcomes, not trusted simulation time.
 type GameClockMetrics struct {
-	ProbesSent, RepliesSent, Samples, Rejected, SendFailures uint64
+	// ProbesSent cumulative locally admitted client clock probes.
+	ProbesSent uint64
+	// RepliesSent cumulative locally admitted server clock replies.
+	RepliesSent uint64
+	// Samples cumulative accepted client clock samples.
+	Samples uint64
+	// Rejected cumulative rate-limited probes or tracker-rejected replies, not every parser error.
+	Rejected uint64
+	// SendFailures cumulative probe generation/admission and reply send-admission failures.
+	SendFailures uint64
 }
 
+// GameLoggerMetrics reports bounded logger outcomes; QueueDepth is current, other fields cumulative.
 type GameLoggerMetrics struct {
-	Dropped, SinkPanics, CallbackSamples uint64
-	CallbackP99, CallbackMax             time.Duration
+	// Dropped cumulative records rejected by bounded logger queues.
+	Dropped uint64
+	// SinkPanics cumulative caught native sink panics plus Go callback panics recovered by the bridge.
+	SinkPanics uint64
+	// CallbackSamples completed callback samples, including caught panics.
+	CallbackSamples uint64
+	// CallbackP99 cumulative estimated callback execution P99 as a time.Duration (native microsecond precision); excludes queue wait.
+	CallbackP99 time.Duration
+	// CallbackMax largest measured callback execution time as a time.Duration (native microsecond precision).
+	CallbackMax time.Duration
 }
 
-// MetricsSnapshot exposes the same cumulative game counters as the Rust facade.
+// MetricsSnapshot copies game counters without resetting them, including recovered Go logger panics.
+// Fields may change concurrently and are not a single atomic snapshot.
 func (r *GameRuntime) MetricsSnapshot() (GameMetrics, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -127,6 +236,7 @@ func (r *GameRuntime) MetricsSnapshot() (GameMetrics, error) {
 	return metrics, nil
 }
 
+// RealtimeQueueSnapshot copies snapshot-staging gauges and cumulative outcomes without resetting them.
 func (r *GameRuntime) RealtimeQueueSnapshot() (GameRealtimeQueue, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -145,6 +255,8 @@ func (r *GameRuntime) RealtimeQueueSnapshot() (GameRealtimeQueue, error) {
 	}, nil
 }
 
+// ScheduledQueueSnapshot copies priority-staging gauges and cumulative outcomes without resetting them.
+// Tick queue latency covers only messages carrying a tick; inspect its sample count.
 func (r *GameRuntime) ScheduledQueueSnapshot() (GameScheduledQueue, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -174,7 +286,8 @@ func (r *GameRuntime) ScheduledQueueSnapshot() (GameScheduledQueue, error) {
 	return value, nil
 }
 
-// RangeBufferSnapshot returns low-cardinality wire-v4 early-data capacity telemetry.
+// RangeBufferSnapshot returns current early-data capacity and cumulative rejection telemetry.
+// It is runtime-wide and does not expose per-player labels.
 func (r *GameRuntime) RangeBufferSnapshot() (GameRangeBuffer, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()

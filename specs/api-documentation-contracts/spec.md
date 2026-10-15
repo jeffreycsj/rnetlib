@@ -1,6 +1,6 @@
 # 网络库注释与接入契约补全
 
-状态：用户已确认，实施中。基线：`437bcec`；本阶段不改变 wire、ABI、默认值或运行行为。
+状态：用户已确认，实施中。初始基线：`437bcec`；不改变 wire、ABI 或默认值。发现的行为缺陷按独立 RED → GREEN 修复并记录，不混作纯注释变更。
 
 ## 目标与已确认缺口
 
@@ -31,8 +31,8 @@
 ## 实施顺序
 
 1. [x] Rust 游戏公开 API：配置、事件、收发、认证、恢复、加密切换、质量与日志。核实实现和测试后补注释，补可编译接入示例；补全文档的模块先启用缺失文档检查。
-2. [ ] C ABI 与 C++11：逐参数/成员说明、错误与异步完成事件、token 释放、日志回调重入限制和 RAII 生命周期。对照 FFI 转换核实，保持布局和签名不变。
-3. [ ] Go 与 C#：按实际包装语义说明零值/默认值、错误返回/异常、复制与销毁；GoDoc 和 XML 文档覆盖公开类型、常量、成员与方法。
+2. [x] C ABI 与 C++11：逐参数/成员说明、错误与异步完成事件、token 释放、日志回调重入限制和 RAII 生命周期。对照 FFI 转换核实，保持布局和签名不变。
+3. [x] Go 与 C#：按实际包装语义说明零值/默认值、错误返回/异常、复制与销毁；GoDoc 和 XML 文档覆盖公开类型、常量、成员与方法。
 4. [ ] Rust 底层及内部关键路径：core、transport、protocol、security、observe 的公开契约；重点补握手、SELECT/ACK/READY、旧会话接管、心跳调度、动态安全状态、发送队列预算与端点清理的设计原因。
 5. [ ] 接入文档与防回退：统一多语言建立、授权、持续 poll、发送、接收、背压、关闭和日志示例；将可验证的注释/文档构建门禁接入现有检查。
 6. [ ] 对抗性复查：抽查每种语言的完整调用链，对照实际 diff、边界测试与生成文档检查语义；发现运行缺陷时，独立建立 RED → GREEN 回归后修复，不把行为变化藏在注释提交中。
@@ -79,3 +79,70 @@
 | 自动换钥测试丢弃同批安全通知 | 独立 RED → GREEN 修复测试收集逻辑，保留消息与双方完成检查 |
 
 本批没有遗留已确认的新运行逻辑缺陷；这不是对整个库的安全认证。后续继续第 2/3 项多语言注释，第 4 项底层/内部关键路径，以及第 5/6 项的全范围文档和审查收尾。
+
+## 第二阶段记录（2026-10-14）
+
+本批基线：`7f0a5ff`。完成 C ABI 与 C++11 公开契约，仍未完成整个库的注释计划。
+
+- C 头文件覆盖 55 个导出入口、24 个结构体的 303 个成员、75 个枚举常量，以及日志/公钥校验回调。说明输入与输出布局、参数单位/零值、句柄所属 runtime、异步就绪、发送背压、加密切换、恢复边界、事件 token 与敏感字节释放、P95/P99/样本口径。
+- C++11 六个职责头文件补齐公开类型、枚举、方法与 160 个结构体成员；说明 move-only 生命周期、错误异常、借用/复制、显式 close 与析构兜底的差异。配置、质量、恢复、排队/淘汰和日志不要求接入方去读 Rust 实现。
+- 通过 C 预处理结果与基线对比确认声明/常量/布局未变；保持单一当前 ABI/wire，没有兼容旧 SDK。所有 C++ 职责头文件仍在现有 600 行限制以内，没有放宽门禁。
+- 独立运行修复：底层 C++ `Runtime::poll` 的 reserve/载荷复制异常会遗留未释放 token；游戏 `GameRuntime::poll` 在 ABI 部分导出后先抛错，也会遗留该前缀的主/辅助 token。增加批次作用域守卫，先接管所有已导出 token 再转换错误；底层仍逐条释放已复制载荷，避免整个批次同时保留原生载荷和 C++ 副本。
+- 新增 `cpp/tests/poll_ownership.cpp` 并接入 `make cpp-test`。测试使用真实包装层、受控 C 边界与分配失败注入，不耗尽机器内存；RED 明确复现三个底层复制位置及游戏部分导出泄漏，再 GREEN。覆盖正常二进制/空数据、零容量、主/辅助 token、未导出槽不释放、精确一次释放、错误诊断在清理前保存，以及及时释放已复制载荷的内存边界。
+
+### 验证结果
+
+- 修改前 `make -j1 cpp-test abi-check` 基线通过。
+- workspace 全部测试（含 doctest）、严格 Clippy、Rust 格式、结构检查、ABI 导出检查通过。
+- 最终 C11/C++11 头文件以 Clang `-Wdocumentation -Werror` 检查通过；最终异常安全回归和四个真实联网 C++11 示例均通过，`git diff --check` 通过。
+- Clang 文档诊断检查语法，不等于缺失文档门禁；本批用声明/成员清单加人工语义核对确认覆盖。C/C++ 永久缺失文档检查和文档生成仍属于第 5 项，未伪称已经交付。
+- 最终构建/测试串行，使用至少保留 15 GiB 可用内存的守护。临时日志：`/tmp/netlib-cpp-docs-baseline.log`、`/tmp/netlib-cpp-ownership-red.log`、`/tmp/netlib-cpp-ownership-green.log`、`/tmp/netlib-cpp-contracts-validation-final.log`、`/tmp/netlib-cpp-contracts-postreview.log`。
+- 未重跑 Go/C# 接入、非 Linux 平台、ASan fuzz/Miri/Loom 专项、发布打包或目标长稳。没有提交/推送，也没有把本批工作树验证转记成生产资格。
+
+### 本批对抗性审查
+
+| 严重度 | 位置/问题 | 处理 |
+| --- | --- | --- |
+| 中 | C++ 底层 poll 的分配异常遗漏批次 token；游戏 poll 的部分导出失败在守卫前抛错 | 独立 RED → GREEN 加批次守卫和两类包装层回归，保护返回前缀与辅助 token |
+| 中 | 单纯延后释放整个底层批次会提高复制期间的峰值内存 | 保留逐条释放并清零已释放 token；回归断言复制下一条前已释放上一条 |
+| 中 | 旧 SECURITY_CHANGED 注释漏 operation 字节；LatestOnly 边界仍写成全部止于游戏队列 | 按实际十字节事件格式及 TCP/KCP worker pickup 边界纠正 |
+| 低 | 同模式设置可能无事件；ProtocolViolation 的 status 为 OK；tick 延迟不是窗口 | 明确 no-op、不以 status 代替事件类型、tick-bearing 累计样本口径 |
+| 低 | 容易把跨 runtime token 当成全局唯一并依赖错误拒绝 | 明确调用方必须保留所属 runtime，不承诺跨 runtime 数值碰撞能被拒绝 |
+
+测试盲区：故障注入验证 C++ 所有权，不替代真实 Rust 分配器 OOM/abort 场景或所有平台的异常 ABI；四个联网示例验证正常集成，不代替目标容量/弱网长稳。Go/C# 与底层内部注释仍待后续阶段。
+
+整体评价：本批 C/C++ 公开契约和确认的包装层异常安全问题已闭环；继续第 3 项 Go/C#、第 4 项底层关键路径与第 5/6 项全范围门禁/审查。长时间压测继续留在功能和接口收尾之后。
+
+## 第三阶段记录（2026-10-14）
+
+本批延续 `7f0a5ff` 上第二阶段的未提交修改，没有覆盖或撤销已有 C/C++ 变更。完成 Go 与 C# 公开契约；整个注释计划仍在实施中。
+
+- Go 逐项覆盖公开类型、常量、结构体成员与方法，说明 transport/GameRuntime 差异、零值与默认来源、截断/向上取整的时间单位、授权与游戏就绪、同 runtime 恢复、发送背压/替换边界、日志线程与资源销毁。补充包级说明和现有接入指南的 GoDoc 查询入口。
+- 新增 Go AST 文档存在性门禁，普通 `go test` 即执行。补完字段后先确认它仍检出 131 处类型/方法/常量遗漏，再补齐至通过；不是以类型注释替代字段注释，也不将存在性检查当作语义证明。
+- C# 公开类型、枚举成员、属性、方法、参数和返回值补 XML 文档，开启 `GenerateDocumentationFile`。与已有 warnings-as-errors 配合，缺文档即 CS1591 失败：先确认 184 处错误，再补齐后严格构建零警告/零错误。生成的 `RNet.xml` 含 221 个文档 member；发布脚本增加与 DLL 同目录安装 XML，完整发布包本批未重新生成。
+- Go 九个涉及结构体的文件已逐字段对比类型、名称与顺序；C# 顺序布局 GameMetrics 的声明拆分也逐字段对比，未改变布局。没有修改 wire、ABI、方法签名或默认值，没有放宽结构行数门禁。
+- 独立运行修复：Go `GameRuntime.Poll` 在原生部分导出后失败时，原先先返回错误、未登记清理，导致已导出前缀的主/辅助 token 遗漏。现先保存原始线程局部错误，再登记前缀清理，最后判断错误返回。
+- 新增仅 Linux 且显式 `rnet_test_faults` 标签启用的链接故障注入。使用真实 native 分配/释放/销毁，不 mock release 次数；覆盖零容量、部分导出的主/辅助 token、未导出槽仍归测试所有，以及清理不能覆盖原始错误。RED 时 native destroy 明确拒绝 outstanding buffers；GREEN 后正常销毁。该回归接入 `make go-test`，强制重新链接当前 native archive。
+
+### 验证结果
+
+- 修改前 `make -j1 go-test csharp-test` 基线通过。
+- 最终 `make -j1 go-test csharp-test structure-check` 通过。C# TCP/UDP/KCP 均覆盖授权、echo、动态加密/换钥、Latest、元数据、恢复/版本范围、指标、GC/logger、错误和销毁；另覆盖错误公钥、回调异常/关闭禁止/重入查询、非法配置与并发销毁。
+- `go test -race -a -p 1 -count=1 -tags rnet_test_faults ./go/rnet` 通过；同时包含注释门禁和部分导出错误路径。
+- Go 格式检查、`git diff --check`、发布脚本 `bash -n` 通过，XML 文件实际生成且非空。高内存命令串行、启用至少保留 15 GiB 可用内存的守护。
+- 本批没有重跑 Rust workspace 全套、ASan fuzz/Miri/Loom、完整打包或目标环境长稳；不将第二阶段历史结果当作当前发布资格。C# 仍只验收 Linux x86_64/.NET 8，不扩大平台承诺。
+- 临时证据：`/tmp/netlib-managed-docs-baseline.log`、`/tmp/netlib-go-poll-red.log`、`/tmp/netlib-go-poll-green.log`、`/tmp/netlib-go-docs-missing.log`、`/tmp/netlib-go-docs-green.log`、`/tmp/netlib-csharp-docs-missing.log`、`/tmp/netlib-csharp-docs-build.log`、`/tmp/netlib-managed-contracts-validation.log`、`/tmp/netlib-go-contracts-race.log`。未提交或推送。
+
+### 本批对抗性审查
+
+| 严重度 | 位置/问题 | 处理 |
+| --- | --- | --- |
+| 中 | Go game Poll 部分导出失败时，提前返回遗漏主/辅助 token | 独立 RED → GREEN 修复清理顺序，以真实 native 销毁前置条件验证无泄漏 |
+| 中 | C# Dispose 文档容易承诺返回时 native 与回调均已结束 | 明确 SafeHandle lease 延迟销毁、并发外部资源协调，以及清理失败不通过 RNetException 抛出 |
+| 低 | 选定业务版本被误写成游戏就绪，或将查询成功当作可发送 | 对照 range 状态修正 Go 方法契约；C# 同样明确可先于授权/就绪 |
+| 低 | 语言包装默认值、时长取整和异常计数口径不同 | 分别记录 Go 普通 Config/GameConfig 默认来源、expiry/log interval 的向上取整与 poll/heartbeat 的截断、C# managed logger exception 独立计数 |
+| 低 | 原生 archive 更新不在 Go 缓存依赖图中 | 新故障回归和正常集成一样使用 `-a` 强制重新构建/链接 |
+
+测试盲区：故障注入只验证 Go 包装层的错误前缀所有权，不证明真实分配器 OOM/abort 可恢复；Go race 不检测所有原生 Rust/C 数据竞争；文档存在性/XML 构建不自动证明语义。全平台验证、完整发布包和目标弱网长稳仍未覆盖。
+
+整体评价：本批 Go/C# 公开契约、文档门禁和确认的 Go 资源泄漏已闭环。下一步继续第 4 项 Rust 底层与内部关键路径，以及第 5/6 项全范围示例、门禁和审查收尾；长稳仍在整体完善后进行，不能因此宣称生产认证完成。

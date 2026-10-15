@@ -10,11 +10,18 @@ import (
 	"unsafe"
 )
 
+// Keypair contains caller-owned X25519 identity bytes. Value copies duplicate the secret.
+// It is not automatically zeroized and has no redacted formatter: never log this value.
+// Erase all private-key copies when no longer needed.
 type Keypair struct {
+	// Private 32 secret bytes. Value copies duplicate the secret; never log the struct and erase every owned copy.
 	Private [32]byte
-	Public  [32]byte
+	// Public corresponding 32-byte public key for distributing trusted pins.
+	Public [32]byte
 }
 
+// GenerateKeypair creates a fresh identity using the native cryptographic RNG.
+// The returned private bytes belong to the caller; generation failures return an error.
 func GenerateKeypair() (Keypair, error) {
 	if err := checkABI(); err != nil {
 		return Keypair{}, err
@@ -28,6 +35,8 @@ func GenerateKeypair() (Keypair, error) {
 	return keypair, err
 }
 
+// KeypairFromPrivate derives the public key from exactly 32 private bytes.
+// The input is copied, not erased; the caller owns both original and returned secrets.
 func KeypairFromPrivate(private []byte) (Keypair, error) {
 	if err := checkABI(); err != nil {
 		return Keypair{}, err

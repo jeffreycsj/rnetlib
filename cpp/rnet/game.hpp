@@ -5,8 +5,15 @@
 
 namespace rnet {
 
+/// Move-only game runtime; client identity/trust is copied at construction.
+/// Methods throw Error (with native status/detail); allocations may throw bad_alloc.
+/// Handles belong to this object. Use one poll consumer; synchronize move/close/
+/// destruction against every call. Logger callbacks must not stop/destroy it.
+/// Both peers must poll regularly for negotiation, heartbeats, clocks and queues.
+/// Explicit close reports failures; destructor cleanup is best-effort and noexcept.
 class GameRuntime {
  public:
+  /// Creates a server-capable runtime with secure resource defaults; does not listen.
   GameRuntime() {
     check_abi();
     rnet_game_config_t config{};
@@ -14,11 +21,13 @@ class GameRuntime {
     check(rnet_game_runtime_create(&config, nullptr, &handle_));
   }
 
+  /// Server-capable runtime; config must come from rnet_game_config_init, then customization.
   explicit GameRuntime(const rnet_game_config_t &config) {
     check_abi();
     check(rnet_game_runtime_create(&config, nullptr, &handle_));
   }
 
+  /// Overrides config.logger; callback/context must survive destruction and must not throw.
   GameRuntime(const rnet_game_config_t &config,
               const rnet_logger_t &logger) {
     check_abi();
@@ -27,6 +36,7 @@ class GameRuntime {
     check(rnet_game_runtime_create(&configured, nullptr, &handle_));
   }
 
+  /// Copies client identity and exact server pin; supports listen as well as outbound connect.
   GameRuntime(const rnet_game_config_t &config, const Keypair &client_key,
               const std::array<uint8_t, 32> &expected_server_key) {
     check_abi();
@@ -38,6 +48,7 @@ class GameRuntime {
     check(rnet_game_runtime_create(&config, &security, &handle_));
   }
 
+  /// Client identity/pin plus logger override; callback/context must outlive this runtime.
   GameRuntime(const rnet_game_config_t &config, const Keypair &client_key,
               const std::array<uint8_t, 32> &expected_server_key,
               const rnet_logger_t &logger) {
@@ -52,6 +63,8 @@ class GameRuntime {
     check(rnet_game_runtime_create(&configured, &security, &handle_));
   }
 
+  /// Default config plus copied client identity/pin. Plaintext flag permits LOCAL server
+  /// policy only; outbound clients follow the server's negotiated mode automatically.
   GameRuntime(const Keypair &client_key,
               const std::array<uint8_t, 32> &expected_server_key,
               bool allow_plaintext_business_data = false) {
@@ -67,13 +80,17 @@ class GameRuntime {
     check(rnet_game_runtime_create(&config, &security, &handle_));
   }
 
+  /// Unique ownership: runtime resources cannot be copied.
   GameRuntime(const GameRuntime &) = delete;
+  /// Unique ownership: use move to transfer the handle.
   GameRuntime &operator=(const GameRuntime &) = delete;
 
+  /// Transfers ownership; other becomes empty. No concurrent calls may use either object.
   GameRuntime(GameRuntime &&other) noexcept : handle_(other.handle_) {
     other.handle_ = 0;
   }
 
+  /// Best-effort closes this runtime before transfer; call close first to observe cleanup errors.
   GameRuntime &operator=(GameRuntime &&other) noexcept {
     if (this != &other) {
       reset();
@@ -83,8 +100,11 @@ class GameRuntime {
     return *this;
   }
 
+  /// Best-effort stop/destroy without exceptions; explicit close is the checked shutdown path.
   ~GameRuntime() { reset(); }
 
+  /// Binds fixed transport/numeric IP and returns a listener; fill protocol ID/version bounds.
+  /// Copying options/key does not transfer their ownership. Poll to authorize incoming peers.
   rnet_endpoint_t listen(const GameServerOptions &options) const {
     rnet_game_server_config_t config{};
     config.struct_size = sizeof(config);
@@ -102,6 +122,7 @@ class GameRuntime {
     return endpoint;
   }
 
+  /// Starts join and returns endpoint, not session. DNS may wait; poll until SESSION_READY.
   rnet_endpoint_t connect(const GameClientOptions &options) const {
     const rnet_game_client_config_t config = client_config(options);
     rnet_endpoint_t endpoint = 0;
@@ -109,6 +130,9 @@ class GameRuntime {
     return endpoint;
   }
 
+  /// Uses nonzero old_session and copied ticket for a new endpoint; server reauthorization required.
+  /// Ticket is single-use on its issuing server runtime only, not valid across restart.
+  /// SESSION_RESUMED maps old to new handle; a live old session survives failed negotiation.
   rnet_endpoint_t connect_resume(const GameClientOptions &options,
                                  rnet_session_t old_session,
                                  const std::vector<uint8_t> &ticket) const {
@@ -119,18 +143,21 @@ class GameRuntime {
     return endpoint;
   }
 
+  /// Returns selected business version or throws if unavailable; selection is not readiness.
   uint32_t selected_protocol_version(rnet_session_t session) const {
     uint32_t version = 0;
     check(rnet_game_selected_protocol_version(handle_, session, &version));
     return version;
   }
 
+  /// Cumulative TCP/KCP replacements after game staging but before worker pickup.
   uint64_t transport_latest_replacements() const {
     uint64_t replaced = 0;
     check(rnet_game_transport_latest_replacements(handle_, &replaced));
     return replaced;
   }
 
+  /// Copies TCP/KCP pending-slot admission/replacement/pickup counters; not delivery counts.
   GameTransportLatest transport_latest_snapshot() const {
     rnet_game_transport_latest_t raw{};
     check(rnet_game_transport_latest_snapshot(handle_, &raw));
@@ -147,65 +174,83 @@ class GameRuntime {
     return value;
   }
 
+  /// Server queues ticket for ready session and copied 1..64-byte identity; client gets RESUME_TICKET.
   void issue_resume_ticket(rnet_session_t session,
                            const std::vector<uint8_t> &identity) const {
     check(rnet_game_issue_resume_ticket(handle_, session, bytes(identity)));
   }
 
+  /// Bound port of a live endpoint, including OS choice after listen(port=0); stale handles throw.
   uint16_t local_port(rnet_endpoint_t endpoint) const {
     uint16_t port = 0;
     check(rnet_game_endpoint_local_port(handle_, endpoint, &port));
     return port;
   }
 
+  /// Answers AUTH_REQUEST/RESUME_REQUEST; accept=true is not readiness. Wait for READY/RESUMED.
   void auth_decide(rnet_session_t session, bool accept) const {
     check(rnet_game_auth_decide(handle_, session, accept ? 1U : 0U));
   }
 
+  /// Copies opaque payload to Normal queue of a ready session; empty is valid. Poll forwards it.
+  /// Success is admission only; oversize, not-ready and backpressure throw Error.
   void send(rnet_session_t session, const std::vector<uint8_t> &payload) const {
     check(rnet_game_send(handle_, session, bytes(payload)));
   }
 
+  /// Binary-safe string overload of send; embedded NUL bytes are preserved, no terminator is sent.
   void send(rnet_session_t session, const std::string &payload) const {
     check(rnet_game_send(handle_, session, bytes(payload)));
   }
 
+  /// Queues a copied ready-session payload with optional metadata, priority and local staging expiry.
   void send(rnet_session_t session, const std::vector<uint8_t> &payload,
             const GameSendOptions &options) const {
     send_with_options(session, bytes(payload), options);
   }
 
+  /// Binary-safe send with scheduling options; expiry cannot recall transport-admitted bytes.
   void send(rnet_session_t session, const std::string &payload,
             const GameSendOptions &options) const {
     send_with_options(session, bytes(payload), options);
   }
 
+  /// Copies a best-effort snapshot for ready session/key (zero key valid); poll forwards it.
+  /// Replaces game staging and TCP/KCP pending slots until worker pickup; never socket/KCP cache.
   void send_latest(rnet_session_t session, uint64_t key,
                    const std::vector<uint8_t> &payload) const {
     check(rnet_game_send_latest(handle_, session, key, bytes(payload)));
   }
 
+  /// Binary-safe snapshot overload; same-session/key replacement, not a remote delivery guarantee.
   void send_latest(rnet_session_t session, uint64_t key,
                    const std::string &payload) const {
     check(rnet_game_send_latest(handle_, session, key, bytes(payload)));
   }
 
+  /// Closes peer and revokes its resume/staged state; listener remains open.
   void close_session(rnet_session_t session) const {
     check(rnet_game_session_close(handle_, session));
   }
 
+  /// Closes endpoint and all its sessions, discarding staged/resume state; runtime stays alive.
   void close_endpoint(rnet_endpoint_t endpoint) const {
     check(rnet_game_endpoint_close(handle_, endpoint));
   }
 
+  /// Server requests rotation; SECURITY_CHANGED/REKEY reports local commit, not this return.
   void rekey(rnet_session_t session) const {
     check(rnet_game_rekey(handle_, session));
   }
 
+  /// Server requests business mode; enabled=false requires runtime opt-in and removes integrity.
+  /// Controls stay protected, client follows automatically; SECURITY_CHANGED reports local commit.
+  /// Requesting the already active mode can succeed without another event.
   void set_encryption(rnet_session_t session, bool enabled) const {
     check(rnet_game_security_set(handle_, session, enabled ? 1U : 0U));
   }
 
+  /// Copies quality for session; available=false before sampling, distinct from measured zero loss.
   GameQuality network_quality(rnet_session_t session) const {
     rnet_game_quality_t raw{};
     check(rnet_game_network_quality(handle_, session, &raw));
@@ -229,12 +274,14 @@ class GameRuntime {
     return value;
   }
 
+  /// Runtime-local monotonic microseconds, not Unix/UTC time.
   uint64_t clock_micros() const {
     uint64_t value = 0;
     check(rnet_game_clock_micros(handle_, &value));
     return value;
   }
 
+  /// Approximate client offset sample; available=false on server/before sampling. Not anti-cheat time.
   GameClockSync clock_sync_snapshot(rnet_session_t session) const {
     rnet_game_clock_sync_t raw{};
     check(rnet_game_clock_sync_snapshot(handle_, session, &raw));
@@ -246,16 +293,19 @@ class GameRuntime {
     return value;
   }
 
+  /// Copies cumulative counters/current gauges; fields are not one globally atomic observation.
   GameMetrics metrics_snapshot() const {
     GameMetrics value{};
     check(rnet_game_metrics_snapshot(handle_, &value));
     return value;
   }
 
+  /// Poll-driven cumulative log interval in milliseconds; default 30000, zero disables.
   void set_metrics_log_interval(uint64_t interval_ms) const {
     check(rnet_game_metrics_log_interval_set(handle_, interval_ms));
   }
 
+  /// Current LatestOnly staging gauges and cumulative outcomes; forwarded is not delivered.
   GameRealtimeQueue realtime_queue_snapshot() const {
     rnet_game_realtime_queue_t raw{};
     check(rnet_game_realtime_queue_snapshot(handle_, &raw));
@@ -271,6 +321,7 @@ class GameRuntime {
     return value;
   }
 
+  /// Priority queue gauges/outcomes and cumulative delays (all messages versus tick-bearing); no reset.
   GameScheduledQueue scheduled_queue_snapshot() const {
     rnet_game_scheduled_queue_t raw{};
     check(rnet_game_scheduled_queue_snapshot(handle_, &raw));
@@ -300,6 +351,7 @@ class GameRuntime {
     return value;
   }
 
+  /// Negotiation early-data gauges and admission failures, aggregated over this runtime.
   GameRangeBuffer range_buffer_snapshot() const {
     rnet_game_range_buffer_t raw{};
     check(rnet_game_range_buffer_snapshot(handle_, &raw));
@@ -315,6 +367,7 @@ class GameRuntime {
     return value;
   }
 
+  /// Returns an owned low-cardinality Prometheus text copy; native buffer is released even on exception.
   std::string prometheus_snapshot() const {
     rnet_game_buffer_t raw{};
     check(rnet_game_prometheus_snapshot(handle_, &raw));
@@ -331,12 +384,15 @@ class GameRuntime {
                                       raw.len);
   }
 
+  /// Returns up to capacity owned events, releasing both native tokens even when copying throws.
+  /// Zero capacity still drives maintenance; timeout_ms limits idle wait, not lock/work time.
+  /// Poll regularly on both peers. Allocation failure consumes the exported events, without replay.
   std::vector<GameEvent> poll(size_t capacity, uint32_t timeout_ms) const {
     std::vector<rnet_game_event_t> raw(capacity);
     size_t count = 0;
-    check(rnet_game_poll_events(handle_, raw.empty() ? nullptr : raw.data(),
-                                   raw.size(), timeout_ms, &count));
-    // Own all returned tokens before any C++ allocation can throw.
+    const int32_t status = rnet_game_poll_events(
+        handle_, raw.empty() ? nullptr : raw.data(), raw.size(), timeout_ms, &count);
+    // An error can follow a partial export. Own its tokens before check() throws.
     struct ReleaseBatch {
       rnet_runtime_t runtime;
       const std::vector<rnet_game_event_t> &events;
@@ -350,6 +406,7 @@ class GameRuntime {
         }
       }
     } release{handle_, raw, count};
+    check(status);
     std::vector<GameEvent> result;
     result.reserve(count);
     for (size_t i = 0; i < count; ++i) {
@@ -386,11 +443,14 @@ class GameRuntime {
     return result;
   }
 
+  /// Stops I/O with send-drain budget in milliseconds (zero=no drain); keeps handle for poll/close.
+  /// On Error(WOULD_BLOCK), poll pending events then retry; never call from logger callback.
   void stop(uint32_t drain_timeout_ms = 0) {
     if (handle_ != 0)
       check(rnet_game_runtime_stop(handle_, drain_timeout_ms));
   }
 
+  /// Checked stop(0)/destroy; on failure retain handle and resolve/retry. Empty object is a no-op.
   void close() {
     if (handle_ == 0)
       return;

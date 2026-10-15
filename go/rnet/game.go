@@ -15,6 +15,10 @@ import (
 	"unsafe"
 )
 
+// GameRuntime owns native game state and workers for both server and client endpoints.
+// Do not copy it after use; Close explicitly. Continuously Poll to advance negotiation,
+// heartbeats, clock samples and staging queues. Use one event consumer; stop concurrent
+// callers before shutdown. Logger callbacks must never call Stop or Close.
 type GameRuntime struct {
 	mu         sync.RWMutex
 	handle     C.rnet_runtime_t
@@ -24,8 +28,10 @@ type GameRuntime struct {
 	loggerSink *gameLoggerSink
 }
 
-// NewGameRuntime creates a production-default game runtime. Pass nil for a
-// server-only runtime; clients pin one expected server public key.
+// NewGameRuntime starts workers using zero or one GameConfig; its zero value selects defaults.
+// security nil creates a server-only runtime; outbound clients need a local key and
+// one pinned server public key. Config/key bytes are copied, but Logger is retained.
+// Invalid configuration, extra configs or an incompatible native ABI returns an error.
 func NewGameRuntime(security *ClientSecurity, configs ...GameConfig) (*GameRuntime, error) {
 	if err := checkABI(); err != nil {
 		return nil, err
@@ -109,9 +115,10 @@ func (r *GameRuntime) handleValue() (C.rnet_runtime_t, error) {
 	return r.handle, nil
 }
 
-// ConnectResume performs a new handshake; a server ResumeRequest still requires AuthDecide.
-// IssueResumeTicket sends a one-use, server-authoritative ticket to the ready client.
-// Identity is opaque to RNet and must not be logged.
+// IssueResumeTicket queues a one-use credential for a ready server-side session.
+// identity must contain 1..64 opaque bytes; the client receives GameResumeTicket.
+// Tickets require this same server runtime and reauthorization, not restart/cluster recovery.
+// The identity is copied; never log it or the resulting ticket.
 func (r *GameRuntime) IssueResumeTicket(session Session, identity []byte) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -124,6 +131,8 @@ func (r *GameRuntime) IssueResumeTicket(session Session, identity []byte) error 
 	return statusError(status)
 }
 
+// LocalPort returns a live endpoint's bound port, including a port assigned by Listen.
+// The endpoint must belong to this runtime; stale handles return an error.
 func (r *GameRuntime) LocalPort(endpoint Endpoint) (uint16, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -135,6 +144,9 @@ func (r *GameRuntime) LocalPort(endpoint Endpoint) (uint16, error) {
 	return uint16(port), err
 }
 
+// AuthDecide accepts or rejects a pending GameAuthRequest or GameResumeRequest.
+// Successful acceptance only queues authorization; await GameSessionReady or
+// GameSessionResumed before sending. A pending resume must be authorized again.
 func (r *GameRuntime) AuthDecide(session Session, accept bool) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -148,6 +160,9 @@ func (r *GameRuntime) AuthDecide(session Session, accept bool) error {
 	return statusError(C.rnet_game_auth_decide(handle, C.rnet_session_t(session), decision))
 }
 
+// Send copies payload into the normal-priority game staging queue for a ready session.
+// Nil is a valid empty message. Success is local admission, not delivery; backpressure,
+// size limits and non-ready/closed sessions return errors. Poll forwards staged traffic.
 func (r *GameRuntime) Send(session Session, payload []byte) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -160,6 +175,9 @@ func (r *GameRuntime) Send(session Session, payload []byte) error {
 	return statusError(status)
 }
 
+// SendWithOptions follows Send's ownership/admission contract with optional metadata,
+// priority and expiry. Zero priority selects normal; negative expiry is rejected.
+// Expiry only affects game staging and cannot retract transport-admitted data.
 func (r *GameRuntime) SendWithOptions(session Session, payload []byte, options GameSendOptions) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -204,9 +222,10 @@ func gameExpiryMilliseconds(expiry time.Duration) (uint64, error) {
 	return uint64(milliseconds), nil
 }
 
-// SendLatest coalesces snapshots by session and key. TCP/KCP snapshots can also
-// be replaced while waiting in a transport-pending slot; worker-owned data
-// already handed to a socket or KCP cannot be withdrawn.
+// SendLatest copies a replaceable snapshot under (session, key); key zero is valid.
+// A ready session is required. All transports replace pending game snapshots; TCP/KCP
+// also replace transport-pending slots before worker pickup. Worker-owned socket/KCP
+// data cannot be withdrawn. Success is admission, not delivery; Poll forwards snapshots.
 func (r *GameRuntime) SendLatest(session Session, key uint64, payload []byte) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -219,6 +238,8 @@ func (r *GameRuntime) SendLatest(session Session, key uint64, payload []byte) er
 	return statusError(status)
 }
 
+// CloseSession closes the local session, clears staging and revokes its resume state.
+// It is an explicit kick, not a recoverable network disconnect; stale handles fail.
 func (r *GameRuntime) CloseSession(session Session) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -228,6 +249,8 @@ func (r *GameRuntime) CloseSession(session Session) error {
 	return statusError(C.rnet_game_session_close(handle, C.rnet_session_t(session)))
 }
 
+// CloseEndpoint closes a local listener/connection endpoint and its owned sessions.
+// Do not send using their old handles after closure.
 func (r *GameRuntime) CloseEndpoint(endpoint Endpoint) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -237,6 +260,8 @@ func (r *GameRuntime) CloseEndpoint(endpoint Endpoint) error {
 	return statusError(C.rnet_game_endpoint_close(handle, C.rnet_endpoint_t(endpoint)))
 }
 
+// Rekey queues a server-led key rotation for a ready session without changing its mode.
+// GameSecurityChanged reports local completion; client-side or invalid states fail.
 func (r *GameRuntime) Rekey(session Session) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -246,6 +271,10 @@ func (r *GameRuntime) Rekey(session Session) error {
 	return statusError(C.rnet_game_rekey(handle, C.rnet_session_t(session)))
 }
 
+// SetEncryption requests a ready server session's business encryption policy.
+// Clients follow automatically. Disabling requires AllowPlaintextBusinessData and
+// removes business confidentiality/integrity; control traffic stays protected.
+// Await GameSecurityChanged unless the requested mode was already active (a no-op).
 func (r *GameRuntime) SetEncryption(session Session, enabled bool) error {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -259,6 +288,9 @@ func (r *GameRuntime) SetEncryption(session Session, enabled bool) error {
 	return statusError(C.rnet_game_security_set(handle, C.rnet_session_t(session), value))
 }
 
+// NetworkQuality returns evidence for a tracked session; success does not prove game readiness.
+// Check Available and transport availability flags: TCP has no loss estimate,
+// UDP measures sequence gaps, and KCP measures retransmissions rather than IP loss.
 func (r *GameRuntime) NetworkQuality(session Session) (GameQuality, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -282,7 +314,8 @@ func (r *GameRuntime) NetworkQuality(session Session) (GameQuality, error) {
 	}, nil
 }
 
-// ClockMicros returns microseconds since this runtime's monotonic origin.
+// ClockMicros returns microseconds since this runtime's monotonic origin, not UTC.
+// Values from different runtimes require an offset estimate before comparison.
 func (r *GameRuntime) ClockMicros() (uint64, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -296,7 +329,9 @@ func (r *GameRuntime) ClockMicros() (uint64, error) {
 	return uint64(value), nil
 }
 
-// ClockSyncSnapshot returns the latest client-side four-timestamp sample.
+// ClockSyncSnapshot returns the latest approximate client-side four-timestamp sample.
+// Available is false on server sessions or before a sample. Queueing affects the estimate;
+// it is not a trusted anti-cheat clock. Unknown sessions return an error.
 func (r *GameRuntime) ClockSyncSnapshot(session Session) (GameClockSync, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -315,7 +350,8 @@ func (r *GameRuntime) ClockSyncSnapshot(session Session) (GameClockSync, error) 
 	}, nil
 }
 
-// PrometheusSnapshot returns an owned text copy without per-player labels.
+// PrometheusSnapshot returns owned runtime-scoped text without per-player labels.
+// It includes recovered Go logger panics; concurrent updates are not an atomic snapshot.
 func (r *GameRuntime) PrometheusSnapshot() (string, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -340,6 +376,11 @@ func (r *GameRuntime) PrometheusSnapshot() (string, error) {
 	return result, nil
 }
 
+// Poll consumes up to capacity game events and copies both payloads into Go-owned memory.
+// capacity must be 0..65536; zero still advances internal maintenance. Call continually
+// on both peers, even when idle. timeout is an idle wait, truncated to milliseconds and
+// clamped to [0, MaxUint32], not a hard call deadline. Erase copied credentials promptly.
+// On export failure, consumed events are not replayed; exported native buffers are released.
 func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEvent, err error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -364,9 +405,9 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 		timeoutMS = math.MaxUint32
 	}
 	var count C.size_t
-	if err = statusError(C.rnet_game_poll_events(handle, pointer, C.size_t(capacity), C.uint32_t(timeoutMS), &count)); err != nil {
-		return nil, err
-	}
+	// A failed export may still own a prefix of buffers. Capture TLS diagnostics
+	// before cleanup calls overwrite them, and register cleanup before returning.
+	err = statusError(C.rnet_game_poll_events(handle, pointer, C.size_t(capacity), C.uint32_t(timeoutMS), &count))
 	defer func() {
 		for i := 0; i < int(count); i++ {
 			for _, token := range []C.uint64_t{native[i].buffer_token, native[i].aux_buffer_token} {
@@ -378,6 +419,9 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 			}
 		}
 	}()
+	if err != nil {
+		return nil, err
+	}
 	result = make([]GameEvent, 0, count)
 	for i := 0; i < int(count); i++ {
 		source := native[i]
@@ -420,6 +464,9 @@ func gameCopyBytes(pointer *C.uint8_t, length C.size_t) ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(pointer), C.int(length)), nil
 }
 
+// Stop requests native shutdown without destroying this wrapper. Already stopped/closed is a no-op.
+// timeout is truncated to milliseconds and clamped to [0, MaxUint32], not a hard deadline.
+// On backpressure, drain Poll and retry. Never call from this runtime's logger callback.
 func (r *GameRuntime) Stop(timeout time.Duration) error {
 	defer lockNativeThread()()
 	r.mu.RLock()
@@ -443,6 +490,9 @@ func (r *GameRuntime) Stop(timeout time.Duration) error {
 	return nil
 }
 
+// Close stops and destroys the runtime and releases the retained logger after success.
+// It is idempotent after success; failure preserves a handle for retry. Quiesce other
+// callers first; concurrent Close can return backpressure. Never call from its logger.
 func (r *GameRuntime) Close() error {
 	defer lockNativeThread()()
 	if err := r.Stop(0); err != nil {
