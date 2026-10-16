@@ -106,6 +106,60 @@ fn transport_rejects_modified_ciphertext() {
     );
 }
 
+fn rejected_pin_blocks_finish(datagram: bool) {
+    let client_key = Keypair::generate().unwrap();
+    let trusted_server = Keypair::generate().unwrap();
+    let wrong_server = Keypair::generate().unwrap();
+    let mut client = InitiatorHandshake::new(&client_key.private, &trusted_server.public).unwrap();
+    let mut server = ResponderHandshake::new(&wrong_server.private).unwrap();
+    server.read_first(&client.write_first().unwrap()).unwrap();
+    let response = server.write_response().unwrap();
+    assert_eq!(
+        client.read_response(&response),
+        Err(SecurityError::PeerKeyMismatch)
+    );
+
+    // A caller ignoring the first error must not obtain a final handshake record
+    // containing credentials encrypted to the rejected server.
+    let error = if datagram {
+        client.finish_datagram(b"private-login-ticket").err()
+    } else {
+        client.finish(b"private-login-ticket").err()
+    };
+    assert_eq!(error, Some(SecurityError::InvalidState));
+}
+
+#[test]
+fn rejected_pin_blocks_stream_finish() {
+    rejected_pin_blocks_finish(false);
+}
+
+#[test]
+fn rejected_pin_blocks_datagram_finish() {
+    rejected_pin_blocks_finish(true);
+}
+
+#[test]
+fn failed_response_cannot_reuse_previous_pin_verification() {
+    for datagram in [false, true] {
+        let client_key = Keypair::generate().unwrap();
+        let server_key = Keypair::generate().unwrap();
+        let mut client = InitiatorHandshake::new(&client_key.private, &server_key.public).unwrap();
+        let mut server = ResponderHandshake::new(&server_key.private).unwrap();
+        server.read_first(&client.write_first().unwrap()).unwrap();
+        client
+            .read_response(&server.write_response().unwrap())
+            .unwrap();
+        assert_eq!(client.read_response(&[]), Err(SecurityError::Crypto));
+        let error = if datagram {
+            client.finish_datagram(b"private-login-ticket").err()
+        } else {
+            client.finish(b"private-login-ticket").err()
+        };
+        assert_eq!(error, Some(SecurityError::InvalidState));
+    }
+}
+
 #[test]
 fn datagram_transport_accepts_out_of_order_packets_and_rejects_replay() {
     let client_key = Keypair::generate().expect("client key");

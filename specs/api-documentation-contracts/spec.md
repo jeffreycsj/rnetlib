@@ -34,6 +34,10 @@
 2. [x] C ABI 与 C++11：逐参数/成员说明、错误与异步完成事件、token 释放、日志回调重入限制和 RAII 生命周期。对照 FFI 转换核实，保持布局和签名不变。
 3. [x] Go 与 C#：按实际包装语义说明零值/默认值、错误返回/异常、复制与销毁；GoDoc 和 XML 文档覆盖公开类型、常量、成员与方法。
 4. [ ] Rust 底层及内部关键路径：core、transport、protocol、security、observe 的公开契约；重点补握手、SELECT/ACK/READY、旧会话接管、心跳调度、动态安全状态、发送队列预算与端点清理的设计原因。
+   - [x] core / protocol / security 公开契约及缺失文档门禁；队列预算/锁序、导出内存所有权、握手信任、重放窗口与换钥屏障说明。
+   - [x] observe 公开契约（第一阶段已完成）。
+   - [ ] transport 公开配置、生命周期、发送与遥测契约。
+   - [ ] game / transport 的 SELECT/ACK/READY、恢复接管、心跳调度及端点清理内部路径收尾。
 5. [ ] 接入文档与防回退：统一多语言建立、授权、持续 poll、发送、接收、背压、关闭和日志示例；将可验证的注释/文档构建门禁接入现有检查。
 6. [ ] 对抗性复查：抽查每种语言的完整调用链，对照实际 diff、边界测试与生成文档检查语义；发现运行缺陷时，独立建立 RED → GREEN 回归后修复，不把行为变化藏在注释提交中。
 
@@ -146,3 +150,44 @@
 测试盲区：故障注入只验证 Go 包装层的错误前缀所有权，不证明真实分配器 OOM/abort 可恢复；Go race 不检测所有原生 Rust/C 数据竞争；文档存在性/XML 构建不自动证明语义。全平台验证、完整发布包和目标弱网长稳仍未覆盖。
 
 整体评价：本批 Go/C# 公开契约、文档门禁和确认的 Go 资源泄漏已闭环。下一步继续第 4 项 Rust 底层与内部关键路径，以及第 5/6 项全范围示例、门禁和审查收尾；长稳仍在整体完善后进行，不能因此宣称生产认证完成。
+
+## 第四阶段 A 记录（2026-10-15）
+
+本批完成 core / protocol / security 子项，不将第 4 项整体勾选完成。记录时 HEAD 为 `05a2281`；前批 C/C++/Go/C# 成果已在该提交中，本轮没有执行提交或推送。
+
+- `rnet-core` 从单个 600 多行入口拆分为 error、event、event_queue、handle、buffer、lifecycle 六个职责模块，crate 根继续重导出原公开符号。逐模块去除注释/导入/空白后与拆分前比较，原实现和测试 token 完全一致；入口变为 25 行，各模块均低于 600 行。
+- 补齐 core 的错误分类、事件字段、优先队列可能淘汰业务/控制事件的边界、失败非事务语义、count/byte 预算、锁顺序、句柄所属表与代际回绕、导出缓冲区释放/空值/跨线程读取约束、生命周期原子操作及并发失败语义。
+- 补齐 protocol 的帧字段、输入长度/零值、复制与错误语义；明确单帧上限不等于输入总内存上限、增量解析失败不可重放已经消费的前缀、序列化/解码本身不认证。新增真实运行的分片输入 doctest。
+- 补齐 security 的身份密钥所有权、握手调用顺序与业务授权区别、有序记录/数据报区别、nonce 消耗、验签后更新重放窗口、换钥 commit 用旧密钥而 ack 用新密钥的驱动顺序。控制器不负责 I/O、重试或超时，不能把输入处理当作可回滚事务。
+- 三个 crate 启用 `deny(missing_docs)`。实施前分别确认 core 84、protocol 17、security 29 个缺失诊断，再补至通过；严格 rustdoc 同时检查断链。扩大 `make doc-check` 和结构门禁，不放宽行数限制。
+
+### 独立安全修复：公钥拒绝后的握手完成
+
+原 InitiatorHandshake 的 Noise 状态在 read_response 校验 pin 之前已经推进；若直接使用该底层对象的调用方忽略 PeerKeyMismatch，仍可调用 finish / finish_datagram，得到发往错误服务器的最后一条握手消息（包含 join 凭据）和传输状态。
+
+- 用真实不同服务器密钥构造两个回归，分别覆盖 ordered / datagram；RED 均确认公钥校验已失败但 finish 仍成功，不使用模拟密码学对象。
+- 最小修复增加私有 pin-verified 状态，只有成功处理并匹配服务器公钥的响应才放行两种 finish；每次读响应先撤销旧验证状态。未验证时返回 InvalidState，不生成最终凭据消息。
+- 增补第三个回归，覆盖曾校验成功后再次读入错误响应，不能复用旧验证结果；原成功握手、密文篡改、乱序/重放和动态切换测试继续验证。
+- 现有 TCP / UDP/KCP 驱动在 read_response 后都传播错误并退出，所以这是底层 Rust 公开接口的纵深防护缺口，不宣称现行 SDK 正常建连路径已经存在可利用绕过。没有修改 wire、C ABI 或业务版本协商。
+
+### 本批对抗性审查
+
+| 严重度 | 位置/问题 | 处理 |
+| --- | --- | --- |
+| 中 | 底层 InitiatorHandshake 的 Noise 进度不能证明已通过服务器 pin 校验 | 独立 RED → GREEN 增加完成前信任检查及两种传输/失败复用回归 |
+| 低 | 句柄数字容易被误解为跨 runtime 唯一、永不重复的身份 | 说明 owner-local、有限代际空间和跨表碰撞，不能承诺错误表一定拒绝 |
+| 低 | 编解码和公开 Control 构造器容易被误认为会认证并验证全部状态 | 区分字节形态、认证和状态机检查；明确 caller 输入预算及构造器前置条件 |
+| 低 | 优先事件失败被误解为没有副作用；poll timeout 被误解为硬截止 | 明确部分淘汰不可回滚、条件变量虚假唤醒和锁等待边界 |
+
+测试盲区：缺失注释检查只能覆盖可达公开声明，不证明文档语义或内部注释完整；core 拆分保持实现，不代表修复其所有底层使用限制；新增真实握手测试不等于第三方密码学审计。transport 与 game 内部注释、全范围示例/门禁收尾、目标平台和最终长稳仍待后续。
+
+### 验证结果
+
+- 修改前完整 Rust workspace 测试基线通过；握手 pin-failure 两条新回归先失败，最小修复后完整 workspace 再次通过。
+- 最终当前修改树通过 `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、Rust 格式、结构与 `git diff --check`。
+- 扩充后的 `make doc-check` 通过：core/protocol/security/observe 严格 rustdoc、game all-features 严格 rustdoc，以及五个 crate 的 doctest。期间检出的文档方括号误识别链接已修正，没有屏蔽诊断。
+- 当前 native 重新链接后的 C++11 所有权故障回归和四个联网示例、Go 全套和部分导出故障回归、C# TCP/UDP/KCP 与错误 pin/回调/并发销毁检查均通过。
+- 构建与测试串行，15 GiB 可用内存守护全程开启。未重跑独立 Go race、Miri、Loom、ASan fuzz、release 导出检查、完整打包或目标环境长稳；本批不是生产资格认证，也未提交/推送。
+- 本机临时证据：`/tmp/netlib-rust-contracts-baseline.log`、`/tmp/netlib-rnet-{core,protocol,security}-docs-missing.log`、`/tmp/netlib-pin-finish-red.log`、`/tmp/netlib-pin-finish-green.log`、`/tmp/netlib-core-split-green.log`、`/tmp/netlib-core-protocol-security-docs-green.log`、`/tmp/netlib-core-security-final-validation.log`。
+
+整体评价：底层三个 crate 的公开文档、core 职责拆分和确认的握手完成前信任检查已完成并回归；第 4 项仍需继续 transport 和游戏内部关键路径，第 5/6 项仍待全范围收尾。长稳继续安排在整体完善之后。

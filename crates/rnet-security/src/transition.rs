@@ -61,6 +61,9 @@ enum Pending {
 /// This type does not perform I/O or encryption. Drivers must honor the returned effect ordering;
 /// in particular, a rekey commit is encrypted with the old key and its acknowledgement with the
 /// new key.
+/// Drivers also own deadlines, retransmission and business-send gating. A successful handle call
+/// can advance this state before its response is sent: on I/O failure, close the session rather
+/// than retrying the same input as if processing were transactional.
 #[derive(Debug)]
 pub struct SecurityController {
     role: Role,
@@ -70,7 +73,9 @@ pub struct SecurityController {
 }
 
 impl SecurityController {
-    /// Creates an established controller. `epoch` must be nonzero.
+    /// Creates an established controller with `role`, initial business `mode` and `epoch`.
+    /// The caller must supply a nonzero established epoch; this constructor does not validate it.
+    /// Handshake authorization and permission to use plaintext are enforced by the embedding driver.
     pub fn new(role: Role, mode: SecurityMode, epoch: u64) -> Self {
         Self {
             role,
@@ -96,6 +101,9 @@ impl SecurityController {
     }
 
     /// Starts a server-led application-data mode switch.
+    /// `mode` is the target; returns the proposal to authenticate and transmit.
+    /// Client role, an in-flight barrier, unchanged mode, zero/exhausted epoch return InvalidState.
+    /// Unlike the runtime's convenience API, requesting the current mode is an error here.
     pub fn begin_switch(&mut self, mode: SecurityMode) -> Result<Control> {
         self.ensure_server_idle()?;
         if mode == self.mode {
@@ -107,6 +115,8 @@ impl SecurityController {
     }
 
     /// Starts a server-led Noise rekey without changing application-data mode.
+    /// Returns the proposal; only an idle server with a nonzero, unexhausted epoch may begin.
+    /// Other states return InvalidState without starting a new barrier.
     pub fn begin_rekey(&mut self) -> Result<Control> {
         self.ensure_server_idle()?;
         let epoch = self.next_epoch()?;
@@ -115,6 +125,9 @@ impl SecurityController {
     }
 
     /// Consumes one authenticated peer control and advances the local barrier state.
+    /// The driver must first authenticate/decode `control`; this method performs no cryptography.
+    /// Unexpected operation, role, epoch or pending-state combinations return InvalidState.
+    /// Apply the returned effects around response transmission in their specified order.
     pub fn handle(&mut self, control: Control) -> Result<Transition> {
         match (self.role, self.pending, control.kind) {
             (Role::Client, None, ControlKind::SwitchPropose) => {
@@ -183,6 +196,8 @@ impl SecurityController {
             (Role::Server, Some(Pending::ServerRekeyReady { epoch }), ControlKind::RekeyReady)
                 if control.epoch == epoch =>
             {
+                // The peer still has the old receive key. Commit must leave under that
+                // key before this side rotates; its acknowledgement then proves the new key.
                 self.pending = Some(Pending::ServerRekeyAck { epoch });
                 Ok(Transition {
                     before_response: Effect::None,

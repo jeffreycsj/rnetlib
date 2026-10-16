@@ -2,6 +2,9 @@
 //!
 //! These records are transport-independent. TCP adds its own length prefix, while UDP and KCP
 //! carry exactly one encoded record per datagram or reliable message.
+//! Serialization is not authentication: outer records remain untrusted until the handshake/
+//! cipher and session state validate them. Only verified plaintext may enter protected/control
+//! decoding. Limits below count payload bytes, not their additional record headers.
 
 use rnet_core::{ErrorCode, Result, RnetError};
 
@@ -41,7 +44,7 @@ impl TryFrom<u8> for SecurityMode {
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordKind {
-    /// Starts a new protocol-v2 client session.
+    /// Starts a session using the current authenticated transport record layout.
     ClientHello = 1,
     /// Announces the server identity and initial application-data mode.
     ServerHello = 2,
@@ -71,7 +74,8 @@ impl TryFrom<u8> for RecordKind {
     }
 }
 
-/// One complete protocol-v2 record.
+/// One complete current-format security record; decoding alone does not establish trust.
+/// Debug includes payload bytes, so do not log records containing credentials or business data.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Record {
     /// Record interpretation. Handshake records use epoch zero; established records do not.
@@ -113,7 +117,8 @@ impl TryFrom<u8> for ProtectedKind {
     }
 }
 
-/// Authenticated content carried inside a [`RecordKind::Protected`] record.
+/// Content intended for a [`RecordKind::Protected`] record, before encryption or after verification.
+/// Construction alone does not authenticate it. Debug includes payload bytes; avoid secret logging.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtectedMessage {
     /// Determines whether the payload is authentication, application data or control data.
@@ -124,6 +129,8 @@ pub struct ProtectedMessage {
 
 impl ProtectedMessage {
     /// Copies a payload into a protected message.
+    /// `kind` selects its interpretation; empty payloads are allowed here. No encryption,
+    /// semantic validation or size checking occurs until the caller/encoder enforces it.
     pub fn new(kind: ProtectedKind, payload: &[u8]) -> Self {
         Self {
             kind,
@@ -133,6 +140,8 @@ impl ProtectedMessage {
 }
 
 /// Encodes content before it is passed to a Noise transport cipher.
+/// Returns owned bytes with a five-byte inner header, not ciphertext. Payloads beyond
+/// `max_payload_len` or u32::MAX return MessageTooLarge; a zero limit permits empty payloads.
 pub fn encode_protected(message: &ProtectedMessage, max_payload_len: usize) -> Result<Vec<u8>> {
     validate_payload_len(message.payload.len(), max_payload_len)?;
     let payload_len = u32::try_from(message.payload.len()).map_err(|_| {
@@ -149,6 +158,9 @@ pub fn encode_protected(message: &ProtectedMessage, max_payload_len: usize) -> R
 }
 
 /// Decodes exactly one authenticated message after Noise verification succeeds.
+/// The caller supplies already verified `input`; this function only checks shape/kind/length.
+/// Trailing/truncated bytes or unknown kinds return ProtocolError; an excessive declared
+/// payload returns MessageTooLarge before copying. Zero limit permits an empty payload.
 pub fn decode_protected(input: &[u8], max_payload_len: usize) -> Result<ProtectedMessage> {
     if input.len() < PROTECTED_HEADER_LEN {
         return protocol_error("truncated protected message header");
@@ -176,6 +188,8 @@ pub fn decode_protected(input: &[u8], max_payload_len: usize) -> Result<Protecte
 
 impl Record {
     /// Copies a payload into a new record.
+    /// No limit or kind/epoch consistency check is performed. The driver owns those
+    /// semantic checks; the encoder only enforces payload size.
     pub fn new(kind: RecordKind, epoch: u64, payload: &[u8]) -> Self {
         Self {
             kind,
@@ -186,6 +200,8 @@ impl Record {
 }
 
 /// Encodes a record after enforcing the configured payload limit.
+/// Returns owned bytes with a 20-byte header; does not encrypt/authenticate or validate
+/// kind/epoch consistency. Excess payload returns MessageTooLarge; zero limit allows empty.
 pub fn encode_record(record: &Record, max_payload_len: usize) -> Result<Vec<u8>> {
     validate_payload_len(record.payload.len(), max_payload_len)?;
     let payload_len = u32::try_from(record.payload.len()).map_err(|_| {
@@ -206,6 +222,9 @@ pub fn encode_record(record: &Record, max_payload_len: usize) -> Result<Vec<u8>>
 }
 
 /// Decodes exactly one record and rejects malformed lengths before copying the payload.
+/// Unknown format/kind, reserved bits, truncation or trailing bytes return ProtocolError;
+/// payload above `max_payload_len`/u32::MAX returns MessageTooLarge. A zero limit allows empty.
+/// Epoch freshness and payload authenticity must be checked by the session driver.
 pub fn decode_record(input: &[u8], max_payload_len: usize) -> Result<Record> {
     if input.len() < HEADER_LEN {
         return protocol_error("truncated security record header");
@@ -284,7 +303,8 @@ pub struct Control {
 }
 
 impl Control {
-    /// Creates a mode-switch proposal for a nonzero target epoch.
+    /// Constructs a control carrying `mode`; caller must use SwitchPropose and a nonzero epoch.
+    /// No validation is performed here; invalid combinations will fail peer decoding.
     pub fn switch(kind: ControlKind, epoch: u64, mode: SecurityMode) -> Self {
         Self {
             kind,
@@ -294,6 +314,7 @@ impl Control {
     }
 
     /// Creates a transition barrier that carries no mode.
+    /// Caller supplies a nonzero `epoch` and a kind other than SwitchPropose; not validated here.
     pub fn barrier(kind: ControlKind, epoch: u64) -> Self {
         Self {
             kind,
@@ -304,6 +325,8 @@ impl Control {
 }
 
 /// Encodes a fixed-size control message for encryption inside a protected record.
+/// Serializes `control` without validation or encryption. Caller must supply a nonzero epoch
+/// and mode only for SwitchPropose; use the authenticated channel for transmission.
 pub fn encode_control(control: Control) -> [u8; CONTROL_LEN] {
     let mut encoded = [0; CONTROL_LEN];
     encoded[0] = control.kind as u8;
@@ -313,6 +336,8 @@ pub fn encode_control(control: Control) -> [u8; CONTROL_LEN] {
 }
 
 /// Decodes a transition control and validates its kind, mode and nonzero epoch.
+/// `input` must already be authenticated and contain exactly ten bytes. Invalid shapes/values
+/// return ProtocolError; session role, expected epoch and barrier order are checked elsewhere.
 pub fn decode_control(input: &[u8]) -> Result<Control> {
     if input.len() != CONTROL_LEN {
         return protocol_error("invalid security control length");

@@ -13,9 +13,12 @@ test:
 	cargo test --workspace
 
 doc-check:
+	cargo rustdoc -p rnet-core --lib -- -D warnings
+	cargo rustdoc -p rnet-protocol --lib -- -D warnings
+	cargo rustdoc -p rnet-security --lib -- -D warnings
 	cargo rustdoc -p rnet-observe --lib -- -D warnings
 	cargo rustdoc -p rnet-game --lib --all-features -- -D warnings
-	cargo test -p rnet-game -p rnet-observe --doc
+	cargo test -p rnet-core -p rnet-protocol -p rnet-security -p rnet-game -p rnet-observe --doc
 
 cpp-test:
 	mkdir -p target

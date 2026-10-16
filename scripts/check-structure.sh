@@ -25,10 +25,14 @@ check_max_lines() {
 }
 
 transport_modules=(config cookie kcp lifecycle metrics runtime adaptive_datagram adaptive_tcp adaptive_wire session state)
+core_modules=(buffer error event event_queue handle lifecycle)
 ffi_modules=(abi endpoint events observe registry runtime session)
 game_modules=(range_api range_runtime range_state realtime_runtime runtime runtime_tests)
 go_modules=(config endpoint event keypair native observe runtime session types)
 
+for module in "${core_modules[@]}"; do
+  require_file "crates/rnet-core/src/${module}.rs"
+done
 for module in "${transport_modules[@]}"; do
   require_file "crates/rnet-transport/src/${module}.rs"
 done
@@ -46,9 +50,10 @@ for header in types keypair runtime; do
 done
 require_file "go/rnet/native.h"
 
-check_max_lines 200 crates/rnet-transport/src/lib.rs crates/rnet-ffi/src/lib.rs
+check_max_lines 200 crates/rnet-core/src/lib.rs crates/rnet-transport/src/lib.rs crates/rnet-ffi/src/lib.rs
 check_max_lines 30 cpp/rnet.hpp
 check_max_lines 600 \
+  crates/rnet-core/src/*.rs crates/rnet-protocol/src/*.rs crates/rnet-security/src/*.rs \
   crates/rnet-transport/src/*.rs crates/rnet-ffi/src/*.rs \
   cpp/rnet/*.hpp go/rnet/*.go go/rnet/native.h
 check_max_lines 800 crates/rnet-game/src/*.rs
