@@ -19,13 +19,19 @@ pub struct SecurityPolicy {
     /// integrity after authenticated setup. Clients follow the authenticated server's mode;
     /// this is not a client-side minimum encryption requirement.
     pub allow_plaintext_business_data: bool,
-    /// Optional time threshold for a server-led automatic rekey.
+    /// Server-led rekey time threshold, measured from tracker creation/last rekey request;
+    /// `None` disables this trigger. Automatic requests run only in stable encrypted mode.
+    /// A configured duration must be positive and form a valid monotonic deadline.
     pub rekey_after: Option<Duration>,
-    /// Optional encrypted application-byte threshold for a server-led automatic rekey.
+    /// Outgoing encrypted frame/control-byte threshold for server-led rekey; `None` disables
+    /// this trigger. Excludes outer encryption overhead and retransmissions. A configured value
+    /// must be positive. Either enabled trigger can request a rekey in stable encrypted mode.
     pub rekey_after_bytes: Option<u64>,
 }
 
 impl SecurityPolicy {
+    /// Disallows server plaintext business mode and requests rekey after one hour or 1 GiB.
+    /// This is a secure default policy, not a deployment qualification or delivery guarantee.
     pub const fn production() -> Self {
         Self {
             allow_plaintext_business_data: false,
@@ -36,6 +42,9 @@ impl SecurityPolicy {
 }
 
 /// Thread-safe callback used by clients to authenticate a server's static Noise public key.
+/// Invoked by I/O workers before sending join credentials; `false` rejects the peer. Calls
+/// for different connections may overlap. Keep it fast, nonblocking and non-panicking;
+/// perform any trust-store refresh outside the callback. The key is borrowed for the call.
 pub type PeerVerifier = Arc<dyn Fn(&[u8; 32]) -> bool + Send + Sync + 'static>;
 
 /// Runtime-wide client identity and server trust policy used by unified connections.
@@ -57,6 +66,8 @@ impl std::fmt::Debug for ClientSecurity {
 
 impl ClientSecurity {
     /// Creates a client policy that accepts only one exact 32-byte server public key.
+    /// Takes ownership of both inputs. A pin of any other length rejects every peer rather
+    /// than disabling verification; this constructor does not return a validation error.
     pub fn pinned(local_key: Keypair, expected_server_public: Vec<u8>) -> Self {
         let verifier =
             Arc::new(move |actual: &[u8; 32]| expected_server_public.as_slice() == actual);
@@ -67,6 +78,8 @@ impl ClientSecurity {
     }
 
     /// Creates a client policy backed by an application trust callback.
+    /// The runtime retains both the identity and callback. See [`PeerVerifier`] for threading
+    /// and return-value semantics; accepting a key does not authorize a business identity.
     pub fn with_verifier(local_key: Keypair, peer_verifier: PeerVerifier) -> Self {
         Self {
             local_key,
@@ -75,37 +88,57 @@ impl ClientSecurity {
     }
 }
 
+/// Immutable runtime limits and socket policy, validated at construction.
+///
+/// Use [`Self::default`] or [`Self::production`] and override individual fields. Counts and
+/// byte limits must be positive; timeout durations must be positive and representable as
+/// monotonic deadlines. Queue budgets do not cap total process memory, kernel buffers or
+/// all cryptographic/KCP allocations. Modifying the original config cannot retune a runtime.
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    /// Tokio I/O worker count; default is available CPU parallelism, with a minimum of one.
     pub worker_threads: usize,
+    /// Runtime-wide queued event count limit; lifecycle events may evict data/control events.
     pub event_queue_capacity: usize,
+    /// Bounded outgoing channel slots: per TCP session, shared per UDP/KCP endpoint.
     pub write_queue_capacity: usize,
+    /// Maximum application frame body in bytes, in `1..=u32::MAX`; excludes framing.
+    /// Join credentials have the additional 60 KiB ceiling, and UDP must fit one datagram.
     pub max_body_len: usize,
+    /// Datagram buffer/MTU ceiling in bytes, from the protocol header length through 65,507.
+    /// Wire and encryption overhead reduce usable UDP payload; KCP fragments larger frames.
+    /// Values too small for KCP/security overhead may fail later during endpoint setup.
     pub max_datagram_size: usize,
     /// Maximum bytes retained by the application event queue.
     pub max_event_bytes: usize,
-    /// Maximum encoded application bytes waiting to be written across the runtime.
+    /// Maximum reserved outgoing frame/control bytes across the runtime, including worker-held
+    /// reservations; excludes socket buffers and KCP's separately bounded unacknowledged data.
     pub max_runtime_queued_bytes: usize,
-    /// Maximum encoded application bytes waiting to be written for one session.
+    /// Per-session outgoing reservation cap in bytes; cannot exceed `max_runtime_queued_bytes`.
     pub max_session_queued_bytes: usize,
+    /// Server-side plaintext permission and automatic rekey triggers; clients follow the server.
     pub security_policy: SecurityPolicy,
     /// Maximum number of concurrently open listeners and client endpoints in one runtime.
     pub max_endpoints: usize,
-    /// Maximum cryptographic or application-authentication handshakes across the runtime.
+    /// Maximum pending session-route reservations across the runtime. Stateless datagram
+    /// preflight/early Noise peer state is separately bounded by endpoint/admission limits.
     pub max_pending_handshakes: usize,
     /// Maximum pending plus established sessions owned by one listener endpoint.
     pub max_sessions_per_endpoint: usize,
-    /// Maximum concurrent TCP handshakes/sessions admitted from one IP or IPv6 prefix.
+    /// Per-listener active admission cap for one IPv4 address or IPv6 prefix across its
+    /// selected transport. UDP/KCP acquire source permits after address-cookie validation.
     pub max_sessions_per_ip: usize,
-    /// Sustained new TCP handshakes admitted per second from one IP or IPv6 prefix.
+    /// Per-listener source token refill rate in new admissions/second, for TCP/UDP/KCP.
     pub handshake_rate_per_ip: u32,
-    /// Maximum instantaneous handshake burst from one IP or IPv6 prefix.
+    /// Per-listener source token-bucket capacity (initial and maximum handshake burst).
     pub handshake_burst_per_ip: u32,
-    /// Prefix width used to aggregate IPv6 admission accounting.
+    /// Prefix width in `0..=128` for IPv6 source admission; IPv4 is accounted per address.
     pub ipv6_admission_prefix_bits: u8,
-    /// Deadline for transport-independent cryptographic and application authentication setup.
+    /// Timeout used for transport handshake/auth phases and server security transitions.
+    /// Some phases receive separate deadlines; this is not a hard total connection deadline.
     pub handshake_timeout: Duration,
-    /// Per-address TCP connection deadline.
+    /// TCP attempt cap and total caller-resolved connection budget; also bounds datagram
+    /// address fallback. Does not include subsequent game version negotiation.
     pub connect_timeout: Duration,
     /// Total deadline for one host-name resolution operation.
     pub dns_timeout: Duration,
@@ -115,7 +148,8 @@ pub struct RuntimeConfig {
     pub tcp_send_buffer_bytes: Option<usize>,
     /// Requested kernel TCP receive-buffer size; `None` preserves the operating-system default.
     pub tcp_recv_buffer_bytes: Option<usize>,
-    /// Maximum receive inactivity for established UDP/KCP peers.
+    /// Idle reclamation interval for established UDP/KCP peers, refreshed by accepted receive
+    /// or successful outgoing wire activity; not an unresponsive-peer heartbeat timeout.
     pub datagram_idle_timeout: Duration,
 }
 
@@ -238,10 +272,14 @@ pub struct ClientConfig {
     pub transport: Transport,
     /// Optional numeric local address. For UDP/KCP, `None` selects a wildcard address matching
     /// the remote IP family and an OS-assigned port; an explicit address is preserved.
+    /// TCP also binds an explicit address before connecting; `None` lets the OS choose.
+    /// An explicit TCP bind must match the remote IP family; failure never falls back to another
+    /// address. Port zero requests an OS-assigned port for every transport.
     pub bind_addr: Option<SocketAddr>,
     /// Numeric server address.
     pub remote_addr: SocketAddr,
     /// Opaque bytes delivered to the server's authentication event inside the Noise handshake.
+    /// May be empty; limited to `min(max_body_len, 60 KiB)`. Treat as sensitive credentials.
     pub join_payload: Vec<u8>,
 }
 
@@ -260,9 +298,13 @@ impl std::fmt::Debug for ClientConfig {
 /// Client configuration for a DNS host name or textual IP address.
 #[derive(Clone)]
 pub struct HostClientConfig {
+    /// TCP, UDP, or KCP; fixed for the endpoint and must match the listener.
     pub transport: Transport,
+    /// Nonempty DNS name or textual IP, not a URL with scheme/path or an embedded port.
     pub host: String,
+    /// Remote service port, from 1 through 65,535; supplied separately from `host`.
     pub port: u16,
+    /// Owned handshake credential bytes with the same limits as [`ClientConfig::join_payload`].
     pub join_payload: Vec<u8>,
 }
 
@@ -281,8 +323,12 @@ impl std::fmt::Debug for HostClientConfig {
 /// Client configuration with caller-resolved candidates in retry order.
 #[derive(Clone)]
 pub struct ResolvedClientConfig {
+    /// TCP, UDP, or KCP; fixed across all address attempts.
     pub transport: Transport,
+    /// Nonempty ordered server candidates. TCP retries connection failures; UDP/KCP retry
+    /// setup in place, including rebinding for a different IP family. No DNS lookup is done.
     pub remote_addrs: Vec<SocketAddr>,
+    /// Owned handshake credential bytes with the same limits as [`ClientConfig::join_payload`].
     pub join_payload: Vec<u8>,
 }
 

@@ -22,12 +22,17 @@ use tokio::sync::mpsc;
 /// correlation identifier across a request and its response.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SendOptions {
+    /// Opaque application-chosen identifier copied to the peer's Message event; zero is default.
+    /// No request tracking, uniqueness, response echoing or timeout is implemented by this field.
     pub correlation_id: u64,
 }
 
 impl NetworkRuntime {
     /// Checks size and ready-state without allocating or enqueuing a frame.
     /// Staging layers use the same UDP frame ceiling as the normal send path.
+    /// `payload_len` excludes the transport header. Success reserves no capacity and can race
+    /// close/backpressure; the later send may still fail. A pending handshake returns
+    /// `HandshakeRequired`; stale handles and oversized bodies return their respective errors.
     pub fn validate_payload_len(&self, session: Handle, payload_len: usize) -> Result<()> {
         if self.shared.state.load() != Lifecycle::Running {
             return Err(RnetError::new(
@@ -68,6 +73,14 @@ impl NetworkRuntime {
     }
 
     /// Requests a server-led data security mode change for an established unified session.
+    /// Only the server-side session owns this capability; clients follow automatically.
+    /// Plaintext requires runtime policy opt-in and has no data integrity or confidentiality.
+    /// Success queues the command, not its completion; `SecurityChanged` confirms a local barrier.
+    /// A request admitted during an in-flight transition (including automatic rekey) stays in
+    /// the bounded command queue until that barrier completes. Further requests can return
+    /// `WouldBlock`; closing or failing the session cancels its pending commands.
+    /// Requesting the already-active mode can be a no-op with no new event. Queue saturation
+    /// returns `WouldBlock`; a client/noncontrolling session returns `InvalidState`.
     pub fn set_security_mode(&self, session: Handle, mode: SecurityMode) -> Result<()> {
         if mode == SecurityMode::Plaintext
             && !self
@@ -85,6 +98,8 @@ impl NetworkRuntime {
     }
 
     /// Requests a server-led Noise rekey without changing the data security mode.
+    /// Uses the same command queue, server-only authority and asynchronous completion contract
+    /// as [`Self::set_security_mode`]. Pending writes are coordinated by the security barrier.
     pub fn rekey_session(&self, session: Handle) -> Result<()> {
         self.send_security_command(session, SecurityCommand::Rekey)
     }
@@ -115,6 +130,10 @@ impl NetworkRuntime {
         })
     }
 
+    /// Consumes the one-shot authorization request for `session` on this runtime.
+    /// `accept = true` permits transport setup to finish; wait for `SessionOpened` before sends.
+    /// `false` rejects it. Stale handles return `InvalidHandle`; duplicate/expired decisions
+    /// return `InvalidState`. A failed expired decision cannot be retried on the same request.
     pub fn auth_decide(&self, session: Handle, accept: bool) -> Result<()> {
         let sender = self
             .shared
@@ -139,6 +158,9 @@ impl NetworkRuntime {
     /// Enqueues opaque application bytes on the session's fixed TCP, UDP, or KCP transport.
     /// Success means accepted by the local bounded queue, not delivered to the peer.
     /// An unfinished handshake, closed session, oversized payload, or full queue returns an error.
+    /// `payload` may be empty and is copied before return; the caller retains its buffer.
+    /// UDP must fit the configured datagram ceiling including framing/security overhead.
+    /// TCP/KCP reliability does not guarantee delivery after a close or local queue rejection.
     ///
     /// Business message types belong in the payload; typed and legacy sends are not supported.
     ///
@@ -176,6 +198,8 @@ impl NetworkRuntime {
     }
 
     /// Enqueues one application message with optional request/response correlation metadata.
+    /// Shares [`Self::send`]'s ownership, size and error contracts. `options` only carries
+    /// metadata; it does not change transport, priority, retry behavior or encryption.
     pub fn send_with_options(
         &self,
         session: Handle,

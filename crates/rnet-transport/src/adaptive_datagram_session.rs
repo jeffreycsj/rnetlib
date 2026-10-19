@@ -81,6 +81,9 @@ pub(crate) async fn handle_established(
             let control = decode_control(&message.payload)?;
             let operation = completed_operation(control.kind);
             let transition = controller.handle(control)?;
+            // Key effects straddle the reply exactly as specified by the controller. The wire
+            // layer retains encoded response bytes for retries; resealing a duplicate would
+            // consume a new nonce and break duplicate-response/replay handling.
             apply(transport, transition.before_response);
             if let Some(response) = transition.response {
                 let terminal = matches!(

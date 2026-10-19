@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 
 impl NetworkRuntime {
     /// Returns authenticated-session KCP retransmissions; UDP/TCP have no such metric.
+    /// Unknown routes return `InvalidHandle`, pending routes `InvalidState`, and established
+    /// TCP/UDP routes `Ok(None)`. A KCP route with no published samples returns a zero snapshot.
+    /// Counters are local PUSH segment transmissions, not an IP loss estimate or heartbeat RTT.
     pub fn kcp_retransmission_snapshot(
         &self,
         session: Handle,
@@ -38,6 +41,10 @@ impl NetworkRuntime {
         }))
     }
 
+    /// Returns the actual local bound address (including an OS-assigned port) for this endpoint.
+    /// Unknown/retired handles return `InvalidHandle`; callers must supply a handle from this
+    /// runtime (cross-runtime numeric collisions cannot prove ownership). Datagram address
+    /// fallback may rebind the socket, so the address can change during connection setup.
     pub fn endpoint_local_addr(&self, endpoint: Handle) -> Result<SocketAddr> {
         self.shared
             .endpoints
@@ -59,8 +66,30 @@ impl NetworkRuntime {
             .ok_or_else(|| RnetError::new(ErrorCode::InvalidHandle, "invalid endpoint"))
     }
 
+    /// Removes at most `capacity` owned events; payloads remain valid after later polls.
+    /// Waits only when the queue is empty. Zero timeout is nonblocking; zero capacity returns
+    /// immediately without draining. Lock contention/processing can exceed `timeout` and an
+    /// early empty return does not indicate disconnection. Multiple pollers compete for events.
+    /// Unlike game polling, this only drains transport events; I/O workers drive transport timers.
     pub fn poll_events(&self, capacity: usize, timeout: Duration) -> Vec<Event> {
-        let events = self.shared.events.poll(capacity, timeout);
+        self.poll_events_with_byte_limit(capacity, usize::MAX, timeout)
+    }
+
+    /// Drains a FIFO prefix constrained by both count and summed event payload bytes.
+    /// Used by staging facades to apply backpressure before taking ownership. A non-fitting
+    /// head stays queued and returns immediately, even with a nonzero timeout. Zero bytes allow
+    /// empty payloads; other ownership/waiting semantics match [`Self::poll_events`].
+    #[doc(hidden)]
+    pub fn poll_events_with_byte_limit(
+        &self,
+        capacity: usize,
+        byte_limit: usize,
+        timeout: Duration,
+    ) -> Vec<Event> {
+        let events = self
+            .shared
+            .events
+            .poll_with_byte_limit(capacity, byte_limit, timeout);
         let now = Instant::now();
         for event in &events {
             self.shared.latencies.record(
@@ -71,6 +100,9 @@ impl NetworkRuntime {
         events
     }
 
+    /// Reads cumulative counters and current resource gauges without resetting them.
+    /// Concurrent workers can change fields between reads; see [`MetricsSnapshot`] for units
+    /// and scope. Querying after stop is allowed while the runtime object remains alive.
     pub fn metrics_snapshot(&self) -> MetricsSnapshot {
         let current_endpoints = self
             .shared
@@ -93,16 +125,24 @@ impl NetworkRuntime {
         )
     }
 
+    /// Reads lifetime latency histograms in [`LatencyKind`] order, without resetting windows.
+    /// Percentiles are bucket estimates in microseconds, not exact sorted samples; zero samples
+    /// must not be interpreted as zero network latency. The series are not atomically sampled.
     pub fn latency_snapshot(&self) -> [LatencyMetricSnapshot; LATENCY_KIND_COUNT] {
         self.shared.latencies.snapshot()
     }
 
     /// Drains the latency interval accumulated since the previous window drain.
+    /// First drain covers time since construction; lifetime histograms are unaffected. Callers
+    /// share this destructive window, so use one collector. Buckets/series rotate independently,
+    /// not as a single atomic time boundary; samples concurrent with rotation can straddle it.
     pub fn drain_latency_window(&self) -> [LatencyMetricSnapshot; LATENCY_KIND_COUNT] {
         self.shared.latencies.drain_window()
     }
 
     /// Renders dependency-free Prometheus exposition text for pull-based exporters.
+    /// Uses lifetime counters/latencies and current gauges without draining windows. This does
+    /// not start an HTTP server, invoke a logger, or provide per-player/endpoint labels.
     pub fn prometheus_snapshot(&self) -> String {
         let metrics = self.metrics_snapshot();
         let mut output = String::with_capacity(4096);
@@ -196,6 +236,8 @@ impl NetworkRuntime {
         output
     }
 
+    /// Reads the current lifecycle state; observation alone does not reserve permission to send
+    /// or open endpoints. Construction starts the runtime, and stop permanently retires it.
     pub fn lifecycle(&self) -> Lifecycle {
         self.shared.state.load()
     }

@@ -5,12 +5,18 @@ use crate::runtime::GameRuntime;
 use rnet_core::{ErrorCode, Event, EventType};
 use std::time::{Duration, Instant};
 
+// Limit per-call internal work even when authenticated peers keep producing hidden controls.
+// Exhausting the budget yields to the game loop; it must continue polling to make progress.
 const NONBLOCKING_EVENT_BATCH: usize = 64;
 const MAX_INTERNAL_EVENTS_PER_POLL: usize = 1024;
 
 #[cfg(test)]
 #[path = "poll_runtime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "poll_backpressure_tests.rs"]
+mod backpressure_tests;
 
 impl GameRuntime {
     /// Drives game state and returns at most `capacity` owned application events.
@@ -19,6 +25,10 @@ impl GameRuntime {
     /// time; lock contention, conversion and maintenance add overhead. Zero requests no event
     /// wait. `capacity = 0` returns no public events but still performs bounded internal work,
     /// flushes staging, checks deadlines and drives negotiation/clock/heartbeat controls.
+    /// Public backlog has independent count/byte limits inherited from the network event queue.
+    /// At its limit, transport draining pauses (including controls behind the FIFO head), but
+    /// timers keep running. Both peers must regularly poll with positive capacity to release
+    /// backpressure; zero-capacity maintenance alone cannot prevent heartbeat timeouts.
     ///
     /// Keep polling both peers even when no business data is expected. I/O workers alone do
     /// not advance game timers. Returned payloads remain valid across subsequent calls; an
@@ -39,9 +49,9 @@ impl GameRuntime {
         }
         let mut internal_events = 0usize;
         if capacity == 0 || !carried.is_empty() {
-            // Public backlog must not hide authenticated acknowledgements or negotiation controls.
-            // Any newly converted public event remains ordered in the completed queue when the
-            // caller has no remaining output capacity.
+            // Use spare staging capacity to process queued acknowledgements and negotiation.
+            // This is bounded FIFO work, not a control bypass when the staging budget is full.
+            // New public events remain ordered when the caller has no output capacity left.
             self.drain_network_nonblocking(&mut carried, capacity, &mut internal_events);
             self.drive_heartbeats();
             self.drive_clock_sync();
@@ -86,7 +96,10 @@ impl GameRuntime {
             } else {
                 remaining.min(Duration::from_millis(50))
             };
-            let events = self.network.poll_events(capacity, wait);
+            let events = self.poll_network_with_budget(
+                capacity.min(MAX_INTERNAL_EVENTS_PER_POLL - internal_events),
+                wait,
+            );
             self.reap_closed_endpoints();
             internal_events = internal_events.saturating_add(events.len());
             let mut output = Vec::new();
@@ -111,6 +124,10 @@ impl GameRuntime {
         internal_events: &mut usize,
     ) {
         while *internal_events < MAX_INTERNAL_EVENTS_PER_POLL {
+            // With no output slots left, inspect one event at a time and stop on the first
+            // deferred public event. Admission also respects the cross-call count/byte budget;
+            // no event is popped unless its converted public result could be retained.
+            // Control progress is best effort, not priority extraction past business data.
             let remaining_output = capacity.saturating_sub(output.len());
             let batch = if remaining_output == 0 {
                 1
@@ -119,7 +136,7 @@ impl GameRuntime {
                     .min(NONBLOCKING_EVENT_BATCH)
                     .min(remaining_output)
             };
-            let events = self.network.poll_events(batch, Duration::ZERO);
+            let events = self.poll_network_with_budget(batch, Duration::ZERO);
             if events.is_empty() {
                 break;
             }
@@ -130,6 +147,16 @@ impl GameRuntime {
         }
     }
 
+    fn poll_network_with_budget(&self, capacity: usize, timeout: Duration) -> Vec<Event> {
+        let (slots, bytes) = self
+            .range
+            .lock()
+            .expect("range state poisoned")
+            .public_capacity();
+        self.network
+            .poll_events_with_byte_limit(capacity.min(slots), bytes, timeout)
+    }
+
     fn convert_events_into(
         &self,
         events: Vec<Event>,
@@ -138,6 +165,7 @@ impl GameRuntime {
     ) -> bool {
         let mut deferred_public = false;
         for event in events {
+            let admitted_bytes = event.data.len();
             let endpoint = event.endpoint;
             let session = event.session;
             // These lifecycle payloads are local diagnostics, unlike opaque application bytes
@@ -149,6 +177,9 @@ impl GameRuntime {
             .then(|| String::from_utf8_lossy(&event.data).into_owned());
             match self.convert_event(event) {
                 Ok(Some(event)) => {
+                    debug_assert!(
+                        crate::range_state::public_payload_bytes(&event) <= admitted_bytes
+                    );
                     self.log_game_event_detail(&event, detail.as_deref());
                     deferred_public |= self
                         .range

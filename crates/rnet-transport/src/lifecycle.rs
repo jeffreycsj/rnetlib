@@ -21,6 +21,10 @@ impl Drop for NetworkRuntime {
 }
 
 impl NetworkRuntime {
+    /// Invalidates the listen/connect endpoint and all its session handles, requesting task
+    /// cancellation and publishing session-close events. A stale endpoint returns `InvalidHandle`.
+    /// Does not wait for task cancellation or guarantee queued bytes reached peers. There is
+    /// no endpoint-close acknowledgement event; event delivery is subject to bounded capacity.
     pub fn close_endpoint(&self, endpoint: Handle) -> Result<()> {
         let record = self
             .shared
@@ -36,6 +40,10 @@ impl NetworkRuntime {
         Ok(())
     }
 
+    /// Invalidates one session locally without closing its listener or other sessions.
+    /// `reason` is recorded in local close metrics/events, not guaranteed to be sent to the peer.
+    /// Stale handles return `InvalidHandle`; worker/socket cleanup is asynchronous. Already
+    /// accepted messages can still be in flight, so this is not a remote cancellation barrier.
     pub fn close_session(&self, session: Handle, reason: ErrorCode) -> Result<()> {
         let route = self
             .shared
@@ -54,6 +62,12 @@ impl NetworkRuntime {
         Ok(())
     }
 
+    /// Stops accepting new sends/endpoints, waits up to `drain_timeout` for sessions to disappear,
+    /// then closes remaining endpoints and marks the runtime stopped. Zero skips the wait.
+    /// This wait is not a flush or peer-delivery guarantee, and shutdown work adds overhead.
+    /// Repeated calls after stopping succeed; unrepresentable deadlines return `InvalidArgument`.
+    /// Concurrent lifecycle changes may return `InvalidState`. Workers are owned until drop;
+    /// queued events remain available to poll, including a best-effort `RuntimeStopped`.
     pub fn stop(&self, drain_timeout: Duration) -> Result<()> {
         if !drain_timeout.is_zero()
             && std::time::Instant::now()

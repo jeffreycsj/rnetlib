@@ -7,19 +7,27 @@ use rnet_protocol::control::{ControlKind, SecurityMode};
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SecurityOperation {
+    /// Business protection changed between encrypted and plaintext; controls stay protected.
     ModeSwitch = 1,
+    /// Noise keys advanced to a new epoch without changing business protection mode.
     Rekey = 2,
 }
 
 /// Decoded `SecurityChanged` event data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SecurityChange {
+    /// Locally completed transition, distinguished from the initial session setup.
     pub operation: SecurityOperation,
+    /// Business protection mode after this local barrier; not proof of peer notification delivery.
     pub mode: SecurityMode,
+    /// Monotonically negotiated security epoch, scoped to this session (not a wall-clock time).
     pub epoch: u64,
 }
 
 impl SecurityChange {
+    /// Decodes a `SecurityChanged` event's owned bytes into a copied snapshot.
+    /// Wrong event type/length or unknown operation returns `InvalidArgument`; an invalid
+    /// mode returns the protocol decoder's error. This decoder does not authenticate input.
     pub fn from_event(event: &Event) -> Result<Self> {
         if event.event_type != EventType::SecurityChanged || event.data.len() != 10 {
             return invalid_event("event is not a valid security change");
@@ -46,7 +54,10 @@ impl SecurityChange {
 /// Decoded authentication request with an owned key and borrowed join payload.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct AuthRequest<'a> {
+    /// Noise-authenticated peer static key; application code must still authorize its identity.
     pub client_public_key: [u8; 32],
+    /// Credential bytes borrowed from the event, valid only while that event is borrowed.
+    /// May be empty and may contain secrets; never log the payload verbatim.
     pub join_payload: &'a [u8],
 }
 
@@ -61,6 +72,8 @@ impl std::fmt::Debug for AuthRequest<'_> {
 }
 
 impl<'a> AuthRequest<'a> {
+    /// Borrows credentials from an `AuthRequest` event; wrong type or a truncated key returns
+    /// `InvalidArgument`. Only events obtained from the owning runtime carry its trust context.
     pub fn from_event(event: &'a Event) -> Result<Self> {
         if event.event_type != EventType::AuthRequest || event.data.len() < 32 {
             return invalid_event("event is not a valid authentication request");

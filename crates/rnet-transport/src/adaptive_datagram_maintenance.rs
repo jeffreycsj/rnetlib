@@ -32,6 +32,8 @@ pub(crate) fn cleanup_peer(
             // Dropping it here would turn an explicit rejection into a client-side timeout.
             return;
         }
+        // An old route's asynchronous cleanup can arrive after this address has rejoined.
+        // Match the generation-bearing session handle before releasing the new peer's state.
         if current.session() != Some(session) {
             return;
         }
@@ -203,7 +205,10 @@ pub(crate) async fn drive_server(
                 mut transition_deadline,
             } => {
                 let mut pending_control = None;
-                if let Some(receiver) = commands.as_mut() {
+                // Keeping the command in mpsc preserves both ordering and WouldBlock while
+                // a manual or automatic barrier is in flight; do not dequeue then discard it.
+                if let Some(receiver) = commands.as_mut().filter(|_| !controller.is_transitioning())
+                {
                     if let Ok(command) = receiver.try_recv() {
                         let control = match command {
                             SecurityCommand::SetMode(mode) => controller.begin_switch(mode),

@@ -50,6 +50,10 @@ impl GameRuntime {
     }
 
     fn forget_endpoint_state(&self, endpoint: Handle, transports: &mut HashMap<Handle, Transport>) {
+        // Called with poll/registration ownership and the endpoint map locked. Each subordinate
+        // lock is released before session cleanup; that cleanup revisits resume/range state.
+        // Revoke tickets even if lifecycle notifications were evicted: registry ownership,
+        // rather than successful event delivery, determines whether an endpoint still exists.
         self.resume
             .lock()
             .expect("resume state poisoned")

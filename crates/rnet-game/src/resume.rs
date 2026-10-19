@@ -12,6 +12,9 @@ const NONCE_LEN: usize = 16;
 pub(crate) const TICKET_LEN: usize = NONCE_LEN + 32;
 const SIGNING_CONTEXT: &[u8] = b"rnet-game-resume-v1";
 const MAX_IDENTITY_LEN: usize = 64;
+// Public-event staging admits by native payload bytes before consuming an auth request.
+// Replacing its ticket/key with this identity must not expand the retained payload budget.
+const _: () = assert!(MAX_IDENTITY_LEN <= TICKET_LEN + 32);
 const MAX_TTL: Duration = Duration::from_secs(300);
 
 /// The already-selected application identity pinned by a ticket; never a second public config.

@@ -285,6 +285,9 @@ impl GameRuntime {
     }
 
     pub(crate) fn forget_ready_session(&self, session: Handle) {
+        // Cleanup is repeatable: I/O failure, local kick and negotiation expiry may all reach
+        // it. Remove readiness before clearing staging so an admitted send finishes under the
+        // admission lock before its queue is emptied; later sends cannot repopulate that queue.
         self.session_endpoints
             .lock()
             .expect("game session table poisoned")
@@ -425,6 +428,8 @@ impl GameRuntime {
                 if self.network.validate_payload_len(event.session, 0).is_err() {
                     return Ok(None);
                 }
+                // Move the claim into negotiation ownership, without invalidating the old
+                // route. Transport-open is only the start of SELECT/ACK/READY, not takeover.
                 let (old_session, server_resume) = {
                     let mut state = self.resume.lock().expect("resume state poisoned");
                     if let Some(claim) = state.pending_server.remove(&event.session) {

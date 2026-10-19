@@ -63,23 +63,32 @@ pub(crate) struct EndpointRecord {
 }
 
 pub(crate) struct SessionRoute {
+    /// Owning local endpoint; several accepted routes may share one listener/socket task.
     pub(crate) endpoint: Handle,
+    /// Worker channel and datagram peer routing, fixed by endpoint transport selection.
     pub(crate) target: SessionTarget,
     /// Only a completed Noise handshake plus server authorization sets this flag.
     pub(crate) established: bool,
+    /// Server authorization capability consumed exactly once by auth_decide, cleared on open.
     pub(crate) auth_decision: Option<oneshot::Sender<bool>>,
+    /// Server-only bounded transition queue; absent on clients that must follow peer policy.
     pub(crate) security_commands: Option<mpsc::Sender<SecurityCommand>>,
     /// Only adaptive Noise sessions may carry game controls outside the business-data mode.
     pub(crate) allows_game_controls: bool,
+    /// Shared per-session reservation owner, retained by queued work even after route removal.
     pub(crate) queued_bytes: Arc<ByteBudget>,
 }
 
 pub(crate) struct Outbound {
+    /// Encoded business frame or raw game control; placeholders keep bytes in their LatestSlot.
     pub(crate) bytes: Bytes,
+    /// Selects business-mode protection versus always-protected internal game controls.
     pub(crate) kind: OutboundKind,
+    /// Local admission timestamp, refreshed by successful Latest replacement for queue telemetry.
     pub(crate) queued_at: Instant,
     /// Dropping an outbound message releases its runtime and session reservations together.
     _reservations: Vec<ByteReservation>,
+    /// Pending-only indirection; worker pickup transfers the real outbound and ends recallability.
     latest_slot: Option<Arc<crate::latest::LatestSlot>>,
 }
 
@@ -182,6 +191,8 @@ impl Outbound {
         }
         let old_len = self.bytes.len();
         if bytes.len() > old_len {
+            // Acquire both growth reservations before modifying either existing lease. If the
+            // second fails, RAII releases the first and the old snapshot remains fully intact.
             let extra = bytes.len() - old_len;
             let runtime = self._reservations[0].budget.reserve(extra)?;
             let session = self._reservations[1].budget.reserve(extra)?;

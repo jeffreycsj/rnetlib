@@ -10,6 +10,14 @@ use rnet_core::{
 use std::sync::{Arc, Mutex};
 use tokio::runtime::{Builder, Runtime};
 
+/// Synchronous facade over owned background I/O workers and bounded event/send queues.
+///
+/// Methods taking `&self` may be shared across threads, but compound operations are not
+/// atomic: a close can race a send or query, and multiple pollers divide the event stream.
+/// Call blocking construction/connect/listen/stop and final drop outside a Tokio async task
+/// (for example on a dedicated thread); these operations use blocking runtime/socket APIs.
+/// Explicitly stop and drain required events before dropping; drop closes endpoints but is
+/// not a peer-delivery barrier. A stopped runtime cannot be restarted.
 pub struct NetworkRuntime {
     pub(crate) runtime: Runtime,
     pub(crate) shared: Arc<Shared>,
@@ -17,11 +25,17 @@ pub struct NetworkRuntime {
 
 impl NetworkRuntime {
     /// Creates a runtime without unified client credentials.
+    /// Starts workers immediately and queues `RuntimeStarted`; no separate `start` is needed.
+    /// Listening is supported, but client connections require [`Self::new_with_client_security`].
+    /// Invalid capacities/timeouts return `InvalidArgument`; worker initialization can fail.
     pub fn new(config: RuntimeConfig) -> Result<Self> {
         Self::new_with_client_security(config, None)
     }
 
     /// Creates a runtime with identity and trust policy for unified client connections.
+    /// `Some` enables outgoing connections without preventing this runtime from also listening.
+    /// `None` has the same semantics as [`Self::new`]. Identity and policy are retained for
+    /// the runtime lifetime. Returns an already-running runtime or a configuration/I/O error.
     pub fn new_with_client_security(
         config: RuntimeConfig,
         client_security: Option<crate::config::ClientSecurity>,
@@ -111,6 +125,9 @@ impl NetworkRuntime {
     /// Starts a server listener using the transport selected in `config`.
     /// Every accepted session requires a Noise handshake and explicit business authorization,
     /// including when the server permits plaintext business records.
+    /// Returns a runtime-local endpoint handle, not a session. Binding is synchronous; port
+    /// zero selects an OS port retrievable with [`Self::endpoint_local_addr`]. Binding, endpoint
+    /// admission or event-queue saturation can fail. Plaintext requires policy opt-in.
     ///
     /// The former unauthenticated endpoint constructor is not a public API:
     /// ```compile_fail
@@ -125,6 +142,11 @@ impl NetworkRuntime {
     ///
     /// The caller does not select plaintext or encrypted operation. The authenticated server
     /// policy controls the initial mode and every later security transition.
+    /// Returns an endpoint handle; wait for `SessionOpened` to obtain an authorized session.
+    /// TCP socket connection blocks up to the configured connect timeout; Noise and server
+    /// authorization complete asynchronously. UDP/KCP bind synchronously and perform setup
+    /// on workers. Setup rejection is reported by `JoinFailed`/`EndpointError`, not by a
+    /// previously successful return. See [`crate::ClientConfig`] for credential/bind limits.
     pub fn connect(&self, config: crate::config::ClientConfig) -> Result<Handle> {
         self.open_endpoint(config.into())
     }

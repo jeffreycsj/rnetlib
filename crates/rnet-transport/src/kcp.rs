@@ -11,12 +11,28 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+/// Message-oriented KCP engine driven by caller-supplied datagrams and a monotonic clock.
+/// Does not own sockets, authenticate packets or advance time autonomously. `now_ms` uses
+/// one consistent local millisecond origin for input/update; on-wire timestamps wrap to u32.
+/// Serialize access to each engine and keep driving updates while unacknowledged data remains.
 pub trait KcpEngine: Send {
+    /// Accepts one KCP packet at `now_ms`; malformed input returns a protocol error. Failure
+    /// need not roll back partially processed segments, so do not retry the same failed bytes.
     fn input(&mut self, packet: &[u8], now_ms: u64) -> Result<()>;
+    /// Copies one message into KCP's bounded send state; success is not delivery or immediate
+    /// socket output. Queue/fragment-size limits can reject it; [`Self::update`] drives output.
     fn send(&mut self, payload: &[u8]) -> Result<()>;
+    /// Replaces `out` with one complete message and returns its byte count. `Ok(None)` leaves
+    /// `out` unchanged when no complete message is available; output on error is unspecified.
     fn recv(&mut self, out: &mut BytesMut) -> Result<Option<usize>>;
+    /// Advances retransmission/ACK work and synchronously borrows each emitted packet to
+    /// `output`. Copy bytes to retain them beyond the call. Keep the callback nonblocking and
+    /// non-panicking; it has no error channel or delivery acknowledgement.
     fn update(&mut self, now_ms: u64, output: &mut dyn FnMut(&[u8]));
+    /// Suggested next update time in the same absolute `now_ms` clock, not a delay from now.
     fn next_update_ms(&self) -> u64;
+    /// ACK timestamp-derived RTT from recent input, or `None` without a current usable ACK.
+    /// This is not authenticated game heartbeat quality and includes driver scheduling delay.
     fn observed_rtt(&self) -> Option<Duration>;
 }
 
@@ -37,6 +53,9 @@ impl Write for KcpPacketOutput {
     }
 }
 
+/// Built-in KCP adapter with message fragmentation, queue budgeting and retransmission telemetry.
+/// Intended for the transport driver or direct engine tests, not as a secure connection by
+/// itself. Handshake, identity verification, replay protection and socket ownership live outside.
 pub struct RustKcpEngine {
     inner: ::kcp::Kcp<KcpPacketOutput>,
     output: KcpPacketOutput,
@@ -143,16 +162,24 @@ impl KcpTelemetryRegistry {
 }
 
 impl RustKcpEngine {
+    /// Creates an engine with conversation ID `conv`, a 1,200-byte MTU and 4 MiB send budget.
+    /// Both peers must use the same ID; it is routing metadata, not an authentication secret.
     pub fn new(conv: u32) -> Result<Self> {
         Self::new_with_mtu(conv, 1200)
     }
 
     /// Creates an engine whose emitted packets never exceed the endpoint datagram MTU.
+    /// `mtu` is the KCP packet ceiling including KCP headers; the default send budget is 4 MiB.
+    /// Invalid MTUs return an error from the adapter; `conv` follows [`Self::new`].
     pub fn new_with_mtu(conv: u32, mtu: usize) -> Result<Self> {
         Self::new_with_limits(conv, mtu, 4 * 1024 * 1024)
     }
 
-    /// Creates an engine with a hard upper bound for unacknowledged payload storage.
+    /// Creates an engine with a positive `max_queued_bytes` send admission budget.
+    /// Accounting conservatively rounds queued segments to MSS, not allocator overhead or total
+    /// engine memory. Queue exhaustion returns `WouldBlock` from send. MTU excludes outer
+    /// IP/UDP headers; invalid MTU/zero budget fail construction. Uses 128-segment windows and
+    /// low-latency update settings; callers must drive both input and updates.
     pub fn new_with_limits(conv: u32, mtu: usize, max_queued_bytes: usize) -> Result<Self> {
         if max_queued_bytes == 0 {
             return Err(RnetError::new(
@@ -191,6 +218,8 @@ impl RustKcpEngine {
         Arc::clone(&self.telemetry)
     }
 
+    /// Reads PUSH transmission counters and the recent 128-transmission window without reset.
+    /// Only packets emitted through update are sampled; queuing a message is not a transmission.
     pub fn retransmission_snapshot(&self) -> KcpRetransmissionSnapshot {
         self.telemetry
             .lock()

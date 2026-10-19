@@ -95,6 +95,9 @@ pub(crate) async fn run_adaptive_session(
         } else {
             None
         };
+        // Only the security barrier suspends outbound pickup; reads must remain enabled to
+        // receive its acknowledgement. Encoding at pickup uses the active mode at that moment,
+        // not the mode when the application originally queued its bytes.
         tokio::select! {
             inbound = stream.read_buf(records.buffer_mut()) => {
                 match inbound {
@@ -129,7 +132,9 @@ pub(crate) async fn run_adaptive_session(
                     automatic_rekey.record_encrypted_bytes(outbound.bytes.len());
                 }
             }
-            command = receive_security_command(&mut commands) => {
+            // Leave the next request in its bounded queue until the current barrier commits.
+            // Dequeuing now would make begin_switch/begin_rekey reject and silently lose it.
+            command = receive_security_command(&mut commands), if !controller.is_transitioning() => {
                 let Some(command) = command else { continue };
                 let control = match command {
                     SecurityCommand::SetMode(mode) => controller.begin_switch(mode),
@@ -254,6 +259,9 @@ async fn process_inbound(
             let control = decode_control(&message.payload)?;
             let operation = completed_operation(control.kind);
             let transition = controller.handle(control)?;
+            // Rekey commit must be written under the old keys, its ACK under the new keys.
+            // Preserve the controller's before/after-response split; a write failure closes
+            // the route rather than pretending the cryptographic state can be rolled back.
             apply_effect(transport, transition.before_response);
             if let Some(response) = transition.response {
                 write_control(stream, transport, record.epoch, response, max_payload).await?;

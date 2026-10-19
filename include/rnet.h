@@ -853,6 +853,9 @@ int32_t rnet_game_prometheus_snapshot(rnet_runtime_t runtime,
  * Positive capacity requires a full array. timeout_ms bounds idle waiting, not lock/work
  * time; zero is nonblocking. capacity=0 permits NULL events and still drives maintenance
  * without returning application events. Both peers must poll regularly even when idle.
+ * Ordinary staged events have separate count/byte limits inherited from the network event
+ * queue. At those limits, transport draining pauses but timers continue. Use positive
+ * capacity regularly: zero-capacity calls alone can block ACK processing and time out.
  * Release both nonzero tokens of every returned event separately; sensitive native
  * buffers are erased on release. Copies made by the application remain its responsibility. */
 int32_t rnet_game_poll_events(rnet_runtime_t runtime, rnet_game_event_t *events,

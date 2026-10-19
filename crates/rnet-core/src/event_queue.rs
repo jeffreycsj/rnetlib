@@ -201,6 +201,20 @@ impl EventQueue {
     /// spurious wakeups or another consumer may produce an empty result. This is not a
     /// hard total-call deadline or game-maintenance driver; use the game runtime's poll.
     pub fn poll(&self, capacity: usize, timeout: Duration) -> Vec<Event> {
+        self.poll_with_byte_limit(capacity, usize::MAX, timeout)
+    }
+
+    /// Removes a FIFO prefix of at most `capacity` events whose combined `data.len()` fits
+    /// `byte_limit`. The first non-fitting event and everything after it remain queued; there
+    /// is no eviction, splitting or priority bypass. A blocked nonempty queue returns immediately.
+    /// Zero bytes can still admit empty payloads; zero capacity admits nothing. Waiting and
+    /// reservation release otherwise follow [`Self::poll`]. Budgets exclude allocation overhead.
+    pub fn poll_with_byte_limit(
+        &self,
+        capacity: usize,
+        byte_limit: usize,
+        timeout: Duration,
+    ) -> Vec<Event> {
         if capacity == 0 {
             return Vec::new();
         }
@@ -214,7 +228,18 @@ impl EventQueue {
             queue = next;
         }
 
-        let take = capacity.min(queue.len());
+        let mut remaining_bytes = byte_limit;
+        let take = queue
+            .iter()
+            .take(capacity)
+            .take_while(|event| {
+                if event.data.len() > remaining_bytes {
+                    return false;
+                }
+                remaining_bytes -= event.data.len();
+                true
+            })
+            .count();
         let events: Vec<Event> = queue.drain(..take).collect();
         if take != 0 {
             let released = events.iter().map(|event| event.data.len()).sum::<usize>();
@@ -249,6 +274,10 @@ impl EventQueue {
             .expect("event queue byte counter poisoned")
     }
 }
+
+#[cfg(test)]
+#[path = "event_queue_budget_tests.rs"]
+mod budget_tests;
 
 #[cfg(test)]
 mod allocation_tests {

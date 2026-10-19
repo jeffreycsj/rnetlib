@@ -1,4 +1,8 @@
-//! Authenticated wire-v4 selection state machine and retry handling.
+//! Authenticated business-version selection, readiness publication and retry handling.
+//!
+//! Exact and ranged business versions share this state machine. Ticket consumption proves a
+//! one-use claim, not authorization or successful recovery; a live old route is retained until
+//! the new route crosses its local READY barrier. Lost controls retry against a fixed deadline.
 
 use crate::envelope::{encode_control, ControlKind};
 use crate::event::{GameEvent, GameMessage};
@@ -271,6 +275,10 @@ impl GameRuntime {
                 let was_ready = state.phase == Phase::ServerReady;
                 let control = state.control(READY);
                 drop(range);
+                // Before first publication, backpressure must leave the server awaiting ACK.
+                // Publishing before READY admission could retire the old route without a reply
+                // in flight.
+                // A duplicate ACK repairs lost READY but never publishes a second mapping.
                 if let Err(error) = self.send_range_control(event.session, &control) {
                     return if error.code() == ErrorCode::WouldBlock {
                         Ok(None)
@@ -326,6 +334,9 @@ impl GameRuntime {
         old_session: Option<Handle>,
         server_resume: bool,
     ) -> Result<Option<GameEvent>> {
+        // A transport-close race may invalidate a successfully negotiated route. Publication
+        // is the takeover point, not SessionOpened or business authorization. Never hold the
+        // range mutex here: cleanup revisits range state and other session-owned registries.
         if self.network.validate_payload_len(session, 0).is_err() {
             self.forget_ready_session(session);
             return Ok(None);
@@ -388,6 +399,8 @@ impl GameRuntime {
             let _ = self.send_range_control(session, &control);
         }
         for session in expired {
+            // Expire only the candidate. Consumed tickets stay consumed, but a still-live old
+            // session remains usable and can obtain a fresh ticket through application policy.
             let _ = self.network.close_session(session, ErrorCode::Timeout);
             self.forget_ready_session(session);
         }

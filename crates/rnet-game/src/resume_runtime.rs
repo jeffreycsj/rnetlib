@@ -12,18 +12,26 @@ use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 pub(crate) struct ServerSessionMeta {
+    /// Authenticated static key bound into tickets, not the application's player identity.
     pub(crate) peer_key: [u8; 32],
+    /// Selected business protocol that a resumed connection must continue using.
     pub(crate) protocol: SelectedProtocol,
 }
 
 pub(crate) struct ResumeRuntimeState {
+    /// One-runtime secret and bounded one-use ticket registry; intentionally not persisted/shared.
     pub(crate) tickets: ResumeRegistry,
+    /// Server-side peer/version metadata, including candidates still awaiting readiness.
     pub(crate) server_sessions: HashMap<Handle, ServerSessionMeta>,
+    /// New candidate handle to consumed claim, retained while the application decides authorization.
     pub(crate) pending_server: HashMap<Handle, ResumeClaim>,
-    /// From claiming a ticket until publication of the new ready handle.
+    /// Old-to-new local handles after transport open and before new readiness publication.
     pub(crate) inflight_server: HashMap<Handle, Handle>,
+    /// Old handles revoked while their claimed replacement was negotiating; blocks late READY.
     pub(crate) revoked_inflight: HashSet<Handle>,
+    /// New client endpoint to previous client-local session handle for the eventual mapping event.
     pub(crate) client_endpoints: HashMap<Handle, Handle>,
+    /// Monotonic validity interval assigned to newly issued tickets.
     pub(crate) ttl: Duration,
 }
 

@@ -265,6 +265,7 @@ fn endpoint_open_reports_backpressure_and_releases_capacity() {
 fn udp_never_delivers_business_data_before_server_session_open() {
     // Separate queues let the client publish its ready event while the server's one-slot
     // queue still holds SessionOpened. Application traffic must not evict that lifecycle event.
+    // Datagram event overflow closes its session; it does not promise same-session recovery.
     let server = runtime_with(RuntimeConfig {
         event_queue_capacity: 1,
         ..RuntimeConfig::default()
@@ -282,26 +283,49 @@ fn udp_never_delivers_business_data_before_server_session_open() {
     server.auth_decide(auth.session, true).unwrap();
     let cs = poll_until(&client, |e| e.event_type == EventType::SessionOpened).session;
     client.send(cs, b"early").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let metrics = server.metrics_snapshot();
+        if metrics.current_sessions == 0 && metrics.lifecycle_events_rejected == 1 {
+            assert_eq!(metrics.events_dropped, 1);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "overflow cleanup did not finish: {metrics:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let opened = poll_until(&server, |_| true);
     assert_eq!(opened.event_type, EventType::SessionOpened);
     assert_eq!(opened.session, auth.session);
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        assert!(
-            Instant::now() < deadline,
-            "UDP did not recover after lifecycle backlog"
-        );
-        client.send(cs, b"later").unwrap();
-        let mut received = false;
-        for event in server.poll_events(1, Duration::from_millis(20)) {
-            assert_eq!(event.event_type, EventType::Message);
-            assert_eq!(event.session, opened.session);
-            received |= event.data == b"later";
-        }
-        if received {
-            break;
-        }
-    }
+    assert!(server.poll_events(1, Duration::ZERO).is_empty());
+    assert_eq!(
+        server
+            .validate_payload_len(opened.session, 0)
+            .unwrap_err()
+            .code(),
+        ErrorCode::InvalidHandle
+    );
+
+    // Draining the lifecycle history restores listener capacity, not the retired session.
+    let next = connect(
+        &client,
+        Transport::Udp,
+        server.endpoint_local_addr(endpoint).unwrap(),
+    );
+    let auth = poll_until(&server, |e| e.event_type == EventType::AuthRequest);
+    server.auth_decide(auth.session, true).unwrap();
+    let opened = poll_until(&server, |e| e.event_type == EventType::SessionOpened);
+    let cs = poll_until(&client, |e| {
+        e.event_type == EventType::SessionOpened && e.endpoint == next
+    })
+    .session;
+    client.send(cs, b"later").unwrap();
+    let received = poll_until(&server, |_| true);
+    assert_eq!(received.event_type, EventType::Message, "{received:?}");
+    assert_eq!(received.session, opened.session);
+    assert_eq!(received.data, b"later");
 }
 
 #[test]

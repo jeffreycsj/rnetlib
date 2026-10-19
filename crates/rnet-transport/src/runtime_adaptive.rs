@@ -6,7 +6,7 @@ use crate::config::{EndpointConfig, EndpointSecurity};
 use crate::metrics::LatencyKind;
 use crate::runtime::NetworkRuntime;
 use crate::state::SessionTarget;
-use crate::tcp_socket::configure_std_tcp;
+use crate::tcp_socket::{configure_std_tcp, connect_tcp};
 use rnet_core::{ErrorCode, Handle, Result, RnetError, Transport};
 use rnet_security::Keypair;
 use std::sync::Arc;
@@ -179,7 +179,7 @@ impl NetworkRuntime {
             )
         })?;
         let connect_started = Instant::now();
-        let stream = std::net::TcpStream::connect_timeout(&remote_addr, connect_timeout)?;
+        let stream = connect_tcp(remote_addr, config.bind_addr, connect_timeout)?;
         configure_std_tcp(&stream, &self.shared.config)?;
         stream.set_nonblocking(true)?;
         let stream = {

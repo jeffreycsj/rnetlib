@@ -33,11 +33,11 @@
 1. [x] Rust 游戏公开 API：配置、事件、收发、认证、恢复、加密切换、质量与日志。核实实现和测试后补注释，补可编译接入示例；补全文档的模块先启用缺失文档检查。
 2. [x] C ABI 与 C++11：逐参数/成员说明、错误与异步完成事件、token 释放、日志回调重入限制和 RAII 生命周期。对照 FFI 转换核实，保持布局和签名不变。
 3. [x] Go 与 C#：按实际包装语义说明零值/默认值、错误返回/异常、复制与销毁；GoDoc 和 XML 文档覆盖公开类型、常量、成员与方法。
-4. [ ] Rust 底层及内部关键路径：core、transport、protocol、security、observe 的公开契约；重点补握手、SELECT/ACK/READY、旧会话接管、心跳调度、动态安全状态、发送队列预算与端点清理的设计原因。
+4. [x] Rust 底层及内部关键路径：core、transport、protocol、security、observe 的公开契约；重点补握手、SELECT/ACK/READY、旧会话接管、心跳调度、动态安全状态、发送队列预算与端点清理的设计原因。
    - [x] core / protocol / security 公开契约及缺失文档门禁；队列预算/锁序、导出内存所有权、握手信任、重放窗口与换钥屏障说明。
    - [x] observe 公开契约（第一阶段已完成）。
-   - [ ] transport 公开配置、生命周期、发送与遥测契约。
-   - [ ] game / transport 的 SELECT/ACK/READY、恢复接管、心跳调度及端点清理内部路径收尾。
+   - [x] transport 公开配置、生命周期、发送与遥测契约。
+   - [x] game / transport 的 SELECT/ACK/READY、恢复接管、心跳调度及端点清理内部路径收尾。
 5. [ ] 接入文档与防回退：统一多语言建立、授权、持续 poll、发送、接收、背压、关闭和日志示例；将可验证的注释/文档构建门禁接入现有检查。
 6. [ ] 对抗性复查：抽查每种语言的完整调用链，对照实际 diff、边界测试与生成文档检查语义；发现运行缺陷时，独立建立 RED → GREEN 回归后修复，不把行为变化藏在注释提交中。
 
@@ -191,3 +191,117 @@
 - 本机临时证据：`/tmp/netlib-rust-contracts-baseline.log`、`/tmp/netlib-rnet-{core,protocol,security}-docs-missing.log`、`/tmp/netlib-pin-finish-red.log`、`/tmp/netlib-pin-finish-green.log`、`/tmp/netlib-core-split-green.log`、`/tmp/netlib-core-protocol-security-docs-green.log`、`/tmp/netlib-core-security-final-validation.log`。
 
 整体评价：底层三个 crate 的公开文档、core 职责拆分和确认的握手完成前信任检查已完成并回归；第 4 项仍需继续 transport 和游戏内部关键路径，第 5/6 项仍待全范围收尾。长稳继续安排在整体完善之后。
+
+## 第四阶段 B 记录（2026-10-16）
+
+本批基线为干净的 `83bd6c1`。完成第 4 项剩余的 transport 公开契约和已列出的游戏/传输关键路径注释；不代表所有内部成员均须逐行解释，也不代表第 5/6 项或生产资格已经完成。
+
+- transport 全特性严格文档检查先检出 93 处缺失，再补至通过；新增 `deny(missing_docs)`，并将 transport all-features rustdoc 与 doctest 纳入 `make doc-check`。既检查公开项遗漏，也检查文档断链，不用屏蔽诊断通过。
+- 补齐构造即启动、endpoint/session 区别、认证和异步打开、参数单位/限制/默认来源、DNS 候选与超时、发送复制/背压、TCP/KCP Latest 的 worker pickup 边界、服务器控制加密、关闭和 stop 的非投递屏障语义。
+- 明确观测口径：P95/P99 等为微秒直方图估计，累计与窗口分别查询；KCP RTT 会在 update 重复采样，不等于游戏心跳 RTT；发送 frame/header/control 计数与接收 body 计数不对称，不能当成双向网络线速或送达量。
+- 内部注释覆盖协商 phase/成员、READY 本地发布与旧句柄接管、票据已消费但候选失败时保留旧会话、恢复撤销锁与清理、心跳入队时间/超时、零容量 poll 的有界工作、端点注册与清理锁序、Latest 增量预算回滚和动态换钥回复前后效果。
+- 源码 diff 除新增 lint 外仅有注释；未改运行逻辑、公开签名、结构布局、默认值、wire 或 SDK 版本，没有为纯注释变更伪造功能 RED。文件仍在原结构行数限制以内。
+
+### 本批对抗性复查
+
+| 发现的契约风险 | 处理 |
+| --- | --- |
+| 原有源地址限流说明只提 TCP，实际 UDP/KCP 的 cookie 验证后也持有准入许可 | 改为每 listener、按 IPv4 地址/IPv6 前缀的三种传输准入范围；区分全 runtime pending route 预算和 datagram 早期状态 |
+| 将 datagram idle 描述为“无接收超时”，忽略发送也刷新活动时间 | 明确双向活动回收语义，不能代替游戏心跳 |
+| 容易把 connect、命令入队、stop 和安全通知当成对端完成/消息送达 | 分别记录异步完成、本地屏障、尽力停止与并发命令边界 |
+| 零容量 poll 与 completed 队列注释容易过度承诺 ACK 一定优先 | 说明有界扫描且遇到需延期的公开事件会停止，仍需持续正常容量 poll |
+| 句柄和指标快照容易被当成全局唯一/原子一致 | 明确 owner-local、跨 runtime 数值碰撞和独立字段/桶采样 |
+
+### 明确保留的运行逻辑待办
+
+以下是核实旧实现时确认的限制，本批只补诚实契约，**没有实现修复**。应先用独立回归约束再改，不能把它们藏在注释验收结论中：
+
+- TCP 的 `ClientConfig.bind_addr` 目前被连接器忽略。后续应支持显式本地绑定，或在无法支持时明确拒绝；回归需要检查实际本地地址/端口以及失败不能悄悄回退。
+- TCP 和 UDP/KCP 驱动在安全转换期间仍可能取出下一条命令，控制器拒绝后没有上抛失败；因此命令入队成功不能保证最终发生转换，也可能与自动换钥竞争。后续应保留待执行命令或显式拒绝，覆盖连续 mode/rekey 请求、自动换钥竞争及背压。当前说明已明确此限制，不能当成已修复。
+- 连续零容量 poll 每轮仍可能把一条普通公开事件移入 completed，而这些非 early-data 事件不占 early-data 预算；单次工作量有界不等于跨调用积压总量有界。现有测试只生成有限事件，不能证明持续输入下的内存上界。后续需要持续输入回归与 completed count/byte 背压；当前调用方必须使用正容量 poll 取走事件，不能长期只做零容量维护。
+
+### 验证与边界
+
+- 修改前 `cargo test --workspace` 基线通过；补注释和契约复查后完整 workspace、严格 Clippy、格式/结构、严格文档和 doctest 均通过。最后仅更正零容量积压的一处内部注释，再次通过严格 Clippy、格式/结构、严格文档和 doctest；源码运行逻辑未变。
+- 构建/测试命令串行，使用运行中至少保留 15 GiB 可用内存的守护。没有重跑 C++/Go/C# 集成、Go race、ASan fuzz、Miri、Loom、完整打包、非 Linux 平台或目标环境长稳；没有把历史通过记录计入本批发布资格。
+- 临时证据：`/tmp/netlib-stage4b-baseline.log`、`/tmp/netlib-stage4b-docs-missing.log`、`/tmp/netlib-stage4b-docs-green.log`、`/tmp/netlib-stage4b-final-validation.log`、`/tmp/netlib-stage4b-postreview.log`、`/tmp/netlib-stage4b-doc-final.log`。没有提交或推送。
+- 测试盲区：缺失文档门禁只证明公开项有文档，不证明语义正确；现有协商/恢复/心跳/队列回归不能证明上述三个待办已解决。正向接入示例的全语言核对、C/C++ 永久注释门禁和全范围审查仍属于第 5/6 项。
+
+整体评价：第 4 项注释范围已完成；后续先处理上述已确认的行为限制，再继续第 5/6 项收尾。目标平台与长稳仍留在功能和接口整体完善之后，不宣称生产认证完成。
+
+## 第四阶段 C：行为限制修复（2026-10-16）
+
+承接上一节三个已确认的待办。本批保留原有未提交的注释修改，不增加 wire/ABI 版本，也不变更密码学协议。本节记录当前进展，上一节的“没有实现修复”是当时的历史状态。
+
+### 已实现
+
+- TCP 显式本地绑定：在 connect 前使用现有 socket2 依赖创建并绑定 socket；未指定地址仍走原 OS 选址路径。IPv4/IPv6 地址族必须匹配，绑定失败直接返回，不悄悄换地址或端口。失败发生在 endpoint/session 注册之前，不留下假成功句柄。
+- 安全命令保留：TCP 和 UDP/KCP 驱动仅在当前安全屏障完成后取下一条命令；自动换钥屏障采用相同规则。仍使用原有有界 mpsc，无新增暂存队列；满额继续返回 WouldBlock，断开或屏障超时取消排队命令。同模式请求仍可成为无新事件的 no-op，入队成功仍不代表远端已完成转换。
+- 同步 ClientConfig.bind_addr、set_security_mode/rekey_session 的契约和关键路径原因注释。测试独立成文件，不把驱动回归堆进生产模块。
+
+### TDD 与测试质量
+
+- 修改前运行 transport 的 loopback/adaptive_security/secure_loopback 基线。TCP 三条回归先观察到真实 RED：显式端口被换掉、已占用端口和地址族不匹配仍被忽略；修复后三条通过，覆盖 IPv4/IPv6、真实 accept 观察到的来源、失败无 endpoint/session/pending-handshake 泄漏。随后完整 Rust workspace 通过。
+- 安全命令四条回归先观察到真实 RED：暂不回复 ACK 时，驱动提前消耗下一条命令；修复后均通过，随后完整 Rust workspace 通过。
+- 增补 TCP ACK 超时清理回归：有待执行命令时仍按截止时间关闭会话，接收端关闭且只有一次 Timeout 关闭事件，没有虚假 SecurityChanged。成功路径还核对实际业务报文内容和 epoch 2/3 的通知顺序。
+- UDP/KCP 驱动回归覆盖手动换钥→切明文、切明文→换钥、自动换钥→切明文；确定性推进维护轮次，确认屏障中队列容量不被释放、结束后下一命令被执行。此项直接推进真实控制器的 ACK 状态，不声称它单独证明弱网重传；完整 wire/密码学往返由现有集成测试及新增 TCP 真实 Noise 往返覆盖。
+
+### 尚未实施：零容量 poll 的累计积压
+
+普通公开事件进入 completed 的 count/byte 总预算仍未修复，不能将单次扫描上限称为累计内存上限。调用方仍须持续使用正容量 poll 取走事件。
+
+拟采用无静默丢失的背压：普通 completed 使用独立 count/byte 预算；满额停止从底层取更多事件，仍推进定时器，正容量 poll 释放预算后恢复。需要在底层按可用字节预算取 FIFO 前缀，避免先出队再发现无法存放；early-data 继续单独计费，并保留 READY/RESUMED 先于业务消息的顺序。长期不取事件时，队首业务仍可能阻挡其后的 ACK，因此不保证“零容量维护可以无限维持会话”。已向用户询问此策略和“满额关闭会话”的取舍，尚未收到选择；本批不擅自增加满额踢人策略。
+
+### 本批对抗性复查
+
+| 检查项 | 结果与边界 |
+| --- | --- |
+| 显式 bind 失败的资源回收和回退 | socket 在注册前创建，失败按 RAII 释放；测试检查实际来源和失败无连接/句柄，不只检查配置字段 |
+| ACK 等待、自动换钥与有界命令队列 | 禁用过早取队列的分支，不扩大容量；成功顺序、WouldBlock 和超时清理均有回归 |
+| 测试是否过度模拟 | TCP 使用真实套接字和 Noise；UDP/KCP 明确是驱动/控制器队列测试，不能替代目标弱网矩阵 |
+| 本批完成范围 | 仅上述两个行为缺陷；普通 completed 积压、文档第 5/6 项和目标环境资格仍未闭环 |
+
+### 最终验证与资格边界
+
+- 当前修改树通过 Rust 格式、结构门禁、`make doc-check`（严格 rustdoc 与 doctest）、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace` 和 `git diff --check`。新增 8 个测试函数，包含表驱动的 IPv4/IPv6 与 UDP/KCP 场景。
+- 当前 native 重新链接后的 C++11 所有权测试和四个联网示例、Go 全套及部分导出故障测试、C# TCP/UDP/KCP 和错误公钥/回调/并发销毁测试均通过。
+- 高内存命令串行，并启用至少保留 15 GiB 可用内存的守护。未重跑独立 Go race、ASan fuzz、Miri、Loom、release 导出检查、完整打包或目标弱网长稳；仅验证当前 Linux 开发机，C# 为 .NET 8，不扩展平台或容量承诺。
+- 临时证据：`/tmp/netlib-runtime-fixes-baseline.log`、`/tmp/netlib-tcp-bind-red.log`、`/tmp/netlib-tcp-bind-green.log`、`/tmp/netlib-tcp-bind-workspace.log`、`/tmp/netlib-security-commands-red.log`、`/tmp/netlib-security-commands-green.log`、`/tmp/netlib-security-commands-workspace.log`、`/tmp/netlib-security-commands-edges.log`、`/tmp/netlib-bind-security-final-validation.log`。
+
+未提交或推送，不把本批修复称为生产资格认证；长稳仍放在功能与接口整体完善之后。
+
+## 第四阶段 D：普通事件积压背压
+
+用户已确认满额背压、要求持续正容量 poll，不采用满额直接踢人。沿用上一节方案：普通 completed 的数量与有效载荷字节分别受 event_queue_capacity/max_event_bytes 限制，独立于 early-data 预算；底层按剩余字节预算取 FIFO 前缀，不重排、不先出队再丢弃。零容量和满额仍驱动定时器；正容量取走积压后恢复。
+
+此预算不是全进程内存上限，底层事件队列、early-data、普通 completed 各自计费，返回给调用方的事件不再属于库内积压。底层原有 UDP/KCP 每会话事件溢出关闭和优先生命周期事件策略不变，不承诺跨层绝对无丢包或不断线。满额时 ACK 也可能被挡在队首业务之后，正常心跳超时仍然生效。
+
+- [x] 持续输入的 count/byte 积压与恢复回归先 RED。
+- [x] core FIFO 字节受限提取、transport 保持原延迟采样。
+- [x] game 普通积压计费，poll/close/stop 释放预算，READY 顺序不变。
+- [x] 文档契约、完整回归与对抗性审查。
+
+### 实施与对抗性复查
+
+- 新增普通积压计数/载荷字节计费；每次取底层事件前查询剩余预算，不额外扩大 mpsc 或建立无限旁路。使用 poll 串行化保证查询容量到转换入队期间不会被另一 poll 消费；并发清理只会释放预算。
+- core 新增按字节预算提取 FIFO 前缀，零字节仍可取空载荷事件、零容量不取任何事件，不越过超预算队首。transport 继续在实际出队时记录原有 EventQueue 延迟；对外 wire/C ABI 不变。
+- 普通业务、认证凭据、恢复身份和票据均计费；early-data 仍独立保留自己的预留和既有指标口径。READY/RESUMED 插入到同会话早期消息之前的顺序不变。
+- Rust/C/C++/Go/C# 的 poll 契约及接入文档同步，明确正容量消费、定时器继续运行、底层过载策略及 `range_buffer_snapshot()` 不含普通积压。
+
+| 审查项 | 证据/处理 |
+| --- | --- |
+| 原测试只提供有限事件，不能证明累计上界 | 新增持续创建/关闭监听的数量测试；真实 TCP 发送三份 100 字节消息，256 字节暂存预算必须阻止第三份进入；两条均真实 RED 后 GREEN，排空后验证完整 FIFO 和继续接入 |
+| 解码后载荷是否可能大于 native 预算 | 穷举计费所有 GameEvent 变体；恢复身份上限用编译期断言约束在原 ticket/key 载荷以内，转换处额外检查预算不变量，覆盖身份/双凭据计费 |
+| 零载荷、精确边界、生产者预算、清理归还 | core 检查零值、精确字节边界、非匹配队首不被绕过、未取事件不释放生产者容量；game 检查 early/public 独立、READY 顺序、session 清理及 clear 归还预算 |
+| 满额是否绕过生存检测 | 填满普通暂存后零容量 poll，验证已过期心跳和协商均被处理，原公开事件仍可取回 |
+| 旧 UDP 单槽测试存在错误的恢复承诺 | 最终首轮回归出现 SessionClosed：既有 `try_push_session_event` 在队满时关闭会话；旧测试连续发 early/later 却要求同会话恢复，结果依赖时序。改为等待确定的溢出清理，检查 SessionOpened 未被数据或关闭通知覆盖、旧句柄失效、监听接受新连接且可收包；不修改生产溢出策略 |
+
+新增 7 个测试函数，另修正 1 个已有时序性测试。满额定时器测试是确定性驱动检查，不等于目标环境弱网验证；真实 TCP 字节回归不宣称覆盖所有 UDP/KCP 过载排列。生产资格和第 5/6 项完整收尾仍是独立工作。
+
+### 最终验证（2026-10-16）
+
+- 修正旧 UDP 测试后，完整当前树再次通过 Rust workspace、严格 Clippy、格式/结构、严格 rustdoc/doctest；C++11 所有权测试和四个联网示例、Go 全套及部分导出故障回归、C# TCP/UDP/KCP 与错误公钥/回调/并发销毁测试均通过。最后仅更正内部注释的 ACK 优先表述与此记录，格式及 diff 检查再次通过。
+- 过程记录：`/tmp/netlib-poll-backpressure-baseline.log`、`/tmp/netlib-poll-backpressure-red.log`、`/tmp/netlib-poll-backpressure-green.log`、`/tmp/netlib-poll-backpressure-workspace.log`、`/tmp/netlib-poll-backpressure-edges.log`。首轮最终检查中的 UDP 失败保留在 `/tmp/netlib-poll-backpressure-final-validation.log`；修正后针对性结果 `/tmp/netlib-poll-backpressure-udp-contract.log`，最终通过 `/tmp/netlib-poll-backpressure-verified.log`。
+- 所有高内存命令串行并启用 15 GiB 可用内存守护。未重跑独立 Go race、ASan fuzz、Miri、Loom、release 导出检查或完整打包；未做目标弱网/长稳和其他平台资格测试。没有提交或推送。
+
+本节完成上一节保留的普通 completed 积压待办。既有 UDP/KCP 原生事件队列溢出仍可能关闭会话，本节没有把该策略改成无限等待。长稳继续留在整体完善之后，不宣称生产认证完成。

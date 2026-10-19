@@ -1,8 +1,36 @@
-//! Centralized TCP socket tuning shared by compatibility and authenticated paths.
+//! TCP connection construction and socket tuning for authenticated endpoints.
 
 use crate::config::RuntimeConfig;
-use rnet_core::Result;
-use socket2::SockRef;
+use rnet_core::{ErrorCode, Result, RnetError};
+use socket2::{Domain, Protocol, SockRef, Socket, Type};
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
+
+/// Bind before connecting: falling back to an OS-selected address after a bind failure would
+/// violate caller routing policy. Failed sockets drop before any endpoint/session is registered.
+pub(crate) fn connect_tcp(
+    remote: SocketAddr,
+    local: Option<SocketAddr>,
+    timeout: Duration,
+) -> Result<TcpStream> {
+    let Some(local) = local else {
+        return Ok(TcpStream::connect_timeout(&remote, timeout)?);
+    };
+    if local.is_ipv4() != remote.is_ipv4() {
+        return Err(RnetError::new(
+            ErrorCode::InvalidArgument,
+            "TCP local and remote addresses must use the same IP family",
+        ));
+    }
+    let socket = Socket::new(
+        Domain::for_address(remote),
+        Type::STREAM,
+        Some(Protocol::TCP),
+    )?;
+    socket.bind(&local.into())?;
+    socket.connect_timeout(&remote.into(), timeout)?;
+    Ok(socket.into())
+}
 
 pub(crate) fn configure_std_tcp(
     stream: &std::net::TcpStream,

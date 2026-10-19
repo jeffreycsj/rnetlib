@@ -50,7 +50,9 @@ impl LatestSlot {
 /// transport-pending slot; it does not imply cancellation after the I/O worker took that slot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LatestSendOutcome {
+    /// A new bounded pending slot was admitted; no previous frame was recalled.
     Queued,
+    /// Same-session, same-key pending bytes were replaced before worker pickup.
     Replaced,
 }
 
@@ -196,6 +198,11 @@ fn map_kcp_send_error(
 
 impl NetworkRuntime {
     /// Enqueues one game snapshot with a per-session key while preserving the normal send API.
+    /// Copies `payload`; `key` is a local replacement key (zero is valid), not a wire message
+    /// type. TCP/KCP replace only a slot not yet taken by the worker; socket/KCP-owned data
+    /// cannot be recalled. Native UDP returns `NotSupported` here; the game facade supplies
+    /// UDP replacement in its own staging queue. Size, handshake and backpressure errors follow
+    /// [`Self::send`]; a rejected replacement retains the previously pending payload.
     pub fn send_payload_latest(
         &self,
         session: Handle,
@@ -269,10 +276,13 @@ impl NetworkRuntime {
         Ok(outcome)
     }
 
+    /// Returns lifetime successful pending-slot replacements across all sessions, without reset.
     pub fn latest_transport_replacements(&self) -> u64 {
         self.shared.latest.replacements()
     }
 
+    /// Reads lifetime latest-slot admission/pickup counters; independent atomic fields may race
+    /// with workers and are not a single point-in-time snapshot. Does not reset counters.
     pub fn latest_transport_snapshot(&self) -> LatestTransportSnapshot {
         self.shared.latest.snapshot()
     }

@@ -1,4 +1,9 @@
-//! Bounded state owned by authenticated wire-v4 protocol negotiation.
+//! Bounded state owned by the current authenticated business-version negotiation.
+//!
+//! Exact versions use the same min=max path. A transport-open route is not game-ready:
+//! the server selects a version, the client ACKs it, and READY permits client publication.
+//! Early-data reservations follow payload ownership into `completed`; changing queues must
+//! not free a budget while the runtime still retains those bytes.
 
 use crate::config::GameProtocol;
 use crate::event::{GameEvent, GameMessage};
@@ -48,26 +53,45 @@ pub(crate) struct ClientPending {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Phase {
+    /// Server selected a version but still needs transport authorization/open completion.
     ServerAwaitOpen,
+    /// SELECT was attempted; only a matching ACK can permit local readiness publication.
     ServerAwaitAck,
+    /// Matching ACK accepted and READY admitted; duplicate ACKs resend READY without republishing.
     ServerReady,
+    /// Client transport opened but no authenticated version selection has arrived.
     ClientAwaitSelect,
+    /// Client accepted SELECT; repeat ACK until matching READY or the fixed deadline.
     ClientAwaitReady,
+    /// Client accepted READY; matching late READY/SELECT duplicates do not reopen the session.
     ClientReady,
 }
 
+/// One negotiation, accessed under the range mutex; poll/lifecycle serialization owns transitions.
 pub(crate) struct RangeSession {
+    /// Local endpoint owner, checked together with the session when processing controls.
     pub(crate) endpoint: Handle,
+    /// Client-offered business bounds and capabilities; server selection must lie in the overlap.
     pub(crate) protocol: GameProtocol,
+    /// Fresh join nonce echoed by each control to bind it to this connection attempt.
     pub(crate) nonce: [u8; 16],
+    /// Chosen business version, which can be known before authorization or readiness.
     pub(crate) selected: Option<u32>,
+    /// Server-local handle echoed as an opaque negotiation identifier, never a client-local route.
     pub(crate) server_handle: Handle,
+    /// Local route to retire only at readiness publication; negotiation failure must preserve it.
     pub(crate) old_session: Option<Handle>,
+    /// Requires the server's resume revocation check before publishing the replacement handle.
     pub(crate) server_resume: bool,
+    /// Role-specific readiness barrier, independent of transport establishment.
     pub(crate) phase: Phase,
+    /// Fixed monotonic negotiation cutoff; retransmission must not extend it indefinitely.
     pub(crate) deadline: Instant,
+    /// Next poll-driven control retry opportunity, not a dedicated background timer.
     pub(crate) next_retry: Instant,
+    /// Decoded early business data retained until readiness, charged to session/runtime budgets.
     pub(crate) buffered: VecDeque<GameMessage>,
+    /// Sum of early payload lengths, excluding allocations/framing; zero-length messages use slots.
     pub(crate) buffered_bytes: usize,
 }
 
@@ -95,6 +119,10 @@ pub(crate) struct RangeRuntimeState {
     pub(crate) client_endpoints: HashMap<Handle, ClientPending>,
     pub(crate) sessions: HashMap<Handle, RangeSession>,
     completed: VecDeque<CompletedEvent>,
+    // Ordinary public backlog is independent of early-data reservations. Both inherit the
+    // same configured ceilings; neither can grow by moving data out of the transport queue.
+    public_messages: usize,
+    public_bytes: usize,
     max_buffered_messages: usize,
     max_buffered_bytes: usize,
     buffered_messages: usize,
@@ -112,6 +140,8 @@ impl RangeRuntimeState {
             client_endpoints: HashMap::new(),
             sessions: HashMap::new(),
             completed: VecDeque::new(),
+            public_messages: 0,
+            public_bytes: 0,
             max_buffered_messages: max_messages,
             max_buffered_bytes: max_bytes,
             buffered_messages: 0,
@@ -131,6 +161,8 @@ impl RangeRuntimeState {
         self.client_endpoints.clear();
         self.sessions.clear();
         self.completed.clear();
+        self.public_messages = 0;
+        self.public_bytes = 0;
         self.buffered_messages = 0;
         self.buffered_bytes = 0;
     }
@@ -150,6 +182,8 @@ impl RangeRuntimeState {
         }
         let mut released_messages = 0usize;
         let mut released_bytes = 0usize;
+        let mut public_messages = 0usize;
+        let mut public_bytes = 0usize;
         self.completed.retain(|completed| {
             if !event_belongs_to_session(&completed.event, session) {
                 return true;
@@ -157,10 +191,24 @@ impl RangeRuntimeState {
             if let Some(bytes) = completed.reserved_bytes {
                 released_messages = released_messages.saturating_add(1);
                 released_bytes = released_bytes.saturating_add(bytes);
+            } else {
+                public_messages += 1;
+                public_bytes += public_payload_bytes(&completed.event);
             }
             false
         });
         self.release_reservation(released_messages, released_bytes);
+        self.public_messages -= public_messages;
+        self.public_bytes -= public_bytes;
+    }
+
+    /// Poll holds its serialization guard between observing capacity and queueing converted
+    /// events. Each native event yields at most one ordinary event; early data is charged apart.
+    pub(crate) fn public_capacity(&self) -> (usize, usize) {
+        (
+            self.max_buffered_messages - self.public_messages,
+            self.max_buffered_bytes - self.public_bytes,
+        )
     }
 
     pub(crate) fn drain_completed(&mut self, output: &mut Vec<GameEvent>, capacity: usize) {
@@ -183,6 +231,11 @@ impl RangeRuntimeState {
         if !deferred {
             output.push(event);
         } else {
+            let bytes = public_payload_bytes(&event);
+            debug_assert!(self.public_messages < self.max_buffered_messages);
+            debug_assert!(bytes <= self.max_buffered_bytes - self.public_bytes);
+            self.public_messages += 1;
+            self.public_bytes += bytes;
             // Readiness or resume mapping must precede buffered business data.
             let insertion = match &event {
                 GameEvent::SessionReady { session, .. }
@@ -291,10 +344,7 @@ impl RangeRuntimeState {
 
     #[cfg(test)]
     pub(crate) fn push_completed_for_test(&mut self, event: GameEvent) {
-        self.completed.push_back(CompletedEvent {
-            event,
-            reserved_bytes: None,
-        });
+        self.queue_public(event, &mut Vec::new(), 0);
     }
 
     #[cfg(test)]
@@ -305,6 +355,9 @@ impl RangeRuntimeState {
     fn release_completed(&mut self, completed: &CompletedEvent) {
         if let Some(bytes) = completed.reserved_bytes {
             self.release_reservation(1, bytes);
+        } else {
+            self.public_messages -= 1;
+            self.public_bytes -= public_payload_bytes(&completed.event);
         }
     }
 
@@ -344,6 +397,35 @@ impl RangeRuntimeState {
             }
         }
         (retries, expired)
+    }
+}
+
+/// Native payload admission conservatively bounds the bytes retained after conversion.
+/// ResumeRequest replaces a wire ticket plus peer key with an identity of at most 64 bytes;
+/// all other payload-bearing variants copy a subset of the native payload.
+pub(crate) fn public_payload_bytes(event: &GameEvent) -> usize {
+    match event {
+        GameEvent::Message(message) => message.payload.len(),
+        GameEvent::AuthRequest { join_ticket, .. } => join_ticket.len(),
+        GameEvent::ResumeRequest {
+            identity,
+            join_ticket,
+            ..
+        } => identity.len() + join_ticket.len(),
+        GameEvent::ResumeTicket { ticket, .. } => ticket.len(),
+        GameEvent::RuntimeStarted
+        | GameEvent::RuntimeStopped
+        | GameEvent::EndpointOpened { .. }
+        | GameEvent::EndpointError { .. }
+        | GameEvent::ProtocolRejected { .. }
+        | GameEvent::SessionReady { .. }
+        | GameEvent::SessionResumed { .. }
+        | GameEvent::SessionClosed { .. }
+        | GameEvent::Writable { .. }
+        | GameEvent::JoinFailed { .. }
+        | GameEvent::SecurityChanged { .. }
+        | GameEvent::QualityChanged { .. }
+        | GameEvent::ProtocolViolation { .. } => 0,
     }
 }
 
@@ -520,5 +602,84 @@ mod tests {
             .buffer_message(message(53))
             .expect("closing a completed-but-unpolled session returns its reservation")
             .is_none());
+    }
+
+    #[test]
+    fn ordinary_and_early_budgets_are_independent_and_cleanup_returns_both() {
+        let mut state = RangeRuntimeState::with_buffer_limits(2, 4);
+        state
+            .sessions
+            .insert(1, session(Phase::ClientAwaitReady, Instant::now()));
+        let message = |session, payload: &'static [u8]| GameMessage {
+            endpoint: 1,
+            session,
+            sequence: None,
+            tick: None,
+            correlation_id: 0,
+            payload: Bytes::from_static(payload),
+        };
+        state.buffer_message(message(1, b"ab")).unwrap();
+        state.complete_buffered(1);
+        state.push_completed_for_test(GameEvent::SessionReady {
+            endpoint: 1,
+            session: 1,
+        });
+        state.push_completed_for_test(GameEvent::Message(message(2, b"1234")));
+        assert_eq!(state.public_capacity(), (0, 0));
+        assert_eq!(state.snapshot().buffered_messages, 1);
+        assert_eq!(state.snapshot().buffered_bytes, 2);
+        let mut output = Vec::new();
+        state.drain_completed(&mut output, 1);
+        assert!(matches!(
+            output[0],
+            GameEvent::SessionReady { session: 1, .. }
+        ));
+        assert_eq!(state.public_capacity(), (1, 0));
+        state.forget_session(1);
+        assert_eq!(state.snapshot().buffered_bytes, 0);
+        state.forget_session(2);
+        assert_eq!(state.public_capacity(), (2, 4));
+        // Empty messages consume slots even though their payload-byte cost is zero.
+        state.push_completed_for_test(GameEvent::Message(message(3, b"")));
+        state.push_completed_for_test(GameEvent::Message(message(3, b"")));
+        assert_eq!(state.public_capacity(), (0, 4));
+        state.clear();
+        assert_eq!(state.public_capacity(), (2, 4));
+        assert_eq!(state.completed_len_for_test(), 0);
+    }
+
+    #[test]
+    fn credential_payloads_are_charged_including_resume_identity() {
+        let mut state = RangeRuntimeState::with_buffer_limits(2, 100);
+        state.push_completed_for_test(GameEvent::AuthRequest {
+            endpoint: 1,
+            session: 2,
+            client_public_key: [0; 32],
+            join_ticket: vec![1; 3].into(),
+            build_id: 0,
+            capabilities: 0,
+        });
+        state.push_completed_for_test(GameEvent::ResumeRequest {
+            endpoint: 1,
+            session: 3,
+            old_session: 2,
+            identity: vec![2; 64].into(),
+            client_public_key: [0; 32],
+            join_ticket: vec![3; 2].into(),
+            build_id: 0,
+            capabilities: 0,
+        });
+        assert_eq!(state.public_capacity(), (0, 31));
+        state.drain_completed(&mut Vec::new(), 1);
+        assert_eq!(state.public_capacity(), (1, 34));
+        state.clear();
+        state.push_completed_for_test(GameEvent::ResumeTicket {
+            endpoint: 1,
+            session: 3,
+            ticket: crate::ResumeTicket::new(vec![4; 48]),
+        });
+        assert_eq!(state.public_capacity(), (1, 52));
+        state.forget_session(3);
+        assert_eq!(state.public_capacity(), (2, 100));
     }
 }

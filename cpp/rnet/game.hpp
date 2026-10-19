@@ -386,6 +386,8 @@ class GameRuntime {
 
   /// Returns up to capacity owned events, releasing both native tokens even when copying throws.
   /// Zero capacity still drives maintenance; timeout_ms limits idle wait, not lock/work time.
+  /// Staged count/byte limits pause transport draining, not timers. Use positive capacity
+  /// regularly; zero-only polling can block queued ACKs and cause heartbeat timeouts.
   /// Poll regularly on both peers. Allocation failure consumes the exported events, without replay.
   std::vector<GameEvent> poll(size_t capacity, uint32_t timeout_ms) const {
     std::vector<rnet_game_event_t> raw(capacity);

@@ -132,6 +132,8 @@ public sealed unsafe partial class GameRuntime {
     /// Lock/work time is additional.</param>
     /// <returns>Owned events, possibly empty; an empty result is not proof of disconnection.</returns>
     /// <remarks>Poll both peers even when idle. Copies survive later polls/disposal; caller erases copied credentials.
+    /// Staged count/byte limits pause transport draining, not timers. Use positive capacity regularly;
+    /// zero-only polling can block queued ACKs and cause heartbeat timeouts.
     /// Conversion failure can consume exported events without returning them.</remarks>
     /// <exception cref="ArgumentOutOfRangeException">Capacity is outside 0..4096.</exception>
     public GameEvent[] Poll(int capacity = 64, uint timeoutMs = 0) {

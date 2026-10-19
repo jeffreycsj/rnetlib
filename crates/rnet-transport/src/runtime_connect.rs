@@ -9,6 +9,13 @@ use std::time::{Duration, Instant};
 
 impl NetworkRuntime {
     /// Resolves a DNS host name or textual IP and starts a transport-neutral client connection.
+    /// `host` and nonzero `port` are separate; full URLs are not parsed. Resolution blocks up to
+    /// `dns_timeout`, prefers IPv4 candidates and retains at most 32 addresses. Resolver thread
+    /// concurrency is bounded process-wide; exhaustion returns `WouldBlock`, timeout `Timeout`.
+    /// A timed-out OS resolver may continue in its bounded background slot until it returns.
+    /// TCP attempts share a `dns_timeout + connect_timeout` budget measured from method entry;
+    /// UDP/KCP setup retries run asynchronously after resolution. Success is an endpoint, not
+    /// completed authentication; see [`Self::connect`] for session events and trust requirements.
     pub fn connect_host(&self, config: crate::config::HostClientConfig) -> Result<Handle> {
         if config.host.is_empty() || config.port == 0 {
             return Err(RnetError::new(
@@ -55,6 +62,10 @@ impl NetworkRuntime {
     }
 
     /// Connects using caller-resolved addresses in order, retrying datagram handshakes in place.
+    /// Empty candidates return `InvalidArgument`. TCP socket attempts share `connect_timeout`;
+    /// once a socket connects, asynchronous authentication failure does not retry another TCP
+    /// address. UDP/KCP retry eligible setup failures within their connection budget. Success
+    /// returns one endpoint, not a session; use [`Self::poll_events`] to observe setup results.
     pub fn connect_resolved(&self, config: crate::config::ResolvedClientConfig) -> Result<Handle> {
         self.validate_join_payload(&config.join_payload)?;
         let first = *config.remote_addrs.first().ok_or_else(|| {

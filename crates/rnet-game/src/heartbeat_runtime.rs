@@ -117,6 +117,9 @@ impl GameRuntime {
                 }
             }
             HeartbeatKind::Ack => {
+                // Use the authenticated event's original queue timestamp, not the current
+                // security mode or poll time. Delayed polling must not turn a timely reply
+                // into a false timeout or count game-loop stalls as network RTT.
                 let accepted = self
                     .heartbeat_trackers
                     .lock()
@@ -202,6 +205,8 @@ impl GameRuntime {
                     continue;
                 }
             };
+            // Arm the challenge only after local control admission. Failed sends still count
+            // toward the no-progress timeout via last_ack; a full queue cannot grant immortality.
             if self.network.send_game_control(session, &encoded).is_ok() {
                 let _ = tracker.mark_sent(challenge, now);
                 self.heartbeat_metrics
@@ -213,6 +218,7 @@ impl GameRuntime {
                     .fetch_add(1, Ordering::Relaxed);
             }
         }
+        // Session cleanup can revisit this table, so perform it only after releasing its lock.
         drop(trackers);
         for (session, reason) in close {
             let _ = self.network.close_session(session, reason);

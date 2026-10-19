@@ -1,4 +1,17 @@
 //! Tokio TCP, UDP, and KCP transport runtime.
+//!
+//! [`NetworkRuntime`] owns its I/O workers and starts them during construction. One runtime
+//! may listen and connect on different transports; each endpoint fixes its transport for life.
+//! Every session performs Noise authentication and server-side application authorization.
+//! Poll [`rnet_core::EventType::AuthRequest`], decide it, and wait for
+//! [`rnet_core::EventType::SessionOpened`] before sending business bytes.
+//!
+//! This is the lower-level transport API: game readiness, version negotiation, heartbeats,
+//! resume tickets and application logging are provided by the `rnet-game` facade. Do not mix
+//! raw transport sends with the game envelope on a game session. All handles belong to the
+//! runtime that issued them; numeric equality across runtimes conveys no ownership.
+
+#![deny(missing_docs)]
 
 const MAX_HANDSHAKE_RECORD: usize = 65_535;
 
@@ -37,6 +50,9 @@ mod session;
 mod session_close;
 mod state;
 mod tcp_socket;
+
+#[cfg(test)]
+mod security_command_tests;
 
 pub use config::{
     ClientConfig, ClientSecurity, HostClientConfig, PeerVerifier, ResolvedClientConfig,

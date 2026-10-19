@@ -380,6 +380,8 @@ func (r *GameRuntime) PrometheusSnapshot() (string, error) {
 // capacity must be 0..65536; zero still advances internal maintenance. Call continually
 // on both peers, even when idle. timeout is an idle wait, truncated to milliseconds and
 // clamped to [0, MaxUint32], not a hard call deadline. Erase copied credentials promptly.
+// Staged count/byte limits pause transport draining, not timers. Use positive capacity
+// regularly; zero-only polling can block queued ACKs and cause heartbeat timeouts.
 // On export failure, consumed events are not replayed; exported native buffers are released.
 func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEvent, err error) {
 	defer lockNativeThread()()

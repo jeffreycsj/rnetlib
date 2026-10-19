@@ -44,6 +44,10 @@ Normal `send` uses normal priority with no expiry or correlation ID. Scheduling 
 
 RNet is poll-driven. `listen` and `connect` create endpoints, but they do not invoke application callbacks. The application must keep calling `poll` for the lifetime of each runtime. The same event stream carries authorization, readiness, received messages, writable notifications, security changes and disconnects; authenticated heartbeat, clock-sync and negotiation controls are consumed internally during the same calls.
 
+Poll with **positive capacity regularly on both peers**. Zero-capacity calls still drive timers and bounded maintenance, but cannot replace event consumption. Ordinary public events waiting for the application have independent count and payload-byte limits inherited from `event_queue_capacity` and `max_event_bytes`. Polling only takes the transport FIFO prefix that can fit the remaining staging budget; it does not drop or bypass a non-fitting head. Draining public events returns that budget. The early-data negotiation budget and transport event queue remain separately bounded, so these limits are not a whole-process memory cap and do not include returned application-owned events or allocation overhead. `range_buffer_snapshot()` still reports early data only, not ordinary public backlog.
+
+When the next event cannot fit, transport-event draining pauses while heartbeat, clock and negotiation timers continue. ACKs behind the FIFO head cannot bypass that backpressure; prolonged zero-only polling can therefore time out a healthy peer. This does not add a new staging-full kick or eviction policy. Existing transport-level policies still apply: TCP waits for event capacity, while UDP/KCP close the affected session if a per-session event cannot enter the native event queue. Priority lifecycle events may evict data notifications, or be rejected when only lifecycle history remains. Bounded game staging is not a guarantee of lossless delivery or continued connection under overload.
+
 The normal flow is:
 
 1. The server polls `AuthRequest`, validates the opaque login ticket, then calls `auth_decide`.
