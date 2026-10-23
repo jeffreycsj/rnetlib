@@ -496,6 +496,9 @@ func (r *GameRuntime) Stop(timeout time.Duration) error {
 // Close stops and destroys the runtime and releases the retained logger after success.
 // It is idempotent after success; failure preserves a handle for retry. Quiesce other
 // callers first; concurrent Close can return backpressure. Never call from its logger.
+// A failed destroy can follow a successful stop: the retained handle permits final
+// polling/queries and cleanup retry, not restarting network I/O. Keep logger dependencies
+// alive until Close succeeds; destruction waits for in-flight callbacks to return.
 func (r *GameRuntime) Close() error {
 	defer lockNativeThread()()
 	if err := r.Stop(0); err != nil {

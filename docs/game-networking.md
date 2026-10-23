@@ -248,6 +248,17 @@ Game `Poll(0, ...)` still drives maintenance but does not drain application even
 Always close runtimes explicitly after stopping concurrent callers, and never call
 `Stop`/`Close` from their logger callbacks. Clear your own credential copies.
 
+Go `Close` returns shutdown failures and retains the native handle and logger for
+retry. This is not a rollback: stop may already have succeeded, so only final
+polling/queries and cleanup remain available, not restarting I/O. Preserve logger
+dependencies until `Close` succeeds. If destruction is already waiting for a
+callback to finish, another `Close` returns `WouldBlock`; stop concurrent callers
+and retry from the owning application thread/goroutine, never from the callback.
+Native buffers borrowed directly through C must be released before destroy; normal
+Go polling/snapshot calls copy and release those buffers themselves. The Go
+lifecycle tests verify failed destruction using a real outstanding native buffer,
+callback shutdown rejection and an overlapping close while the logger is blocked.
+
 Clock offsets arrive from native as signed microseconds; Go exposes them as
 nanosecond `time.Duration`. Values outside that narrower range saturate to the
 signed whole-microsecond bounds, preserving direction instead of overflowing.

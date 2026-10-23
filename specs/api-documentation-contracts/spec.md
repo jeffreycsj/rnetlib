@@ -504,3 +504,33 @@
 - `go test -a -p 1 -count=1 -race -tags rnet_test_faults ./go/rnet ./examples/go/game_quickstart` 通过。该结果覆盖 Go 侧并发检查，不是对 Rust/C 内部的线程检测。Go 格式、`git diff --check`、发布脚本 `bash -n` 通过；审查后没有遗留本轮已确认的行为缺陷。
 - 临时证据：`/tmp/netlib-contract-audit-baseline.log`、`/tmp/netlib-clock-duration-red.log`、`/tmp/netlib-clock-duration-green.log`、`/tmp/netlib-contract-audit-final.log`、`/tmp/netlib-contract-audit-race.log`。均为当前脏工作树的本机证据，不转记为干净发布提交资格。
 - 构建串行并使用 15 GiB 可用内存守护；没有重跑 Rust workspace/严格 Clippy、ASan/Miri/Loom、独立审计、完整发布包/远端 CI 或目标环境长稳。已有跨阶段未提交修改保留；后续获授权提交时宜按阶段组织，不把巨大累计 diff 当作单一小修复。
+
+## 第六阶段 B：Go 关闭失败与日志生命周期保护（2026-10-23）
+
+延续第 6 项，聚焦 Go 游戏门面的 stop/destroy 失败、回调所有权和重叠 Close。没有新增公共 API、ABI、wire 或生产运行逻辑；本批是既有契约的保护测试与说明补全，不将首次即通过的保护测试虚报为行为修复的 RED → GREEN。
+
+- 补充真实日志回调内 Stop/Close 被拒绝的回归：保留原生错误类别和原因，回调仍可查询指标，调用方随后能够正常 Stop/Close，logger context 只在成功后清理。
+- 强化已有关闭/日志重入测试：用阻塞回调让 destroy 确定处于等待状态，第二个 Close 必须返回 WouldBlock，普通查询返回失败，callback context 保持有效；回调退出后首个 Close 完成。
+- 新增 Linux/rnet_test_faults 辅助模块，只通过真实 C ABI 留存 Prometheus buffer token，不拦截 stop/destroy 或模拟返回码。连续两次 Close 都由真实原生 outstanding-buffer 前置条件拒绝，随后仍可查询和 poll 唯一的 RuntimeStopped；释放 token 后重试成功，保存的原生句柄也必须失效，重复 Close 无害。
+- GoDoc 和游戏接入指南明确：失败后保留句柄供清理重试，不是回滚。stop 可能已经成功，此时不能恢复 I/O；logger 的外部依赖必须存活到 Close 成功。正常 Go 收包/快照已自行复制并释放 token，裸 token 仅由测试辅助接口持有。
+- 现有 make/CI 的全量故障标签测试自动纳入新回归；普通 SDK 不包含新辅助模块。没有新增故障开关或让调用方自行管理 Go SDK 内部 token。
+
+### 对抗性复查
+
+| 检查 | 结果与边界 |
+| --- | --- |
+| 状态与错误 | 真实 C ABI 验证 stop 拒绝、destroy 拒绝和成功后句柄失效；核对 status 与诊断，不把任意错误当成通过，也不只检查 Go handle 归零 |
+| 并发与所有权 | 重叠 Close 通过回调阻塞建立确定性窗口；读取包装器共享状态遵循其锁。callback context 在销毁失败及等待期间保持有效，logger 可完成查询后退出 |
+| 测试独立性 | 新原生辅助模块不含全局故障状态；每例创建自己的 runtime/token，cleanup 尝试释放并关闭，不依赖执行顺序或真实 OOM |
+| 范围 | 未发现必须修改生产逻辑的新缺陷。测试不承诺任意并发收发与 Close 安全；调用方仍须停掉并发调用者，回调必须及时返回 |
+
+测试盲区：没有验证永不返回的第三方 logger 的可中断关闭，没有注入 OS 线程/内存耗尽，也不把 Go race 当作 Rust/C 内部线程检测。C# checked cleanup 的可观测性与重试设计未在本批改造，其他语言高级接口及生命周期全路径对照继续留在第 6 项；最终干净发布树资格和目标弱网/长稳仍未完成。
+
+### 本批验证
+
+- 修改前 `make -j1 go-test` 基线通过；新增三组生命周期保护检查通过。
+- 故障标签完整 Go SDK/示例 race 回归通过；随后对同步读取补强后的三组生命周期测试执行 `-race -count=25`，全部通过。
+- 最终 `make -j1 go-test doc-check structure-check` 通过，包含普通/故障标签 Go SDK、示例测试和构建、原生文档门禁、六个 Rust crate 严格文档与 doctest。普通 `go list` 确认原生生命周期辅助文件被排除；Go 格式与 `git diff --check` 通过。
+- 临时证据：`/tmp/netlib-lifecycle-baseline.log`、`/tmp/netlib-lifecycle-contracts.log`、`/tmp/netlib-lifecycle-race.log`、`/tmp/netlib-lifecycle-repeat.log`、`/tmp/netlib-lifecycle-final.log`。构建串行，使用至少保留 15 GiB 可用内存的守护。
+- 本批未重跑完整 Rust workspace/严格 Clippy、C/C++/C# 集成、ASan/Miri/Loom、独立审计、完整发布包或远端 CI，也未执行目标环境弱网/长稳。
+- 本批未执行提交或推送；不将测试工作树的通过记录视为生产发布资格。

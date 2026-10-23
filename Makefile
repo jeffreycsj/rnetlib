@@ -66,7 +66,7 @@ go-test:
 	# Go's cache does not track changes to the externally linked native archive.
 	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 ./go/rnet ./examples/go/game_quickstart
 	GOTOOLCHAIN=local CGO_ENABLED=1 go build -a -p 1 -o target/rnet-go-game-quickstart ./examples/go/game_quickstart
-	# Linux test-only interception checks native buffers and clock conversion extremes.
+	# Linux test-only helpers cover native ownership, close retries and clock conversion extremes.
 	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 -tags rnet_test_faults ./go/rnet
 
 csharp-test:
