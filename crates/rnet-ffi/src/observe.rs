@@ -29,6 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[no_mangle]
 /// Sets the interval for aggregated latency summary logs. Zero disables summaries.
+/// Sets the poll-driven summary interval in milliseconds; zero disables summaries.
 pub extern "C" fn rnet_metrics_log_interval_set(runtime: u64, interval_ms: u64) -> i32 {
     ffi_status(|| {
         let entry = runtime_entry(runtime)?;
@@ -48,6 +49,7 @@ pub extern "C" fn rnet_metrics_log_interval_set(runtime: u64, interval_ms: u64) 
 ///
 /// # Safety
 /// `out` must point to writable memory for one `RnetMetrics`.
+/// Writes runtime-wide cumulative counters and live gauges to required out; does not reset.
 pub unsafe extern "C" fn rnet_metrics_snapshot(runtime: u64, out: *mut RnetMetrics) -> i32 {
     ffi_status(|| {
         if out.is_null() {
@@ -96,6 +98,10 @@ pub unsafe extern "C" fn rnet_metrics_snapshot(runtime: u64, out: *mut RnetMetri
 ///
 /// # Safety
 /// `out_count` and each requested output entry must point to writable caller-owned memory.
+/// Writes histogram snapshots to metrics[capacity]; required out_count receives needed length.
+/// capacity=0 permits NULL metrics and only queries length, without draining.
+/// Positive insufficient capacity is INVALID_ARGUMENT. drain_window=0 reads cumulative
+/// samples; nonzero rotates the window. Concurrent samples are not globally atomic.
 pub unsafe extern "C" fn rnet_latency_snapshot(
     runtime: u64,
     metrics: *mut RnetLatencyMetric,

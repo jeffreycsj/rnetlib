@@ -33,6 +33,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang python3
       - run: cargo fmt --check
       - run: make structure-check
+      - run: make header-check
       - run: make doc-check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

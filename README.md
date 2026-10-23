@@ -107,7 +107,15 @@ See [Getting started](docs/getting-started.md) for transport-level Rust, C, C++1
 
 ## Build and test
 
-Requirements are Rust 1.85 or newer, C11 and C++11 compilers, Go 1.22 or newer, .NET SDK 8+ for the C# checks/package, and a Linux-like linker. Documentation checks also require Python 3 and Clang/Clang++ with JSON AST support (validated locally with Clang 17); no Python packages are required. C example failure tests use Linux linker `--wrap` support.
+Requirements are Rust 1.85 or newer, C11 and C++11 compilers, Go 1.22 or newer, .NET SDK 8+ for the C# checks/package, and a Linux-like linker. Header automation and packaging require Python 3; documentation checks additionally require Clang/Clang++ with JSON AST support (validated locally with Clang 17). No Python packages are required. C example failure tests use Linux linker `--wrap` support.
+
+`include/rnet.h` is generated, not hand-maintained. Edit the Rust FFI declarations
+and their documentation, then run `make header-update` and review the diff.
+`make header-check` rejects stale declarations or comments without overwriting them;
+native SDK checks and packaging include this gate. Cargo builds generate a header
+in `OUT_DIR` using the locked cbindgen build dependency without writing into the
+source tree. Release consumers receive the matching header and libraries and do
+not need cbindgen. See [header generation](docs/generated-c-header.md) for details.
 
 ```sh
 cargo build -p rnet-ffi --release

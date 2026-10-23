@@ -7,6 +7,7 @@ use crate::registry::{ffi_status, invalid_argument};
 
 /// Changes poll-driven cumulative game latency logs; zero disables them.
 #[no_mangle]
+/// Sets poll-driven cumulative game log interval_ms (default 30000); zero disables.
 pub extern "C" fn rnet_game_metrics_log_interval_set(runtime: u64, interval_ms: u64) -> i32 {
     ffi_status(|| {
         game_registry::lease(runtime)?
@@ -18,6 +19,8 @@ pub extern "C" fn rnet_game_metrics_log_interval_set(runtime: u64, interval_ms: 
 #[no_mangle]
 /// # Safety
 /// `out` must point to writable storage for one `RnetGameQuality`.
+/// Writes a session's quality to required out; available=0 means no heartbeat sample.
+/// UDP gaps and KCP retransmissions have different meanings; TCP has no loss estimate.
 pub unsafe extern "C" fn rnet_game_network_quality(
     runtime: u64,
     session: u64,
@@ -39,6 +42,7 @@ pub unsafe extern "C" fn rnet_game_network_quality(
 /// Runtime-local monotonic microseconds, not a wall-clock timestamp.
 /// # Safety
 /// `out` must point to writable storage for one `u64`.
+/// Writes this runtime's monotonic microseconds to required out; not Unix time.
 pub unsafe extern "C" fn rnet_game_clock_micros(runtime: u64, out: *mut u64) -> i32 {
     ffi_status(|| {
         if out.is_null() {
@@ -53,6 +57,9 @@ pub unsafe extern "C" fn rnet_game_clock_micros(runtime: u64, out: *mut u64) -> 
 #[no_mangle]
 /// # Safety
 /// `out` must point to writable storage for one `RnetGameClockSync`.
+/// Writes approximate client-side server-minus-client offset to required out.
+/// session must be game-ready; pending/stale handles return an error, not available=0.
+/// available=0 before sampling and on server sessions; not a trusted anti-cheat clock.
 pub unsafe extern "C" fn rnet_game_clock_sync_snapshot(
     runtime: u64,
     session: u64,
@@ -75,6 +82,7 @@ pub unsafe extern "C" fn rnet_game_clock_sync_snapshot(
 /// not globally atomic; `logger_available` distinguishes absent logging from zero drops.
 /// # Safety
 /// `out` must point to writable storage for one `RnetGameMetrics`.
+/// Writes cumulative counters/gauges to required out; no reset or globally atomic snapshot.
 pub unsafe extern "C" fn rnet_game_metrics_snapshot(
     runtime: u64,
     out: *mut RnetGameMetrics,
@@ -94,6 +102,7 @@ pub unsafe extern "C" fn rnet_game_metrics_snapshot(
 ///
 /// # Safety
 /// `out` must point to writable storage for one `RnetGameRealtimeQueue`.
+/// Writes runtime-wide LatestOnly game queue gauges/counters to required out; forwarded is not delivered.
 pub unsafe extern "C" fn rnet_game_realtime_queue_snapshot(
     runtime: u64,
     out: *mut RnetGameRealtimeQueue,
@@ -113,6 +122,8 @@ pub unsafe extern "C" fn rnet_game_realtime_queue_snapshot(
 #[no_mangle]
 /// # Safety
 /// `out` must point to writable storage for one `RnetGameScheduledQueue`.
+/// Writes priority queue gauges, cumulative delays and outcomes to required out; no reset.
+/// tick_* delays cover only tick-bearing messages, not a per-poll time window.
 pub unsafe extern "C" fn rnet_game_scheduled_queue_snapshot(
     runtime: u64,
     out: *mut RnetGameScheduledQueue,
@@ -135,6 +146,8 @@ pub unsafe extern "C" fn rnet_game_scheduled_queue_snapshot(
 /// # Safety
 /// `out` must point to writable storage for one `RnetGameBuffer`. Release a nonzero token with
 /// `rnet_game_buffer_release` after the last read; the pointer is invalid afterward.
+/// Exports low-cardinality Prometheus text into required out; not NUL-terminated.
+/// Release its nonzero token with rnet_game_buffer_release; does not reset counters.
 pub unsafe extern "C" fn rnet_game_prometheus_snapshot(
     runtime: u64,
     out: *mut RnetGameBuffer,

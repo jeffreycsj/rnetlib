@@ -8,16 +8,27 @@ use std::mem::size_of;
 /// transport send queue, not delivered to the peer; no per-player labels or payloads appear.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// Game staging gauges and cumulative LatestOnly admission/forwarding/drop counters.
 pub struct RnetGameRealtimeQueue {
+    /// Output layout size in bytes, written by the library.
     pub struct_size: u32,
+    /// Output ABI identifier, written by the library.
     pub abi_version: u32,
+    /// Current distinct pending (session,key) entries in game staging.
     pub queued_messages: u64,
+    /// Current payload plus game-envelope reservations, not allocator RSS.
     pub queued_bytes: u64,
+    /// Cumulative staging budget/key-cap rejections, including failed requeues.
     pub admission_rejected: u64,
+    /// Cumulative old pending snapshots superseded by newer same-key values.
     pub replaced: u64,
+    /// Cumulative staged values discarded during session cleanup/shutdown.
     pub closed_dropped: u64,
+    /// Cumulative values unable to reenter staging after transport backpressure.
     pub backpressure_dropped: u64,
+    /// Cumulative values discarded after non-backpressure forwarding failures.
     pub send_failed: u64,
+    /// Cumulative snapshots accepted by transport, not delivered to the peer.
     pub forwarded: u64,
 }
 
@@ -57,28 +68,51 @@ impl From<RealtimeQueueSnapshot> for RnetGameRealtimeQueue {
 /// Runtime-wide priority/expiry staging gauges and cumulative counters.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// Priority-queue gauges/counters; expiry and delay apply only before transport admission.
 pub struct RnetGameScheduledQueue {
+    /// Output layout size in bytes, written by the library.
     pub struct_size: u32,
+    /// Output ABI identifier, written by the library.
     pub abi_version: u32,
+    /// Current admitted messages awaiting forwarding or drop.
     pub queued_messages: u64,
+    /// Current payload plus worst-case game-envelope reservations.
     pub queued_bytes: u64,
+    /// Cumulative staging byte/message budget rejections.
     pub admission_rejected: u64,
+    /// Cumulative messages expiring locally before forwarding.
     pub expired_dropped: u64,
+    /// Cumulative messages discarded on session cleanup/shutdown.
     pub closed_dropped: u64,
+    /// Cumulative non-backpressure transport forwarding failures.
     pub send_failed: u64,
+    /// Cumulative transport admissions, not deliveries.
     pub forwarded: u64,
+    /// Cumulative retries returned to staging; one message can be counted repeatedly.
     pub backpressure_requeued: u64,
+    /// Cumulative admissions indexed low, normal, high, critical.
     pub admitted_by_priority: [u64; 4],
+    /// Cumulative transport forwards in low, normal, high, critical order.
     pub forwarded_by_priority: [u64; 4],
+    /// Cumulative successful-forward delay samples; admission to transport, not delivery.
     pub queue_delay_samples: u64,
+    /// Estimated cumulative local queue-delay P90 in microseconds.
     pub queue_delay_p90_us: u64,
+    /// Estimated cumulative local queue-delay P95 in microseconds.
     pub queue_delay_p95_us: u64,
+    /// Estimated cumulative local queue-delay P99 in microseconds.
     pub queue_delay_p99_us: u64,
+    /// Largest sampled local queue delay in microseconds.
     pub queue_delay_max_us: u64,
+    /// Same delay sample count, restricted to messages carrying a tick.
     pub tick_queue_delay_samples: u64,
+    /// Tick-bearing messages' estimated cumulative queue-delay P90, microseconds.
     pub tick_queue_delay_p90_us: u64,
+    /// Tick-bearing messages' estimated cumulative queue-delay P95, microseconds.
     pub tick_queue_delay_p95_us: u64,
+    /// Tick-bearing messages' estimated cumulative queue-delay P99, microseconds.
     pub tick_queue_delay_p99_us: u64,
+    /// Largest sampled tick-bearing message queue delay, microseconds.
     pub tick_queue_delay_max_us: u64,
 }
 

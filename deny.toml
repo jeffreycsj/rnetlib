@@ -11,6 +11,10 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+[[licenses.exceptions]]
+name = "cbindgen"
+allow = ["MPL-2.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

@@ -7,16 +7,27 @@ use std::mem::size_of;
 /// Runtime-wide wire-v4 early-data usage without endpoint, session, or player labels.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// Early-data buffering during business-version negotiation, scoped to this runtime.
 pub struct RnetGameRangeBuffer {
+    /// Output layout size in bytes, written by the library.
     pub struct_size: u32,
+    /// Output ABI identifier, written by the library.
     pub abi_version: u32,
+    /// Current early messages retained, including ready-but-not-yet-polled messages.
     pub buffered_messages: u64,
+    /// Current early payload bytes; excludes framing/allocator overhead.
     pub buffered_bytes: u64,
+    /// Highest retained early-message count observed.
     pub peak_buffered_messages: u64,
+    /// Highest retained early payload bytes observed.
     pub peak_buffered_bytes: u64,
+    /// Runtime-wide cap inherited from configured event queue capacity.
     pub max_buffered_messages: u64,
+    /// Runtime-wide cap inherited from configured event-byte budget.
     pub max_buffered_bytes: u64,
+    /// Cumulative per-session early-data budget rejections.
     pub session_admission_rejected: u64,
+    /// Cumulative runtime-wide early-data budget rejections.
     pub runtime_admission_rejected: u64,
 }
 

@@ -1,49 +1,82 @@
 //! Current game-facing ABI layouts.
 
 use crate::abi::RNET_ABI_VERSION;
+pub use crate::game_metrics_abi::RnetGameMetrics;
 use rnet_game::{
-    ClockSyncSample, GameRuntime, LatestTransportSnapshot, NetworkQuality, QualityBasis,
-    QualityGrade,
+    ClockSyncSample, LatestTransportSnapshot, NetworkQuality, QualityBasis, QualityGrade,
 };
 use std::mem::size_of;
 
+/// Lowest local scheduler priority; no effect on remote dispatch.
 pub const RNET_GAME_PRIORITY_LOW: u32 = 1;
+/// Default priority used by ordinary game send.
 pub const RNET_GAME_PRIORITY_NORMAL: u32 = 2;
+/// Higher local scheduler share, not a guaranteed deadline.
 pub const RNET_GAME_PRIORITY_HIGH: u32 = 3;
+/// Highest local scheduler share; lower queues still receive service.
 pub const RNET_GAME_PRIORITY_CRITICAL: u32 = 4;
 
+/// Game runtime started; no peer readiness implied.
 pub const RNET_GAME_RUNTIME_STARTED: u32 = 1;
+/// Endpoint socket opened; continue polling for authorization/readiness.
 pub const RNET_GAME_ENDPOINT_OPENED: u32 = 2;
+/// Endpoint-related failure; query validity rather than assuming terminal closure.
 pub const RNET_GAME_ENDPOINT_ERROR: u32 = 3;
+/// Server authorization: data=login ticket, client key/build/capabilities identify request.
 pub const RNET_GAME_AUTH_REQUEST: u32 = 4;
+/// Server reauthorization: data=identity, aux_data=fresh login, related_session=old handle.
 pub const RNET_GAME_RESUME_REQUEST: u32 = 5;
+/// Business protocol/range mismatch before application authorization.
 pub const RNET_GAME_PROTOCOL_REJECTED: u32 = 6;
+/// Initial game join completed; session can send business data.
 pub const RNET_GAME_SESSION_READY: u32 = 7;
+/// Resume committed; session=new handle, related_session=old invalidated handle.
 pub const RNET_GAME_SESSION_RESUMED: u32 = 8;
+/// Client receives sensitive single-runtime, single-use resume credential in data.
 pub const RNET_GAME_RESUME_TICKET: u32 = 9;
+/// Session ended; status holds local close category.
 pub const RNET_GAME_SESSION_CLOSED: u32 = 10;
+/// Opaque business data plus optional sequence/tick/correlation metadata.
 pub const RNET_GAME_MESSAGE: u32 = 11;
+/// Advisory send-capacity recovery; not a reservation or delivery receipt.
 pub const RNET_GAME_WRITABLE: u32 = 12;
+/// Join/negotiation failed; status describes local category.
 pub const RNET_GAME_JOIN_FAILED: u32 = 13;
+/// Local mode/key barrier completed; inspect encrypted/epoch/operation.
 pub const RNET_GAME_SECURITY_CHANGED: u32 = 14;
+/// Quality classification changed; inspect grade/basis/RTT/jitter/samples.
 pub const RNET_GAME_QUALITY_CHANGED: u32 = 15;
+/// Game/control protocol rejected; never a business message.
 pub const RNET_GAME_PROTOCOL_VIOLATION: u32 = 16;
+/// Game runtime stop completed; release buffers then destroy.
 pub const RNET_GAME_RUNTIME_STOPPED: u32 = 17;
 
 /// Cumulative telemetry for keyed snapshots after game staging.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// TCP/KCP pending-slot statistics; worker pickup ends replacement eligibility.
 pub struct RnetGameTransportLatest {
+    /// Output layout size in bytes, written by the library.
     pub struct_size: u32,
+    /// Output ABI identifier, written by the library.
     pub abi_version: u32,
+    /// Cumulative TCP/KCP pending values replaced before I/O worker pickup.
     pub pending_replaced: u64,
+    /// Cumulative slots consumed by I/O workers; no recall is possible after pickup.
     pub worker_pickups: u64,
+    /// Cumulative bounded transport-capacity rejections, including retries.
     pub admission_would_block: u64,
+    /// Cumulative admissions referencing retired/unknown sessions.
     pub admission_invalid_handle: u64,
+    /// Cumulative admissions when runtime/session was not accepting work.
     pub admission_invalid_state: u64,
+    /// Cumulative admissions before transport readiness.
     pub admission_handshake_required: u64,
+    /// Cumulative unsupported-path rejections; UDP uses ordinary forwarding.
     pub admission_not_supported: u64,
+    /// Cumulative size-limit rejections.
     pub admission_message_too_large: u64,
+    /// Cumulative admission failures outside the explicit categories.
     pub admission_other_failures: u64,
 }
 
@@ -87,34 +120,63 @@ impl From<LatestTransportSnapshot> for RnetGameTransportLatest {
 /// holds the resume request's separate join ticket. Callers must release both tokens.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// Game event; fields are meaningful only for the indicated event kind. Both tokens are owned.
 pub struct RnetGameEvent {
+    /// Output layout size in bytes, written by the library.
     pub struct_size: u32,
+    /// RNET_GAME_* event discriminant; only the documented fields for that event are meaningful.
     pub event_type: u32,
+    /// Local endpoint; zero for runtime-wide events.
     pub endpoint: u64,
+    /// Current/pending local session, including NEW handle on SESSION_RESUMED; zero when not applicable.
     pub session: u64,
+    /// Old local handle on RESUME_REQUEST/SESSION_RESUMED; zero otherwise.
     pub related_session: u64,
+    /// RNET_E_* on error/rejection/close events; other kinds (including PROTOCOL_VIOLATION) use RNET_OK.
     pub status: i32,
+    /// AUTH_REQUEST login ticket; RESUME_REQUEST identity; RESUME_TICKET credential; MESSAGE business bytes.
     pub data: *const u8,
+    /// data byte count, no NUL terminator; empty data may have NULL pointer.
     pub data_len: usize,
+    /// Token owning data; release each nonzero token once before destroy.
     pub buffer_token: u64,
+    /// RESUME_REQUEST's fresh login ticket, separate from the identity in data; otherwise empty.
     pub aux_data: *const u8,
+    /// aux_data byte count; zero when absent.
     pub aux_data_len: usize,
+    /// Independent ownership token for aux_data; release separately from buffer_token.
     pub aux_buffer_token: u64,
+    /// Authenticated 32-byte client key on AUTH_REQUEST/RESUME_REQUEST.
     pub client_public_key: [u8; 32],
+    /// Client build metadata on AUTH_REQUEST/RESUME_REQUEST.
     pub build_id: u64,
+    /// Client capability metadata on AUTH_REQUEST/RESUME_REQUEST; not authorization.
     pub capabilities: u64,
+    /// SECURITY_CHANGED resulting business mode: 0 plaintext, 1 encrypted; controls stay protected.
     pub encrypted: u32,
+    /// SECURITY_CHANGED session-local key/mode generation, not a wall-clock time.
     pub security_epoch: u64,
+    /// SECURITY_CHANGED RNET_SECURITY_OPERATION_* value.
     pub security_operation: u32,
+    /// QUALITY_CHANGED grade: 0 unknown, 1 excellent, 2 good, 3 fair, 4 poor.
     pub quality_grade: u32,
+    /// QUALITY_CHANGED basis: 1 latency, 2 latency+UDP gaps, 3 latency+KCP retransmission.
     pub quality_basis: u32,
+    /// QUALITY_CHANGED latest authenticated heartbeat RTT in microseconds.
     pub last_rtt_us: u64,
+    /// QUALITY_CHANGED smoothed absolute RTT variation in microseconds.
     pub jitter_us: u64,
+    /// QUALITY_CHANGED accepted heartbeat sample count.
     pub quality_samples: u64,
+    /// MESSAGE: 0 absent, 1 sender supplied optional sequence metadata.
     pub has_sequence: u32,
+    /// MESSAGE sequence if has_sequence=1; not internal UDP loss numbering.
     pub sequence: u32,
+    /// MESSAGE: 0 absent, 1 sender supplied a simulation tick.
     pub has_tick: u32,
+    /// MESSAGE simulation tick if has_tick=1; not a trusted clock.
     pub tick: u32,
+    /// MESSAGE optional request/trace metadata; zero means absent.
     pub correlation_id: u64,
 }
 
@@ -156,16 +218,26 @@ impl Default for RnetGameEvent {
 /// Advanced game send metadata. Message type and transport routing remain library-owned.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// Game metadata/scheduling. Priority must be explicit; zero is not Normal.
 pub struct RnetGameSendOptions {
+    /// Set to sizeof this exact struct; initializers fill it when provided.
     pub struct_size: u32,
+    /// Set to RNET_ABI_VERSION; only the exact current layout is accepted.
     pub abi_version: u32,
+    /// 0 omits sequence, 1 includes it; no ordering or deduplication is enabled.
     pub has_sequence: u32,
+    /// Caller-defined sequence copied unchanged when has_sequence=1; zero is valid.
     pub sequence: u32,
+    /// 0 omits tick, 1 includes it.
     pub has_tick: u32,
+    /// Caller-defined simulation tick copied unchanged when has_tick=1.
     pub tick: u32,
+    /// Optional request/trace identifier copied to the peer; zero absent.
     pub correlation_id: u64,
+    /// Required RNET_GAME_PRIORITY_*; zero is invalid. Only local scheduling is affected.
     pub priority: u32,
     /// Relative local queue lifetime. Zero means no expiry.
+    /// Relative local staging lifetime in milliseconds; zero means no expiry, not immediate expiry.
     pub expiry_ms: u64,
 }
 
@@ -188,23 +260,41 @@ impl Default for RnetGameSendOptions {
 /// A sample is unavailable until the first authenticated heartbeat acknowledgement.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// Heartbeat quality with transport-specific loss evidence, not universal packet loss.
 pub struct RnetGameQuality {
+    /// Output layout size in bytes, written by the library.
     pub struct_size: u32,
+    /// Output ABI identifier, written by the library.
     pub abi_version: u32,
+    /// 0 before the first heartbeat sample; 1 permits interpreting the remaining measurements.
     pub available: u32,
+    /// 0 unknown, 1 excellent, 2 good, 3 fair, 4 poor; sample minima may keep grade unknown.
     pub grade: u32,
+    /// 1 latency only, 2 latency+UDP gaps, 3 latency+KCP retransmissions.
     pub basis: u32,
+    /// 0 unavailable, 1 UDP loss fields present; not the same as measured zero loss.
     pub has_udp_loss: u32,
+    /// 0 unavailable, 1 KCP fields present; TCP has neither transport signal.
     pub has_kcp_retransmissions: u32,
+    /// Recent UDP sequence-gap estimate per 1,000 positions (10 means 1%); check availability.
     pub udp_recent_loss_per_mille: u32,
+    /// Recent KCP retransmission ratio per 1,000 PUSH transmissions; not raw network loss.
     pub kcp_recent_retransmission_per_mille: u32,
+    /// Latest authenticated heartbeat RTT in microseconds, including queueing effects.
     pub last_rtt_us: u64,
+    /// Smoothed heartbeat RTT in microseconds; not a percentile.
     pub smoothed_rtt_us: u64,
+    /// Smoothed absolute RTT variation in microseconds.
     pub jitter_us: u64,
+    /// Accepted heartbeat samples on this session.
     pub samples: u64,
+    /// Cumulative expected UDP data positions, excluding implausible forward jumps.
     pub udp_expected: u64,
+    /// Expected minus received UDP positions; late arrivals may reduce this value.
     pub udp_missing: u64,
+    /// Cumulative KCP PUSH transmissions, including retransmissions, excluding ACKs.
     pub kcp_segments_sent: u64,
+    /// Cumulative repeated KCP PUSH transmissions.
     pub kcp_retransmitted: u64,
 }
 
@@ -265,13 +355,21 @@ impl From<NetworkQuality> for RnetGameQuality {
 /// server runtime's monotonic clock; it is not a UTC or security time source.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// Approximate client-side monotonic clock sample; not UTC or an anti-cheat time authority.
 pub struct RnetGameClockSync {
+    /// Output layout size in bytes, written by the library.
     pub struct_size: u32,
+    /// Output ABI identifier, written by the library.
     pub abi_version: u32,
+    /// 0 on server sessions or before first sample; 1 when a client sample is available.
     pub available: u32,
+    /// Reserved output, written as zero by the library.
     pub reserved: u32,
+    /// Signed microseconds added to client runtime clock to approximate server runtime clock.
     pub server_minus_client_us: i64,
+    /// Round-trip estimate in microseconds after subtracting reported server turnaround.
     pub rtt_us: u64,
+    /// Accepted clock samples on this client session, not heartbeat samples.
     pub samples: u64,
 }
 
@@ -301,151 +399,19 @@ impl From<ClockSyncSample> for RnetGameClockSync {
     }
 }
 
-/// Cumulative game-level counters; heartbeat RTT fields are cumulative histogram estimates.
-/// The logger fields are meaningful only when `logger_available` is one. There are no
-/// per-session labels, player identifiers, credentials, or business payloads in this structure.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct RnetGameMetrics {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub logger_available: u32,
-    pub reserved: u32,
-    pub heartbeat_probes_sent: u64,
-    pub heartbeat_probe_send_failures: u64,
-    pub heartbeat_replies_sent: u64,
-    pub heartbeat_reply_send_failures: u64,
-    pub heartbeat_replies_matched: u64,
-    pub heartbeat_replies_rejected: u64,
-    pub heartbeat_probes_rate_limited: u64,
-    pub heartbeat_timeouts: u64,
-    pub heartbeat_rtt_samples: u64,
-    pub heartbeat_rtt_p50_us: u64,
-    pub heartbeat_rtt_p90_us: u64,
-    pub heartbeat_rtt_p95_us: u64,
-    pub heartbeat_rtt_p99_us: u64,
-    pub heartbeat_rtt_p999_us: u64,
-    pub heartbeat_rtt_max_us: u64,
-    pub resume_tickets_issued: u64,
-    pub resume_requests_received: u64,
-    pub resume_tickets_rejected: u64,
-    pub resume_authorization_denied: u64,
-    pub resume_pending_revoked: u64,
-    pub resume_sessions_resumed: u64,
-    pub resume_outstanding_tickets: u64,
-    pub clock_probes_sent: u64,
-    pub clock_replies_sent: u64,
-    pub clock_samples: u64,
-    pub clock_rejected: u64,
-    pub clock_send_failures: u64,
-    pub logger_dropped: u64,
-    pub logger_sink_panics: u64,
-    pub logger_callback_samples: u64,
-    pub logger_callback_p99_us: u64,
-    pub logger_callback_max_us: u64,
-}
-
-impl Default for RnetGameMetrics {
-    fn default() -> Self {
-        // All metric values start at zero; the fixed ABI header is the only exception.
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version: RNET_ABI_VERSION,
-            logger_available: 0,
-            reserved: 0,
-            heartbeat_probes_sent: 0,
-            heartbeat_probe_send_failures: 0,
-            heartbeat_replies_sent: 0,
-            heartbeat_reply_send_failures: 0,
-            heartbeat_replies_matched: 0,
-            heartbeat_replies_rejected: 0,
-            heartbeat_probes_rate_limited: 0,
-            heartbeat_timeouts: 0,
-            heartbeat_rtt_samples: 0,
-            heartbeat_rtt_p50_us: 0,
-            heartbeat_rtt_p90_us: 0,
-            heartbeat_rtt_p95_us: 0,
-            heartbeat_rtt_p99_us: 0,
-            heartbeat_rtt_p999_us: 0,
-            heartbeat_rtt_max_us: 0,
-            resume_tickets_issued: 0,
-            resume_requests_received: 0,
-            resume_tickets_rejected: 0,
-            resume_authorization_denied: 0,
-            resume_pending_revoked: 0,
-            resume_sessions_resumed: 0,
-            resume_outstanding_tickets: 0,
-            clock_probes_sent: 0,
-            clock_replies_sent: 0,
-            clock_samples: 0,
-            clock_rejected: 0,
-            clock_send_failures: 0,
-            logger_dropped: 0,
-            logger_sink_panics: 0,
-            logger_callback_samples: 0,
-            logger_callback_p99_us: 0,
-            logger_callback_max_us: 0,
-        }
-    }
-}
-
-impl RnetGameMetrics {
-    pub(crate) fn from_runtime(runtime: &GameRuntime) -> Self {
-        let heartbeat = runtime.heartbeat_metrics_snapshot();
-        let resume = runtime.resume_metrics_snapshot();
-        let clock = runtime.clock_sync_metrics_snapshot();
-        let mut out = Self {
-            heartbeat_probes_sent: heartbeat.probes_sent,
-            heartbeat_probe_send_failures: heartbeat.probe_send_failures,
-            heartbeat_replies_sent: heartbeat.replies_sent,
-            heartbeat_reply_send_failures: heartbeat.reply_send_failures,
-            heartbeat_replies_matched: heartbeat.replies_matched,
-            heartbeat_replies_rejected: heartbeat.replies_rejected,
-            heartbeat_probes_rate_limited: heartbeat.probes_rate_limited,
-            heartbeat_timeouts: heartbeat.timeouts,
-            heartbeat_rtt_samples: heartbeat.rtt.sample_count,
-            heartbeat_rtt_p50_us: heartbeat.rtt.p50_us,
-            heartbeat_rtt_p90_us: heartbeat.rtt.p90_us,
-            heartbeat_rtt_p95_us: heartbeat.rtt.p95_us,
-            heartbeat_rtt_p99_us: heartbeat.rtt.p99_us,
-            heartbeat_rtt_p999_us: heartbeat.rtt.p999_us,
-            heartbeat_rtt_max_us: heartbeat.rtt.max_us,
-            resume_tickets_issued: resume.tickets_issued,
-            resume_requests_received: resume.requests_received,
-            resume_tickets_rejected: resume.tickets_rejected,
-            resume_authorization_denied: resume.authorization_denied,
-            resume_pending_revoked: resume.pending_revoked,
-            resume_sessions_resumed: resume.sessions_resumed,
-            resume_outstanding_tickets: u64::try_from(resume.outstanding_tickets)
-                .unwrap_or(u64::MAX),
-            clock_probes_sent: clock.probes_sent,
-            clock_replies_sent: clock.replies_sent,
-            clock_samples: clock.samples,
-            clock_rejected: clock.rejected,
-            clock_send_failures: clock.send_failures,
-            ..Self::default()
-        };
-        if let Some(logger) = runtime.game_logger_snapshot() {
-            out.logger_available = 1;
-            out.logger_dropped = logger.dropped;
-            out.logger_sink_panics = logger.sink_panics;
-            if let Some(latency) = runtime.game_logger_callback_latency() {
-                out.logger_callback_samples = latency.sample_count;
-                out.logger_callback_p99_us = latency.p99_us;
-                out.logger_callback_max_us = latency.max_us;
-            }
-        }
-        out
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
+/// Owned export buffer; caller releases its token instead of freeing data.
 pub struct RnetGameBuffer {
+    /// Output layout size in bytes, written by the library.
     pub struct_size: u32,
+    /// Output ABI identifier, written by the library.
     pub abi_version: u32,
+    /// Library-owned bytes, valid until token release or runtime destruction; not NUL-terminated.
     pub data: *const u8,
+    /// Number of bytes in data.
     pub len: usize,
+    /// Release each nonzero token once with rnet_game_buffer_release on the owning runtime.
     pub token: u64,
 }
 

@@ -18,6 +18,8 @@ use rnet_transport::{HostClientConfig, SecurityMode, ServerConfig};
 ///
 /// # Safety
 /// `config`, its slices, and `out` must be valid for this call.
+/// Binds config's numeric address and fixed transport; writes endpoint to required out.
+/// Port zero is supported (query local_port). Server authorization follows AUTH_REQUEST.
 pub unsafe extern "C" fn rnet_server_listen(
     runtime: u64,
     config: *const RnetServerConfig,
@@ -54,6 +56,9 @@ pub unsafe extern "C" fn rnet_server_listen(
 ///
 /// # Safety
 /// `config`, its slices, and `out` must be valid for this call.
+/// Starts an authenticated outbound join; writes endpoint to required out.
+/// Requires client security at runtime creation. DNS may block up to its configured
+/// timeout; connect success is not SESSION_OPENED. Continue polling and handle JOIN_FAILED.
 pub unsafe extern "C" fn rnet_client_connect(
     runtime: u64,
     config: *const RnetClientConfig,
@@ -95,6 +100,7 @@ pub unsafe extern "C" fn rnet_client_connect(
 ///
 /// # Safety
 /// `out` must point to writable memory for one `RnetKeypair`.
+/// Writes a fresh 32-byte private/public identity to required out; caller erases the secret.
 pub unsafe extern "C" fn rnet_keypair_generate(out: *mut RnetKeypair) -> i32 {
     ffi_status(|| {
         if out.is_null() {
@@ -116,6 +122,8 @@ pub unsafe extern "C" fn rnet_keypair_generate(out: *mut RnetKeypair) -> i32 {
 /// # Safety
 /// `private_key` must reference readable memory for this call and `out` must point to writable
 /// memory for one `RnetKeypair`.
+/// Copies exactly 32 private_key bytes and derives the public key into required out.
+/// Caller remains responsible for erasing both input and output private-key copies.
 pub unsafe extern "C" fn rnet_keypair_from_private(
     private_key: RnetSlice,
     out: *mut RnetKeypair,
@@ -140,6 +148,7 @@ pub unsafe extern "C" fn rnet_keypair_from_private(
 ///
 /// # Safety
 /// `out_port` must point to writable memory for one `u16`.
+/// Writes an existing endpoint's bound local port to required out_port; invalid handles fail.
 pub unsafe extern "C" fn rnet_endpoint_local_port(
     runtime: u64,
     endpoint: u64,
@@ -159,6 +168,7 @@ pub unsafe extern "C" fn rnet_endpoint_local_port(
 }
 
 #[no_mangle]
+/// Closes endpoint and its sessions; later queries/sends fail. Does not stop the runtime.
 pub extern "C" fn rnet_endpoint_close(runtime: u64, endpoint: u64) -> i32 {
     ffi_status(|| runtime_entry(runtime)?.network.close_endpoint(endpoint))
 }

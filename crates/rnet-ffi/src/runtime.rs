@@ -29,6 +29,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[no_mangle]
+/// Returns this library's exact ABI identifier; safe to call before layout checks.
 pub extern "C" fn rnet_abi_version() -> u32 {
     RNET_ABI_VERSION
 }
@@ -38,6 +39,7 @@ pub extern "C" fn rnet_abi_version() -> u32 {
 ///
 /// # Safety
 /// `config` must point to writable memory for one `RnetConfig`.
+/// Writes defaults to required config; this overwrites the full current layout.
 pub unsafe extern "C" fn rnet_config_init(config: *mut RnetConfig) -> i32 {
     ffi_status(|| {
         if config.is_null() {
@@ -54,6 +56,9 @@ pub unsafe extern "C" fn rnet_config_init(config: *mut RnetConfig) -> i32 {
 /// # Safety
 /// Configuration/security pointers and `out` must be valid for this call. A logger or verifier
 /// callback and its user data must remain thread-safe and valid until runtime destruction.
+/// Creates a transport runtime and writes its handle to required out.
+/// config is required/initialized; client may be NULL for a server-only runtime.
+/// Keys/configs are copied; callback contexts remain caller-owned. Does not listen/connect.
 pub unsafe extern "C" fn rnet_runtime_create(
     config: *const RnetConfig,
     client: *const RnetClientSecurity,
@@ -167,6 +172,9 @@ unsafe fn register_runtime(
 }
 
 #[no_mangle]
+/// Stops I/O with an optional send-drain budget in drain_timeout_ms (zero means no drain).
+/// WOULD_BLOCK can mean the stopped event is pending: poll and retry. Keep the handle
+/// for final events/buffer release, then destroy. Forbidden from logger callbacks.
 pub extern "C" fn rnet_runtime_stop(runtime: u64, drain_timeout_ms: u32) -> i32 {
     ffi_status(|| {
         if IN_LOG_CALLBACK.with(Cell::get) {
@@ -192,6 +200,9 @@ pub extern "C" fn rnet_runtime_stop(runtime: u64, drain_timeout_ms: u32) -> i32 
 }
 
 #[no_mangle]
+/// Destroys a stopped runtime after all exported buffers are released and calls finish.
+/// INVALID_STATE indicates lifecycle/outstanding buffers; WOULD_BLOCK indicates active
+/// calls. On failure keep the handle and resolve/retry. Forbidden from logger callbacks.
 pub extern "C" fn rnet_runtime_destroy(runtime: u64) -> i32 {
     ffi_status(|| {
         if IN_LOG_CALLBACK.with(Cell::get) {

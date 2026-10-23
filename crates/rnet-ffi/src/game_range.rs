@@ -14,6 +14,8 @@ use zeroize::Zeroizing;
 #[no_mangle]
 /// # Safety
 /// `config`, its slices, and `out` must remain valid for this call.
+/// Binds required config and writes required out endpoint. transport is fixed; protocol
+/// bounds are inclusive (min=max for exact). AUTH_REQUEST/RESUME_REQUEST require a decision.
 pub unsafe extern "C" fn rnet_game_server_listen(
     runtime: u64,
     config: *const RnetGameServerConfig,
@@ -51,6 +53,8 @@ pub unsafe extern "C" fn rnet_game_server_listen(
 #[no_mangle]
 /// # Safety
 /// `config`, its slices, and `out` must remain valid for this call.
+/// Starts a game join using required config; writes outbound endpoint to required out.
+/// Requires runtime client trust. Continue polling; send only after SESSION_READY.
 pub unsafe extern "C" fn rnet_game_client_connect(
     runtime: u64,
     config: *const RnetGameClientConfig,
@@ -74,6 +78,11 @@ pub unsafe extern "C" fn rnet_game_client_connect(
 ///
 /// # Safety
 /// `config`, all slices, and `out` must remain valid for this call.
+/// Starts resume using required config, nonzero old_session and copied resume_ticket;
+/// writes a new endpoint to required out. Ticket works only on its issuing server runtime,
+/// once, before expiry, with the bound client identity. Server must authorize RESUME_REQUEST.
+/// Old live session is retained until ready; SESSION_RESUMED maps old to new handle.
+/// No recovery across server restart, rolling deployment or another server instance.
 pub unsafe extern "C" fn rnet_game_client_resume_connect(
     runtime: u64,
     config: *const RnetGameClientConfig,
@@ -132,6 +141,8 @@ unsafe fn parse_game_client(config: *const RnetGameClientConfig) -> Result<GameH
 #[no_mangle]
 /// # Safety
 /// `out` must point to writable `uint32_t` storage.
+/// Writes selected business version to required out, or errors if unavailable.
+/// Selection may precede readiness; do not use this query as permission to send.
 pub unsafe extern "C" fn rnet_game_selected_protocol_version(
     runtime: u64,
     session: u64,
@@ -152,6 +163,7 @@ pub unsafe extern "C" fn rnet_game_selected_protocol_version(
 #[no_mangle]
 /// # Safety
 /// `out` must point to writable `uint64_t` storage.
+/// Writes cumulative TCP/KCP pending-slot replacement count to required out.
 pub unsafe extern "C" fn rnet_game_transport_latest_replacements(
     runtime: u64,
     out: *mut u64,
@@ -173,6 +185,7 @@ pub unsafe extern "C" fn rnet_game_transport_latest_replacements(
 ///
 /// # Safety
 /// `out` must point to writable storage for one `RnetGameTransportLatest`.
+/// Writes TCP/KCP slot admissions, replacements and worker pickups to required out.
 pub unsafe extern "C" fn rnet_game_transport_latest_snapshot(
     runtime: u64,
     out: *mut RnetGameTransportLatest,
@@ -194,6 +207,7 @@ pub unsafe extern "C" fn rnet_game_transport_latest_snapshot(
 ///
 /// # Safety
 /// `out` must point to writable storage for one `RnetGameRangeBuffer`.
+/// Writes negotiation early-data queue gauges and admission-failure counters to required out.
 pub unsafe extern "C" fn rnet_game_range_buffer_snapshot(
     runtime: u64,
     out: *mut RnetGameRangeBuffer,

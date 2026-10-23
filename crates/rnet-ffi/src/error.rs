@@ -8,6 +8,7 @@ use std::ffi::c_char;
 /// The pointer is never null and remains valid until another RNet function is called on the same
 /// thread. Callers that need longer ownership must copy the UTF-8, NUL-terminated string.
 #[no_mangle]
+/// Returns borrowed thread-local UTF-8 detail; never free it. Read immediately after failure.
 pub extern "C" fn rnet_last_error_message() -> *const c_char {
     last_error_ptr()
 }

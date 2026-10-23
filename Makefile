@@ -7,15 +7,21 @@ FUZZ_SECONDS ?= 10
 FUZZ_RSS_MB ?= 2048
 FUZZ_TARGET_DIR ?= $(CURDIR)/target/fuzz
 
-.PHONY: abi-check build check c-test cpp-test csharp-test doc-check native-doc-check fuzz-asan-smoke go-test loom-test miri-test package structure-check test
+.PHONY: abi-check build check c-test cpp-test csharp-test doc-check native-doc-check fuzz-asan-smoke go-test header-check header-update loom-test miri-test package structure-check test
 
-build:
+build: header-check
 	cargo build -p rnet-ffi --release
+
+header-update:
+	$(PYTHON) -B scripts/generated_header.py --update
+
+header-check:
+	$(PYTHON) -B scripts/generated_header.py --check
 
 test:
 	cargo test --workspace
 
-native-doc-check:
+native-doc-check: header-check
 	CLANG="$(CLANG)" CLANGXX="$(CLANGXX)" $(PYTHON) -B -m unittest discover -s scripts/tests -v
 	CLANG="$(CLANG)" CLANGXX="$(CLANGXX)" $(PYTHON) -B scripts/check_native_docs.py
 
@@ -28,7 +34,7 @@ doc-check: native-doc-check
 	cargo rustdoc -p rnet-game --lib --all-features -- -D warnings
 	cargo test -p rnet-core -p rnet-protocol -p rnet-security -p rnet-game -p rnet-observe -p rnet-transport --doc
 
-c-test:
+c-test: header-check
 	cargo build -p rnet-ffi
 	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude examples/c/tests/poll_ownership.c target/debug/librnet.a -Wl,--wrap=rnet_game_poll_events -lpthread -ldl -lm -o target/rnet-c-poll-ownership
 	./target/rnet-c-poll-ownership poll-error
@@ -41,7 +47,7 @@ c-test:
 	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude examples/c/game_echo.c examples/c/tests/send_backpressure.c target/debug/librnet.a -Wl,--wrap=rnet_game_send -lpthread -ldl -lm -o target/rnet-c-game-backpressure
 	$(PYTHON) -B scripts/test_c_game_example.py -v
 
-cpp-test:
+cpp-test: header-check
 	mkdir -p target
 	g++ -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp cpp/tests/poll_ownership.cpp -o target/rnet-cpp-poll-ownership
 	./target/rnet-cpp-poll-ownership
@@ -59,7 +65,7 @@ cpp-test:
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp examples/cpp/game_quickstart.cpp target/debug/librnet.a -lpthread -ldl -lm -o target/rnet-cpp-game-quickstart
 	$(PYTHON) -B scripts/test_cpp_game_example.py -v
 
-go-test:
+go-test: header-check
 	cargo build -p rnet-ffi
 	mkdir -p lib
 	cp target/debug/librnet.a lib/librnet.a
@@ -69,7 +75,7 @@ go-test:
 	# Linux test-only helpers cover native ownership, close retries and clock conversion extremes.
 	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 -tags rnet_test_faults ./go/rnet
 
-csharp-test:
+csharp-test: header-check
 	cargo build -p rnet-ffi
 	LD_LIBRARY_PATH="$(CURDIR)/target/debug:$${LD_LIBRARY_PATH:-}" $(DOTNET) run --project csharp/RNet.Smoke -c Release
 	$(DOTNET) run --project csharp/RNet.Quickstart.Tests -c Release
@@ -106,7 +112,7 @@ check:
 structure-check:
 	./scripts/check-structure.sh
 
-abi-check:
+abi-check: header-check
 	cargo build -p rnet-ffi --release
 	./scripts/check-exports.sh
 

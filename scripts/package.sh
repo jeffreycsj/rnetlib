@@ -6,7 +6,9 @@ architecture="$(uname -m)"
 destination="${project_dir}/dist/linux-${architecture}"
 
 cd "${project_dir}"
-cargo build --locked -p rnet-ffi --release
+# Reject stale SDK declarations before modifying the package destination. The check
+# builds the release library and compares its Cargo-generated header to the SDK copy.
+"${PYTHON:-python3}" -B scripts/generated_header.py --check --release
 cargo build --locked -p rnet-game --bin game_soak --release
 "${DOTNET:-dotnet}" build csharp/RNet/RNet.csproj -c Release
 case "${destination}" in
@@ -47,6 +49,7 @@ install -m 0644 docs/adversarial-review.md "${destination}/docs/adversarial-revi
 install -m 0644 docs/dependency-review.md "${destination}/docs/dependency-review.md"
 install -m 0644 docs/game-production-qualification.md "${destination}/docs/game-production-qualification.md"
 install -m 0644 docs/getting-started.md "${destination}/docs/getting-started.md"
+install -m 0644 docs/generated-c-header.md "${destination}/docs/generated-c-header.md"
 install -m 0644 docs/csharp.md docs/game-library-review.md "${destination}/docs/"
 install -m 0644 docs/game-networking.md "${destination}/docs/game-networking.md"
 install -m 0644 docs/production-deployment.md "${destination}/docs/production-deployment.md"

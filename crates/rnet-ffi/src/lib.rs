@@ -4,6 +4,7 @@
 
 mod abi;
 mod abi_config;
+mod abi_names;
 mod endpoint;
 mod error;
 mod events;
@@ -12,6 +13,7 @@ mod game_abi;
 mod game_config_abi;
 mod game_control;
 mod game_events;
+mod game_metrics_abi;
 mod game_observe;
 mod game_poll;
 mod game_profile;
@@ -26,6 +28,7 @@ mod session;
 
 pub use abi::*;
 pub use abi_config::*;
+pub use abi_names::*;
 pub use endpoint::{
     rnet_client_connect, rnet_endpoint_close, rnet_endpoint_local_port, rnet_keypair_from_private,
     rnet_keypair_generate, rnet_server_listen,

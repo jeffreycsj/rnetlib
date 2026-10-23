@@ -12,6 +12,11 @@ use std::time::Duration;
 /// # Safety
 /// `out_count` must point to writable memory. For nonzero capacity, `events` must point to
 /// writable storage for `capacity` events. Release each nonzero token exactly once before destroy.
+/// Exports up to capacity events into events and writes required out_count.
+/// Positive capacity requires an array of that many elements. timeout_ms bounds idle
+/// waiting, not total call time; zero is nonblocking. capacity=0 allows NULL events,
+/// validates runtime and drives periodic transport logs without consuming events.
+/// Release all returned nonzero tokens, including the exported prefix if this call fails.
 pub unsafe extern "C" fn rnet_poll_events(
     runtime: u64,
     events: *mut RnetEvent,
@@ -62,6 +67,9 @@ pub unsafe extern "C" fn rnet_poll_events(
 }
 
 #[no_mangle]
+/// Releases one nonzero exported transport buffer token on its owning runtime.
+/// Data becomes invalid immediately. Zero/stale/already released tokens fail in that runtime;
+/// token values are not globally unique, so using a foreign runtime is a caller error.
 pub extern "C" fn rnet_buffer_release(runtime: u64, buffer_token: u64) -> i32 {
     ffi_status(|| runtime_entry(runtime)?.buffers.release(buffer_token))
 }

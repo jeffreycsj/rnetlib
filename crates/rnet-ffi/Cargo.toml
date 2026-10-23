@@ -17,5 +17,8 @@ rnet-security = { version = "0.1.0", path = "../rnet-security" }
 rnet-transport = { version = "0.1.0", path = "../rnet-transport" }
 zeroize = "1"
 
+[build-dependencies]
+cbindgen = { version = "=0.29.2", default-features = false }
+
 [dev-dependencies]
 libc = "0.2"

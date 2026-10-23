@@ -46,6 +46,22 @@ int rnet_send(const char *bytes);
         errors, _ = self.check("/** Config. */ struct rnet_config { int limit; };")
         self.assertTrue(any("rnet_config::limit" in error for error in errors), errors)
 
+    def test_generated_constant_macros_require_their_own_documentation(self):
+        source = """
+#ifndef RNET_H
+#define RNET_H
+/** Current SDK/native layout. */
+#define RNET_ABI_VERSION 4
+/** Local failure. */
+#define RNET_FAILURE -1
+#endif
+"""
+        errors, count = self.check(source)
+        self.assertEqual(errors, [])
+        self.assertEqual(count, 2)
+        errors, _ = self.check(source.replace("/** Local failure. */", "/* internal note */"))
+        self.assertTrue(any("RNET_FAILURE" in error for error in errors), errors)
+
     def test_empty_or_ordinary_comments_are_not_documentation(self):
         for prefix in ["/** */", "// internal note", "/* internal note */"]:
             with self.subTest(prefix=prefix):

@@ -12,6 +12,16 @@ use std::time::Duration;
 /// # Safety
 /// `events` must hold `capacity` writable events; `out_count` must be writable. Each nonzero
 /// returned buffer token must be released exactly once before runtime destroy.
+/// Drives negotiation, heartbeat, clock, queues and logs while exporting up to capacity
+/// events into events; required out_count gives the exported prefix, also on failure.
+/// Positive capacity requires a full array. timeout_ms bounds idle waiting, not lock/work
+/// time; zero is nonblocking. capacity=0 permits NULL events and still drives maintenance
+/// without returning application events. Both peers must poll regularly even when idle.
+/// Ordinary staged events have separate count/byte limits inherited from the network event
+/// queue. At those limits, transport draining pauses but timers continue. Use positive
+/// capacity regularly: zero-capacity calls alone can block ACK processing and time out.
+/// Release both nonzero tokens of every returned event separately; sensitive native
+/// buffers are erased on release. Copies made by the application remain its responsibility.
 pub unsafe extern "C" fn rnet_game_poll_events(
     runtime: u64,
     events: *mut RnetGameEvent,
@@ -44,11 +54,17 @@ pub unsafe extern "C" fn rnet_game_poll_events(
 }
 
 #[no_mangle]
+/// Releases one nonzero game event/export token; data becomes invalid immediately.
+/// Zero/stale/already released tokens fail in that runtime; foreign runtimes can have
+/// coincident token values. Do not mix owners or use transport release here.
 pub extern "C" fn rnet_game_buffer_release(runtime: u64, token: u64) -> i32 {
     ffi_status(|| game_registry::lease(runtime)?.buffers.release(token))
 }
 
 #[no_mangle]
+/// Stops game/transport work with drain_timeout_ms send budget (zero means no drain).
+/// If WOULD_BLOCK, poll and retry to publish final events. Keep handle for buffer release;
+/// stop/destroy may not be called from logger callbacks.
 pub extern "C" fn rnet_game_runtime_stop(runtime: u64, drain_timeout_ms: u32) -> i32 {
     ffi_status(|| {
         if IN_LOG_CALLBACK.with(Cell::get) {
@@ -64,6 +80,9 @@ pub extern "C" fn rnet_game_runtime_stop(runtime: u64, drain_timeout_ms: u32) ->
 }
 
 #[no_mangle]
+/// Destroys a successfully stopped game runtime after all tokens are released.
+/// Active calls yield WOULD_BLOCK; unstopped runtime/outstanding tokens yield INVALID_STATE.
+/// Only success invalidates handle; serialize lifetime changes and retry after resolving errors.
 pub extern "C" fn rnet_game_runtime_destroy(runtime: u64) -> i32 {
     ffi_status(|| {
         if IN_LOG_CALLBACK.with(Cell::get) {

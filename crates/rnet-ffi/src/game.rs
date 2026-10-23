@@ -28,6 +28,7 @@ use zeroize::Zeroizing;
 #[no_mangle]
 /// # Safety
 /// `out` must point to writable storage for one complete configuration.
+/// Writes game defaults to required out, including layout headers; customize after this call.
 pub unsafe extern "C" fn rnet_game_config_init(out: *mut RnetGameConfig) -> i32 {
     ffi_status(|| {
         if out.is_null() {
@@ -44,6 +45,9 @@ pub unsafe extern "C" fn rnet_game_config_init(out: *mut RnetGameConfig) -> i32 
 /// # Safety
 /// Configuration and output pointers must be valid for the call. Logger/verifier callbacks
 /// and their user data must remain thread-safe and valid until runtime destruction.
+/// Creates a game runtime from required config and writes required out handle.
+/// NULL client creates server-only usage. Keys/config copied; callbacks must
+/// outlive destruction. Both peers must continue polling to drive game state and timers.
 pub unsafe extern "C" fn rnet_game_runtime_create(
     config: *const RnetGameConfig,
     client: *const RnetClientSecurity,
@@ -189,6 +193,9 @@ unsafe fn client_security(client: RnetClientSecurity) -> Result<ClientSecurity> 
 /// # Safety
 /// A nonempty identity must point to readable memory for the call. It is opaque and limited to
 /// the game runtime's identity length; the resulting ticket is delivered as an event.
+/// Server issues a single-use ticket for a ready session and copied identity (1..64 bytes).
+/// Success admits the protected send; client obtains RESUME_TICKET asynchronously.
+/// Treat ticket and identity as sensitive; preserve neither in logs.
 pub unsafe extern "C" fn rnet_game_issue_resume_ticket(
     runtime: u64,
     session: u64,
@@ -207,6 +214,7 @@ pub unsafe extern "C" fn rnet_game_issue_resume_ticket(
 #[no_mangle]
 /// # Safety
 /// `out_port` must point to writable `uint16_t` storage.
+/// Writes bound port of a live game endpoint to required out_port.
 pub unsafe extern "C" fn rnet_game_endpoint_local_port(
     runtime: u64,
     endpoint: u64,
@@ -226,6 +234,8 @@ pub unsafe extern "C" fn rnet_game_endpoint_local_port(
 }
 
 #[no_mangle]
+/// Answers server AUTH_REQUEST or RESUME_REQUEST: accept must be 0 or 1.
+/// Authorizing does not complete negotiation; wait for SESSION_READY/SESSION_RESUMED.
 pub extern "C" fn rnet_game_auth_decide(runtime: u64, session: u64, accept: u32) -> i32 {
     ffi_status(|| {
         if accept > 1 {
@@ -240,6 +250,9 @@ pub extern "C" fn rnet_game_auth_decide(runtime: u64, session: u64, accept: u32)
 #[no_mangle]
 /// # Safety
 /// A nonempty payload must point to readable memory for the call.
+/// Copies opaque payload into the Normal game queue for a ready session.
+/// Continued poll forwards it; success is admission, not delivery. No msg_type/stream_id
+/// is required. Empty payload is valid; limits/backpressure may reject the call.
 pub unsafe extern "C" fn rnet_game_send(runtime: u64, session: u64, payload: RnetSlice) -> i32 {
     ffi_status(|| {
         let entry = game_registry::lease(runtime)?;
@@ -252,6 +265,8 @@ pub unsafe extern "C" fn rnet_game_send(runtime: u64, session: u64, payload: Rne
 ///
 /// # Safety
 /// A nonempty payload and `options` must point to readable memory for the call.
+/// Like rnet_game_send with required ABI-initialized options; priority must be 1..4.
+/// Sequence/tick/correlation are optional metadata; expiry applies only in game staging.
 pub unsafe extern "C" fn rnet_game_send_ex(
     runtime: u64,
     session: u64,
@@ -295,6 +310,9 @@ pub unsafe extern "C" fn rnet_game_send_ex(
 ///
 /// # Safety
 /// A nonempty payload must point to readable memory for the call.
+/// Copies a replaceable snapshot for ready session/key (key zero is valid).
+/// Same-key replacement is best effort, scoped to session. Continue polling to forward;
+/// once the transport worker takes it, neither socket nor KCP queued data can be recalled.
 pub unsafe extern "C" fn rnet_game_send_latest(
     runtime: u64,
     session: u64,

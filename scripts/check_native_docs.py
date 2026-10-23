@@ -1,13 +1,14 @@
 """Check documentation attached to public C/C++ declarations using Clang's AST.
 
 C scope is rnet_ declarations and RNET_ enumerators; C++ scope is namespace rnet.
-Macros and namespace summaries are outside this presence gate. Compiler diagnostics
+Public C constant macros are checked separately because Clang's AST omits them. Compiler diagnostics
 validate documentation syntax, not whether prose correctly describes runtime behavior.
 """
 
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -19,6 +20,28 @@ DECLARATIONS = {
     "CXXConversionDecl", "TypedefDecl", "TypeAliasDecl", "VarDecl",
 }
 RECORDS = {"RecordDecl", "CXXRecordDecl"}
+
+
+def check_constant_macros(header):
+    """Check source-owned RNET_ macros, excluding empty include guards, not comment examples."""
+    source = header.read_text()
+    guards = set(re.findall(r"(?m)^\s*#\s*ifndef\s+(RNET_\w+)", source))
+    tokens = re.finditer(r"/\*.*?\*/|//[^\n]*|^[ \t]*#[ \t]*define[ \t]+(RNET_\w+)([^\n]*)",
+                         source, re.S | re.M)
+    previous = None
+    errors, count = [], 0
+    for token in tokens:
+        name = token[1]
+        if name is not None and not (name in guards and not token[2].strip()):
+            count += 1
+            comment = previous[0] if previous is not None else ""
+            attached = previous is not None and not source[previous.end():token.start()].strip()
+            documented = (comment.startswith("/**") or comment.startswith("///")) and bool(comment.strip("/* \t\n"))
+            if not attached or not documented:
+                line = source[:token.start()].count("\n") + 1
+                errors.append(f"{header}:{line}: missing documentation for {name} (Macro)")
+        previous = token
+    return errors, count
 
 
 def ast_objects(text):
@@ -138,6 +161,10 @@ def check_header(header: Path, language: str, include_dirs=(), compiler=None):
             if not file or Path(file).resolve() != header:
                 continue
         visit(node)
+    if language == "c":
+        macro_missing, macro_count = check_constant_macros(header)
+        missing.extend(macro_missing)
+        count += macro_count
     return missing, count
 
 
