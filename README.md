@@ -193,6 +193,11 @@ See [Production deployment](docs/production-deployment.md), the current [game qu
 runner and package provenance. Clean-source reports bind logs and SDK checks to
 one revision; they do not replace final target-environment qualification.
 
+[Independent game probe](docs/distributed-game-probe.md) runs separate authenticated
+server and client processes over TCP/UDP/KCP. The SDK package includes the executable;
+reports distinguish offered load, admission, actual echoes, backpressure and RTT samples.
+Local multi-process checks are not a target-machine capacity or long-soak result.
+
 ## License
 
 RNet is licensed under the [MIT License](LICENSE).

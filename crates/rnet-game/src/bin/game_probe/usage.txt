@@ -1,0 +1,29 @@
+game_probe: independent encrypted server/client benchmark (Linux)
+
+  game_probe keygen --dir NEW_DIRECTORY
+  game_probe server --transport tcp|udp|kcp --bind IP:PORT --run-id ID
+      --key-file FILE --token-file FILE [OPTIONS]
+  game_probe client --transport tcp|udp|kcp --host HOST --port PORT
+      --run-id ID --generator-id UNIQUE_ID --pin-file FILE --token-file FILE [OPTIONS]
+
+Files contain 32 raw bytes. Secret files must deny group/other access (0600).
+Do not put secret values in arguments. Pin the server public key on every client.
+
+Options (defaults):
+  --connections 1       client streams; server total distinct-flow budget (max 4096)
+  --payload-bytes 64    total data message bytes, including 32-byte probe header
+  --duration-ms 10000   client offered-load period; server listening lifetime
+  --drain-ms 5000       echo drain, followed by a separate finish-ACK grace period
+  --join-timeout-ms 10000
+  --report-ms 1000      cumulative reports; percentiles are not windowed
+  --rate 20            offered probes per second per client stream
+  --queue-messages 4096 application/scheduler message budgets
+  --queue-bytes 8388608 separate byte budget per queue layer, not total RSS
+  --inflight 4096      total client outstanding timestamp budget
+  --max-rtt-p99-us N   optional client SLO; no samples fail the check
+  --max-unobserved-ppm N  optional client echo-missing SLO (0..1000000)
+
+Server lifetime must cover client joins + load + two drain periods.
+Exit 0 means run completed; unset SLOs are NOT evaluated. Not capacity certification.
+Startup requires 19 GiB available; ongoing memory reserve is 15 GiB.
+See docs/distributed-game-probe.md for setup, limits, and counter definitions.

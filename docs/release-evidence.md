@@ -43,7 +43,7 @@ Status meanings:
 - `passed`: this command exited zero with stable inputs and intact evidence.
 - `failed`: command exited nonzero.
 - `blocked`: missing prerequisite, memory reserve failure, or recognized
-  resource-skipped soak test. Test stdout/stderr are uncaptured in evidence runs
+  resource-skipped soak/probe test. Test stdout/stderr are uncaptured in evidence runs
   so successful-but-skipped tests cannot hide their resource notice.
 - `interrupted`: supervisor interruption or timeout.
 - `invalidated`: source changed or final evidence/package verification failed.
@@ -69,6 +69,8 @@ avoiding a self-referential checksum. Do not rebuild between the two gates.
 `make package-smoke` verifies and extracts the actual local archive, checks executable
 modes and listed files, and compiles examples against the shipped
 native archive and managed DLL, and runs all three transports. Its scratch builds
+also run the independent probe tests against the archived `game_probe` executable.
+Test credentials are temporary and are never packaged. All scratch builds
 remain under target; it does not use the source-tree Go/native library. Both gates
 must pass before the package has repository-level qualification evidence. Verification
 also rejects unlisted files and symlinks; keep example build output outside the package.

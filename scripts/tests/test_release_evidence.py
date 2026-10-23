@@ -104,6 +104,10 @@ class ReleaseEvidenceTests(unittest.TestCase):
         self.assertNotEqual(self.run_probe("print('SKIPPED game soak smoke: memory guard')"), 0)
         self.assertEqual(self.report()["status"], "blocked")
 
+    def test_independent_probe_resource_skip_is_not_a_qualification_pass(self):
+        self.assertNotEqual(self.run_probe("print('SKIPPED game probe smoke: startup needs 19 GiB available')"), 0)
+        self.assertEqual(self.report()["status"], "blocked")
+
     def test_existing_evidence_cannot_be_overwritten(self):
         self.assertEqual(self.run_probe(), 0)
         before = (self.output / "report.json").read_bytes()

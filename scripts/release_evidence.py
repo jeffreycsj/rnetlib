@@ -65,7 +65,7 @@ def stop_process(process):
 
 def skipped_resource_test(log):
     # These are the repository probe's explicit skip diagnostics, not generic "skip" words.
-    markers = (b"SKIPPED game soak smoke:", b"SKIPPED remaining game soak smoke:")
+    markers = (b"SKIPPED game soak smoke:", b"SKIPPED remaining game soak smoke:", b"SKIPPED game probe smoke:")
     overlap = max(map(len, markers)) - 1
     tail = b""
     with log.open("rb") as stream:

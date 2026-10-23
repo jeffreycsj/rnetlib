@@ -19,6 +19,7 @@ package_dir="${test_dir}/sdk/${package_name}"
 cmp "${original_package}/SHA256SUMS" "${package_dir}/SHA256SUMS"
 "${PYTHON:-python3}" -B scripts/package_evidence.py verify --package "${package_dir}"
 test -x "${package_dir}/bin/game_soak"
+test -x "${package_dir}/bin/game_probe"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -I"${package_dir}/include" \
   "${package_dir}/examples/c/game_echo.c" "${package_dir}/lib/librnet.a" \
   -lpthread -ldl -lm -o "${test_dir}/c-echo"
@@ -42,4 +43,7 @@ for transport in tcp udp kcp; do
     "${DOTNET:-dotnet}" "${test_dir}/RNet.Quickstart/bin/Release/net8.0/RNet.Quickstart.dll" \
     "${transport}" --one-slot
 done
+# The child processes must execute the archived binary, not Cargo's debug binary.
+RNET_GAME_PROBE_BINARY="${package_dir}/bin/game_probe" \
+  cargo test -p rnet-game --test game_probe -- --test-threads=1
 "${PYTHON:-python3}" -B scripts/package_evidence.py verify --package "${package_dir}"

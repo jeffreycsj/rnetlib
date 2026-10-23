@@ -12,7 +12,7 @@ provenance_dir="$(mktemp -d "${project_dir}/target/package-source.XXXXXX")"
 # Reject stale SDK declarations before modifying the package destination. The check
 # builds the release library and compares its Cargo-generated header to the SDK copy.
 "${PYTHON:-python3}" -B scripts/generated_header.py --check --release
-cargo build --locked -p rnet-game --bin game_soak --release
+cargo build --locked -p rnet-game --bin game_soak --bin game_probe --release
 "${DOTNET:-dotnet}" build csharp/RNet/RNet.csproj -c Release
 case "${destination}" in
   "${project_dir}"/dist/linux-*) ;;
@@ -35,6 +35,7 @@ install -m 0644 csharp/RNet/bin/Release/net8.0/RNet.xml "${destination}/lib/RNet
 install -m 0644 target/release/librnet.a "${destination}/lib/librnet.a"
 install -m 0755 target/release/librnet.so "${destination}/lib/librnet.so"
 install -m 0755 target/release/game_soak "${destination}/bin/game_soak"
+install -m 0755 target/release/game_probe "${destination}/bin/game_probe"
 install -m 0755 scripts/run-game-soak.sh "${destination}/scripts/run-game-soak.sh"
 install -m 0644 include/rnet.h "${destination}/include/rnet.h"
 install -m 0644 cpp/rnet.hpp "${destination}/cpp/rnet.hpp"
@@ -54,6 +55,7 @@ install -m 0644 docs/game-production-qualification.md "${destination}/docs/game-
 install -m 0644 docs/getting-started.md "${destination}/docs/getting-started.md"
 install -m 0644 docs/generated-c-header.md "${destination}/docs/generated-c-header.md"
 install -m 0644 docs/release-evidence.md "${destination}/docs/release-evidence.md"
+install -m 0644 docs/distributed-game-probe.md "${destination}/docs/distributed-game-probe.md"
 install -m 0644 docs/csharp.md docs/game-library-review.md "${destination}/docs/"
 install -m 0644 docs/game-networking.md "${destination}/docs/game-networking.md"
 install -m 0644 docs/production-deployment.md "${destination}/docs/production-deployment.md"
