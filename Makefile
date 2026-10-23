@@ -1,10 +1,13 @@
 RNET_NIGHTLY ?= nightly-2026-09-21
 DOTNET ?= dotnet
+PYTHON ?= python3
+CLANG ?= clang
+CLANGXX ?= clang++
 FUZZ_SECONDS ?= 10
 FUZZ_RSS_MB ?= 2048
 FUZZ_TARGET_DIR ?= $(CURDIR)/target/fuzz
 
-.PHONY: abi-check build check cpp-test csharp-test doc-check fuzz-asan-smoke go-test loom-test miri-test package structure-check test
+.PHONY: abi-check build check c-test cpp-test csharp-test doc-check native-doc-check fuzz-asan-smoke go-test loom-test miri-test package structure-check test
 
 build:
 	cargo build -p rnet-ffi --release
@@ -12,7 +15,11 @@ build:
 test:
 	cargo test --workspace
 
-doc-check:
+native-doc-check:
+	CLANG="$(CLANG)" CLANGXX="$(CLANGXX)" $(PYTHON) -B -m unittest discover -s scripts/tests -v
+	CLANG="$(CLANG)" CLANGXX="$(CLANGXX)" $(PYTHON) -B scripts/check_native_docs.py
+
+doc-check: native-doc-check
 	cargo rustdoc -p rnet-core --lib -- -D warnings
 	cargo rustdoc -p rnet-protocol --lib -- -D warnings
 	cargo rustdoc -p rnet-security --lib -- -D warnings
@@ -20,6 +27,19 @@ doc-check:
 	cargo rustdoc -p rnet-transport --lib --all-features -- -D warnings
 	cargo rustdoc -p rnet-game --lib --all-features -- -D warnings
 	cargo test -p rnet-core -p rnet-protocol -p rnet-security -p rnet-game -p rnet-observe -p rnet-transport --doc
+
+c-test:
+	cargo build -p rnet-ffi
+	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude examples/c/tests/poll_ownership.c target/debug/librnet.a -Wl,--wrap=rnet_game_poll_events -lpthread -ldl -lm -o target/rnet-c-poll-ownership
+	./target/rnet-c-poll-ownership poll-error
+	./target/rnet-c-poll-ownership handler-error
+	./target/rnet-c-poll-ownership handler-error-last
+	./target/rnet-c-poll-ownership empty-error
+	./target/rnet-c-poll-ownership discard
+	./target/rnet-c-poll-ownership success
+	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude examples/c/game_echo.c target/debug/librnet.a -lpthread -ldl -lm -o target/rnet-c-game-echo
+	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude examples/c/game_echo.c examples/c/tests/send_backpressure.c target/debug/librnet.a -Wl,--wrap=rnet_game_send -lpthread -ldl -lm -o target/rnet-c-game-backpressure
+	$(PYTHON) -B scripts/test_c_game_example.py -v
 
 cpp-test:
 	mkdir -p target
@@ -34,19 +54,27 @@ cpp-test:
 	./target/rnet-cpp-game-echo
 	g++ -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp examples/cpp/game_range_smoke.cpp target/debug/librnet.a -lpthread -ldl -lm -o target/rnet-cpp-game-range
 	./target/rnet-cpp-game-range
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp cpp/tests/game_quickstart.cpp -o target/rnet-cpp-quickstart-contracts
+	./target/rnet-cpp-quickstart-contracts
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp examples/cpp/game_quickstart.cpp target/debug/librnet.a -lpthread -ldl -lm -o target/rnet-cpp-game-quickstart
+	$(PYTHON) -B scripts/test_cpp_game_example.py -v
 
 go-test:
 	cargo build -p rnet-ffi
 	mkdir -p lib
 	cp target/debug/librnet.a lib/librnet.a
 	# Go's cache does not track changes to the externally linked native archive.
-	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 ./go/rnet
-	# Test-only Linux linker interception checks partial exports against real native buffers.
-	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 -tags rnet_test_faults -run TestGamePollFailureReleasesOnlyExportedPrefix ./go/rnet
+	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 ./go/rnet ./examples/go/game_quickstart
+	GOTOOLCHAIN=local CGO_ENABLED=1 go build -a -p 1 -o target/rnet-go-game-quickstart ./examples/go/game_quickstart
+	# Linux test-only interception checks native buffers and clock conversion extremes.
+	GOTOOLCHAIN=local CGO_ENABLED=1 go test -a -p 1 -count=1 -tags rnet_test_faults ./go/rnet
 
 csharp-test:
 	cargo build -p rnet-ffi
 	LD_LIBRARY_PATH="$(CURDIR)/target/debug:$${LD_LIBRARY_PATH:-}" $(DOTNET) run --project csharp/RNet.Smoke -c Release
+	$(DOTNET) run --project csharp/RNet.Quickstart.Tests -c Release
+	$(DOTNET) build csharp/RNet.Quickstart -c Release
+	DOTNET="$(DOTNET)" LD_LIBRARY_PATH="$(CURDIR)/target/debug:$${LD_LIBRARY_PATH:-}" $(PYTHON) -B scripts/test_csharp_game_example.py -v
 
 loom-test:
 	cargo test -p rnet-game --features loom admission::tests -- --test-threads=1
@@ -70,6 +98,7 @@ check:
 	cargo test --workspace
 	$(MAKE) loom-test
 	$(MAKE) abi-check
+	$(MAKE) c-test
 	$(MAKE) cpp-test
 	$(MAKE) go-test
 	$(MAKE) csharp-test

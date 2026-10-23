@@ -331,7 +331,8 @@ func (r *GameRuntime) ClockMicros() (uint64, error) {
 
 // ClockSyncSnapshot returns the latest approximate client-side four-timestamp sample.
 // Available is false on server sessions or before a sample. Queueing affects the estimate;
-// it is not a trusted anti-cheat clock. Unknown sessions return an error.
+// it is not a trusted anti-cheat clock. Session must be game-ready; pending/stale handles error.
+// Offsets outside time.Duration's range saturate to its signed whole-microsecond bounds.
 func (r *GameRuntime) ClockSyncSnapshot(session Session) (GameClockSync, error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
@@ -344,7 +345,7 @@ func (r *GameRuntime) ClockSyncSnapshot(session Session) (GameClockSync, error) 
 	}
 	return GameClockSync{
 		Available:         raw.available != 0,
-		ServerMinusClient: time.Duration(raw.server_minus_client_us) * time.Microsecond,
+		ServerMinusClient: signedMicroseconds(int64(raw.server_minus_client_us)),
 		RTT:               microseconds(C.uint64_t(raw.rtt_us)),
 		Samples:           uint64(raw.samples),
 	}, nil

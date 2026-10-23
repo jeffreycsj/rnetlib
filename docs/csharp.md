@@ -19,63 +19,47 @@ LD_LIBRARY_PATH="$PWD/dist/linux-x86_64/lib" dotnet run \
 
 构建自动生成 `RNet.xml`，公开 API 缺少 XML 注释会以 CS1591 构建失败。直接引用 DLL 时将 `RNet.xml` 放在 DLL 同目录，IDE 可展示参数、返回值、单位和生命周期说明；发布脚本会一并收录。文档检查不能代替运行时与平台验证。
 
-以下是同进程的完整收发示例；独立服务器和客户端使用相同 API，仅把各自的 runtime 和 poll 循环分到两端。切换传输只改 `transport`。线上服务器私钥应从安全存储加载，客户端通过可信渠道取得服务器公钥，不能从未认证连接获取公钥后直接信任。
+## 完整游戏接入示例
 
-```csharp
-using System.Text;
-using RNet;
+[GameExample.cs](../csharp/RNet.Quickstart/GameExample.cs) 使用两个独立 runtime 演示
+建立、授权、等待游戏就绪、二进制和空消息回显、日志与关闭；
+[PendingSends.cs](../csharp/RNet.Quickstart/PendingSends.cs) 单独实现应用重试及异常汇合，
+[Program.cs](../csharp/RNet.Quickstart/Program.cs) 负责参数和退出码。独立部署时，双方使用
+相同 API，将各自的 runtime 与 poll 循环放到对应进程即可。
 
-using var serverKey = Keypair.Generate(); // 演示；生产应使用持久化身份。
-using var clientKey = Keypair.Generate();
-using var server = new GameRuntime(new GameOptions {
-    Logger = log => Console.Error.WriteLine(
-        $"{log.EventName} session={log.Session} code={log.ErrorCode} {log.Message}")
-});
-using var client = new GameRuntime(null, clientKey, serverKey.PublicKey);
-server.SetMetricsLogInterval(30_000);
-var transport = Transport.Kcp;
-var listener = server.Listen(new ServerOptions(serverKey) {
-    Transport = transport, Host = "127.0.0.1", Port = 0, ProtocolId = 42, MinVersion = 1, MaxVersion = 1
-});
-client.Connect(new ClientOptions {
-    Transport = transport, Host = "localhost", Port = server.LocalPort(listener),
-    ProtocolId = 42, MinVersion = 1, MaxVersion = 1, JoinTicket = Encoding.UTF8.GetBytes("demo-only")
-});
-
-bool received = false;
-var deadline = DateTime.UtcNow.AddSeconds(10);
-while (!received && DateTime.UtcNow < deadline) {
-    foreach (var e in server.Poll(64, 1)) {
-        switch (e.Type) {
-            case GameEventType.AuthRequest:
-                // 仅为演示。生产必须校验票据签名、过期时间、用途和身份绑定。
-                server.AuthDecide(e.Session, Encoding.UTF8.GetString(e.Data) == "demo-only");
-                break;
-            case GameEventType.Message:
-                server.Send(e.Session, e.Data);
-                break;
-            case GameEventType.JoinFailed:
-            case GameEventType.EndpointError:
-                throw new Exception($"server event={e.Type} code={e.Status}");
-        }
-    }
-    foreach (var e in client.Poll(64, 1)) {
-        switch (e.Type) {
-            case GameEventType.SessionReady:
-                client.Send(e.Session, Encoding.UTF8.GetBytes("hello"));
-                break;
-            case GameEventType.Message:
-                Console.WriteLine(Encoding.UTF8.GetString(e.Data));
-                received = true;
-                break;
-            case GameEventType.JoinFailed:
-            case GameEventType.EndpointError:
-                throw new Exception($"client event={e.Type} code={e.Status}");
-        }
-    }
-}
-if (!received) throw new TimeoutException("echo did not complete");
+```sh
+make csharp-test
+LD_LIBRARY_PATH="$PWD/target/debug" dotnet run --project csharp/RNet.Quickstart -c Release -- tcp --one-slot
+LD_LIBRARY_PATH="$PWD/target/debug" dotnet run --project csharp/RNet.Quickstart -c Release -- udp
+LD_LIBRARY_PATH="$PWD/target/debug" dotnet run --project csharp/RNet.Quickstart -c Release -- kcp --deny
 ```
+
+无参数默认 KCP；`--deny` 预期以 `AuthRejected`（-13）和退出码 1 失败，非法参数退出 2。
+`--one-slot` 使用真实的一条消息 scheduler 预算，三传输测试要求出现背压且最终收到两个字节匹配的回显。
+每端应用队列最多两条、每条 128 字节，空消息也占一条；发送失败不出队，WouldBlock 回到正容量 poll，
+不会仅依赖 Writable 或无限忙重试。UDP 仍可能丢失/重复/乱序，严格回显失败不代表库承诺可靠 UDP。
+线上多人队列需要另外制定每玩家预算、截止与过载策略。
+
+交换的十秒截止使用单调 Stopwatch；清理各有五秒 Stop 背压重试期限。这些限制约束重试次数/时机，
+不能抢占原生调用、Dispose 或阻塞的日志组件。成功输出表示收到回显并完成显式 Stop/Dispose 调用序列，
+**不表示已检查 SafeHandle 内部的原生销毁结果**。即使第一端清理失败仍尝试第二端；单异常保留原类型和
+堆栈，多异常用 AggregateException 按主错误在前的顺序保存，命令行逐项打印 native 错误类别。
+
+示例保持加密。服务器私钥应从安全存储加载并持久化，客户端通过可信渠道获得公钥固定值；
+不可把演示票据当作生产认证，必须校验签名/过期/用途并绑定已认证客户端公钥。
+Keypair 用完 Dispose，复制出的敏感数组另行清零。日志不打印业务载荷或凭证；Console.Error
+只是串行化演示日志接入，生产换成快速的有界日志组件。默认 30 秒摘要含 P95/P99 和样本数，
+短回显通常不会等到摘要输出。
+
+发布包包含示例源码及项目文件；从包根目录引用同批 DLL 和 native 库运行，无需重建 Rust/SDK：
+
+```sh
+LD_LIBRARY_PATH="$PWD/lib" dotnet run --project csharp/RNet.Quickstart -c Release \
+  -p:RNetDll="$PWD/lib/RNet.dll" -- tcp --one-slot
+```
+
+`make csharp-test` 保留原有动态加密/换钥、恢复、版本协商、监控和回调回归；另运行无外部 NuGet
+测试依赖的队列/清理契约测试及 Python 3 CLI 检查。短回环不替代目标平台或长稳验证。
 
 ## 必须遵守的调用契约
 

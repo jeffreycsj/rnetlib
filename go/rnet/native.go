@@ -73,3 +73,17 @@ func microseconds(value C.uint64_t) time.Duration {
 	}
 	return time.Duration(value64) * time.Microsecond
 }
+
+// Native signed microseconds span more than Duration's signed nanoseconds. Clamp
+// before multiplication, preserving direction even for MinInt64. Like RTT values,
+// saturation keeps whole-microsecond precision rather than wrapping into a valid-
+// looking opposite/zero offset. Peer clock samples are not trusted wall-clock time.
+func signedMicroseconds(value int64) time.Duration {
+	const maxMicroseconds = int64(^uint64(0)>>1) / int64(time.Microsecond)
+	if value > maxMicroseconds {
+		value = maxMicroseconds
+	} else if value < -maxMicroseconds {
+		value = -maxMicroseconds
+	}
+	return time.Duration(value) * time.Microsecond
+}

@@ -29,18 +29,24 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "8.0.x"
+      - name: Install native documentation checker dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang python3
       - run: cargo fmt --check
       - run: make structure-check
       - run: make doc-check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - run: make c-test
       - run: make cpp-test
       - run: make go-test
-      - run: CGO_ENABLED=1 go test -a -p 1 -count=1 -race ./go/rnet
+      - run: CGO_ENABLED=1 go test -a -p 1 -count=1 -race ./go/rnet ./examples/go/game_quickstart
+      - run: CGO_ENABLED=1 go test -a -p 1 -count=1 -race -tags rnet_test_faults ./go/rnet
       - run: make csharp-test
       - run: make abi-check
       - run: make package
+      - run: cd dist/linux-x86_64 && CGO_ENABLED=1 go run -buildvcs=false -a -p 1 ./examples/go/game_quickstart tcp --one-slot
       - run: LD_LIBRARY_PATH="$PWD/dist/linux-x86_64/lib" dotnet run --project dist/linux-x86_64/csharp/RNet.Smoke -c Release -p:RNetDll="$PWD/dist/linux-x86_64/lib/RNet.dll"
+      - run: LD_LIBRARY_PATH="$PWD/dist/linux-x86_64/lib" dotnet run --project dist/linux-x86_64/csharp/RNet.Quickstart -c Release -p:RNetDll="$PWD/dist/linux-x86_64/lib/RNet.dll" -- tcp --one-slot
 
   supply-chain:
     runs-on: ubuntu-latest

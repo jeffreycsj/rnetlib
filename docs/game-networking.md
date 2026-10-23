@@ -15,7 +15,7 @@ let listener = runtime.listen(GameServerConfig::for_profile(
 ))?;
 ```
 
-Profiles are additive configuration helpers: `Realtime` selects UDP, `ReliableRealtime` selects KCP, and `Session` selects TCP; server helpers enable initial business encryption. Existing explicit transport fields remain available, and neither profile nor transport appears in `send`. C uses `rnet_game_profile_defaults`, C++11 uses `game_server_options` / `game_client_options` (and range variants), and Go uses `Game*ConfigForProfile`.
+Profiles are additive configuration helpers: `Realtime` selects UDP, `ReliableRealtime` selects KCP, and `Session` selects TCP; server helpers enable initial business encryption. Existing explicit transport fields remain available, and neither profile nor transport appears in `send`. C uses `rnet_game_profile_defaults`, C++11 uses `game_server_options` / `game_client_options`, and Go uses `Game*ConfigForProfile`. Business versions use an inclusive min/max range on the same API; equal bounds request an exact version, not an older SDK or a separate wire path.
 
 For clients, construct `ClientSecurity::pinned(client_key, server_public_key)` and pass it to `GameRuntime::new_with_client_security`. Then call `connect(GameClientConfig { ... })` for a numeric address, or `connect_host(GameHostClientConfig { ... })` for a hostname. Both configs select transport once and carry an opaque `join_ticket`; neither exposes an encryption setting.
 
@@ -59,6 +59,10 @@ The normal flow is:
 
 ### Rust
 
+The dispatch sketch below omits application retry storage and fails fast on send errors.
+Use the executable example linked below for bounded `WouldBlock` handling; `Writable`
+only signals transport capacity and is not the sole trigger for retrying game-stage admission.
+
 ```rust
 loop {
     for event in runtime.poll(64, std::time::Duration::from_millis(10)) {
@@ -81,15 +85,40 @@ loop {
 }
 ```
 
-[`game_quickstart.rs`](../crates/rnet-game/examples/game_quickstart.rs) is a complete executable client/server echo. Run it with:
+[`game_quickstart.rs`](../crates/rnet-game/examples/game_quickstart.rs) is a complete executable client/server echo with logging, bounded application retry storage and explicit two-runtime shutdown. Run it with:
 
 ```sh
 cargo run -p rnet-game --example game_quickstart
+cargo run -p rnet-game --example game_quickstart -- tcp --one-slot
+cargo run -p rnet-game --example game_quickstart -- udp
+cargo run -p rnet-game --example game_quickstart -- kcp --deny  # Expected AuthRejected, nonzero exit
+cargo test -p rnet-game --example game_quickstart
 ```
+
+No arguments selects KCP. `--one-slot` limits the real game scheduler to one message,
+so the binary request is accepted and the empty request initially encounters backpressure.
+The application keeps at most two copied messages of at most 128 bytes each per peer,
+removes only admitted messages and retries after positive-capacity polling, not a busy loop.
+Both echoes must match their original bytes before the example reports success.
+This small request/response workload is not a general multi-player queue implementation.
+
+The exchange has a ten-second deadline; each runtime's stop retry has a separate
+five-second budget. Deadlines do not preempt a slow runtime call or logging sink.
+Both stops are attempted even after a failure, and cleanup cannot turn an exchange error
+into success. Join/protocol/close errors preserve their category. The example deliberately
+aborts on any endpoint error, including potentially recoverable errors; production can query
+endpoint validity and choose its own failover policy. UDP loss, duplication or reordering can
+fail this strict echo, and the example does not add retransmission to UDP.
+
+The logger adapter prints library diagnostics, never the echoed payload or ticket. Production
+must replace the demo credential check, persistent server-key setup and stderr sink with its
+own services. P95/P99 summaries retain the runtime's default 30-second poll-driven interval,
+so a short successful echo normally finishes before a summary appears. The same source is
+compiled and executed by rustdoc; its boundary and real-network tests also run in the workspace.
 
 ### C++11
 
-`GameRuntime::poll` returns owned event vectors, so payload bytes remain valid after the native poll call:
+`GameRuntime::poll` returns owned event vectors, so payload bytes remain valid after the native poll call. The dispatch sketch below omits application retry policy and lets send exceptions escape; use the complete example below for bounded backpressure handling:
 
 ```cpp
 for (const rnet::GameEvent &event : runtime.poll(64, 10)) {
@@ -106,31 +135,105 @@ for (const rnet::GameEvent &event : runtime.poll(64, 10)) {
 }
 ```
 
-See [`game_echo_smoke.cpp`](../examples/cpp/game_echo_smoke.cpp) for a compiled C++11 example.
+[`game_quickstart.cpp`](../examples/cpp/game_quickstart.cpp) is the complete two-runtime C++11 echo. Its [support header](../examples/cpp/game_quickstart_support.hpp) contains the small application retry/cleanup policy, not additional SDK methods. Existing [`game_echo_smoke.cpp`](../examples/cpp/game_echo_smoke.cpp) remains the separate resume regression.
+
+```sh
+make cpp-test
+./target/rnet-cpp-game-quickstart tcp --one-slot
+./target/rnet-cpp-game-quickstart udp
+./target/rnet-cpp-game-quickstart kcp --deny       # Expected authorization failure, exit 1
+./target/rnet-cpp-game-quickstart tcp --wrong-key # Expected handshake/trust failure, exit 1
+```
+
+No arguments defaults to KCP. `--one-slot` uses a real one-message scheduler budget,
+while each peer keeps at most two application-owned copies of up to 128 bytes each.
+On `rnet::Error` with `status() == RNET_E_WOULD_BLOCK`, the example stops that flush,
+polls both peers with positive capacity and retries only the unaccepted suffix. Other native
+errors and allocation exceptions propagate without silently discarding pending work. Neither
+the empty payload nor the binary payload is interpreted as a NUL-terminated string.
+
+The exchange has a ten-second deadline; each checked close retry has a separate five-second
+budget. Both runtimes are explicitly closed even if the first close throws, and the original
+exchange exception is retained while cleanup errors are reported separately. RAII destructors
+are fallback cleanup, not proof of success. Deadlines do not preempt slow calls or logger sinks.
+In the wrong-pin scenario the server can report handshake EOF before the client pin error is
+polled; the demo preserves that first local cause instead of promising one error code across peers.
+
+The literal credential, fresh server key and stderr logger are demonstration choices, not
+production authentication/key management/logging. The callback must not throw across C or close
+its runtime. It receives library diagnostics, not application bytes or tickets; the default
+30-second P95/P99 summary is not expected during every short echo. UDP loss, duplication or
+reordering can fail this strict echo. The demo also aborts on recoverable endpoint errors;
+real applications should choose their own bounded overload and failover policy.
+
+Manual Linux compilation (from the repository root):
+
+```sh
+cargo build -p rnet-ffi
+g++ -std=c++11 -Wall -Wextra -Werror -Iinclude -Icpp examples/cpp/game_quickstart.cpp \
+  target/debug/librnet.a -lpthread -ldl -lm -o /tmp/rnet-cpp-game-quickstart
+```
+
+Release packages include both example source and support header; from their root use
+`lib/librnet.a` instead of `target/debug/librnet.a`. `make cpp-test` also runs the example's
+boundary and CLI tests using Python 3 (standard library only).
 
 ### Go
 
-`Poll` copies event payloads into Go-owned byte slices before releasing native buffers:
+The [Go quickstart](../examples/go/game_quickstart/runtime.go) uses two independent
+`GameRuntime` instances: pinned identity, listen/connect, server authorization,
+`GameSessionReady`, opaque binary/empty echo, logger injection and explicit close.
+Transport is chosen at endpoint creation, never per send. Run from the repository root:
 
-```go
-events, err := runtime.Poll(64, 10*time.Millisecond)
-if err != nil { return err }
-for _, event := range events {
-    switch event.Type {
-    case GameAuthRequest:
-        if err := runtime.AuthDecide(event.Session, validateTicket(event.Data)); err != nil { return err }
-    case GameSessionReady:
-        sessions[event.Endpoint] = event.Session
-    case GameMessage:
-        request := decodeRequest(event.Data)
-        if err := runtime.Send(event.Session, encodeReply(request)); err != nil { return err }
-    case GameSessionClosed:
-        onDisconnect(event.Session, event.Status)
-    }
-}
+```sh
+make go-test
+./target/rnet-go-game-quickstart tcp --one-slot
+./target/rnet-go-game-quickstart udp
+./target/rnet-go-game-quickstart kcp --deny  # Expected exit 1, AuthRejected (-13)
 ```
 
-See [`game_test.go`](../go/rnet/game_test.go) for TCP, UDP and KCP examples.
+No arguments defaults to KCP. Go 1.22+ and CGO are required; `make go-test` refreshes
+`lib/librnet.a`, runs SDK and example tests, and builds the executable. After changing
+native code, use `-a`: Go's cache does not track external static-archive changes.
+Release packages include the SDK, archive, `go.mod` and example sources; build from
+the package root without a Rust rebuild:
+
+```sh
+CGO_ENABLED=1 go build -buildvcs=false -a -p 1 -o rnet-go-game-quickstart ./examples/go/game_quickstart
+./rnet-go-game-quickstart tcp --one-slot
+```
+
+`-buildvcs=false` avoids consulting an unrelated enclosing Git checkout when
+building the source package, which does not ship repository metadata.
+
+`Poll` copies event payloads into Go-owned slices before releasing native tokens,
+including cleanup of a partially exported prefix on failure. The example's
+[application retry queue](../examples/go/game_quickstart/pending.go) keeps at most
+two copies per peer, each at most 128 bytes (empty messages count). `WouldBlock`
+retains the head and resumes positive-capacity polls; only successful admission
+removes it. The ten-second exchange deadline bounds retry attempts, not native
+calls or a blocked user logger. Real single-message scheduler budgets prove actual
+backpressure recovery in TCP/UDP/KCP tests; these are not load/soak measurements.
+Raw UDP remains unreliable: missing, duplicated or reordered echoes can fail this
+strict demo. Production needs its own bounded per-player overload/delivery policy.
+
+Failures preserve `StatusError.Code` through `errors.As`; protocol violations with
+zero event status still fail, and the conservative example treats all endpoint
+errors as fatal. Cleanup always attempts both runtimes, with separate five-second
+backpressure deadlines and `errors.Join` preserving primary and secondary errors.
+Quiesce other callers before closing; Go has no finalizer-based cleanup guarantee.
+
+The injected `log.Logger` serializes both native workers' callbacks. It prints
+lifecycle diagnostics, not keys/tickets/payloads; use a fast bounded production sink
+and monitor dropped logs. The default poll-driven 30-second latency summary includes
+P95/P99 and sample counts, but a short echo usually finishes before it appears.
+Never stop/close a runtime in its callback. Demo keys/tickets are not a login system:
+persist server identity, distribute pins securely, validate credentials and bind
+authorization to the authenticated client key. The example clears owned private-key
+buffers, but Go value/compiler copies prevent a guarantee of erasing every copy.
+
+See [`game_test.go`](../go/rnet/game_test.go) for additional security transitions,
+resume and version-negotiation regressions; the quickstart keeps encryption enabled.
 
 Public methods, constants and fields have GoDoc contracts, including units, zero
 values, payload ownership and asynchronous completion. From the repository root,
@@ -145,34 +248,51 @@ Game `Poll(0, ...)` still drives maintenance but does not drain application even
 Always close runtimes explicitly after stopping concurrent callers, and never call
 `Stop`/`Close` from their logger callbacks. Clear your own credential copies.
 
+Clock offsets arrive from native as signed microseconds; Go exposes them as
+nanosecond `time.Duration`. Values outside that narrower range saturate to the
+signed whole-microsecond bounds, preserving direction instead of overflowing.
+`Available=false` means no sample, not an invalid session: pending/stale handles
+return an error. Even an authenticated clock sample is approximate and peer-reported,
+not an anti-cheat authority. `make go-test` includes Linux-only, explicitly tagged
+ABI-boundary regressions for extreme offsets and partial poll exports; those hooks
+are absent from normal SDK builds.
+
 ### C ABI
 
-The C ABI borrows send bytes only for the duration of `rnet_game_send`. Poll payloads remain owned by the runtime until both nonzero event tokens are released. Process or copy the bytes first:
+[`game_echo.c`](../examples/c/game_echo.c) is a complete C11 game client/server example with two independent runtimes, pinned server identity, application authorization, binary and empty payload echoes, logging, bounded send retries and explicit shutdown. It uses the same API for all three transports:
 
-```c
-rnet_game_event_t events[64];
-size_t count = 0;
-int32_t status = rnet_game_poll_events(runtime, events, 64, 10, &count);
-if (status != RNET_OK) return status;
-
-for (size_t i = 0; i < count; ++i) {
-  rnet_game_event_t *event = &events[i];
-  if (event->event_type == RNET_GAME_AUTH_REQUEST) {
-    rnet_game_auth_decide(runtime, event->session,
-                          validate_ticket(event->data, event->data_len));
-  } else if (event->event_type == RNET_GAME_MESSAGE) {
-    handle_message(event->session, event->data, event->data_len);
-    rnet_slice_t reply = build_reply();
-    rnet_game_send(runtime, event->session, reply);
-  }
-  if (event->buffer_token != 0)
-    rnet_game_buffer_release(runtime, event->buffer_token);
-  if (event->aux_buffer_token != 0)
-    rnet_game_buffer_release(runtime, event->aux_buffer_token);
-}
+```sh
+make c-test                     # Build, ownership failures, and all transport scenarios
+./target/rnet-c-game-echo tcp
+./target/rnet-c-game-echo udp
+./target/rnet-c-game-echo kcp
+./target/rnet-c-game-echo tcp --deny  # Expected nonzero exit with auth rejection (-13)
 ```
 
-For C, C++11 and Go, keep exactly one logical poll dispatcher per runtime and route copied events to gameplay workers. Sends may originate from application workers, but business code must define how it queues and retries `WouldBlock` without blocking the poll dispatcher.
+For a manual Linux build from the repository root:
+
+```sh
+cargo build -p rnet-ffi
+cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c/game_echo.c \
+  target/debug/librnet.a -lpthread -ldl -lm -o /tmp/rnet-c-game-echo
+/tmp/rnet-c-game-echo tcp
+```
+
+Release packages include `examples/c/game_echo.c` and `game_poll.h`; from the package root use `lib/librnet.a` instead of `target/debug/librnet.a`, without rebuilding Rust.
+
+The C ABI borrows send bytes only for the duration of `rnet_game_send`. Poll's `out_count` describes an owned prefix **even on failure**. Release both nonzero tokens of every event in that prefix, including events not processed because an earlier handler failed; never inspect or release slots beyond it. Copy the first thread-local diagnostic before cleanup overwrites it. The example's [`game_poll.h`](../examples/c/game_poll.h) implements this pattern and is covered by real native buffer ownership tests; it is example code, not an extra SDK interface.
+
+The example retains one bounded payload copy per peer when `send` reports `WouldBlock`. It retries once per loop while both peers continue positive-capacity polling, with a ten-second exchange deadline. It does not retain native event pointers or grow an unbounded retry list. A real multi-player application needs its own bounded per-session admission and overload policy. This demo allows one in-flight request, does not retransmit lost UDP application packets, and treats unexpected duplicates or payloads as a demo failure.
+
+Never deploy the literal demo ticket or trust keys received over an untrusted connection. The server must validate credentials and bind them to the authenticated client key; use persistent server identity and a trusted public-key distribution channel. The default example keeps encryption enabled. Runtime stop/destroy runs outside logger callbacks, releases exported tokens before destruction, and retries stop backpressure with a separate deadline. A successful send/stop is not proof of remote delivery; the echo is the application acknowledgement in this example.
+
+The logger prints lifecycle diagnostics to stderr for demonstration, without payload or ticket bytes. In production adapt the callback to a fast sink, keep its context alive through destroy, and monitor dropped logs. The default 30-second poll-driven `game_latency_summary` includes sample counts and P95/P99; a sub-second echo normally finishes before that summary is emitted.
+
+### C# (.NET 8+)
+
+See the [C# guide](csharp.md) and [standalone quickstart](../csharp/RNet.Quickstart/GameExample.cs) for two runtimes, binary/empty echo, authorization, bounded retries, logging and explicit Stop/Dispose. `make csharp-test` runs its boundary/CLI tests and the existing [`RNet.Smoke`](../csharp/RNet.Smoke/Program.cs) regressions. `--one-slot` exercises real scheduler backpressure; `--deny` intentionally fails login. `Poll` returns copied managed payloads; retain those when `Send` throws `RNetException` with `Code == -4` and continue positive-capacity polling. Explicit Stop exposes stop errors; Dispose does not report SafeHandle's internal native teardown failures. Quiesce callers and do not stop/dispose from a logger callback. Current validated scope remains Linux x86_64/.NET 8, not Unity/IL2CPP or other platforms.
+
+For every language binding, keep exactly one logical poll dispatcher per runtime and route copied events to gameplay workers. Sends may originate from application workers, but business code must define how it queues and retries `WouldBlock` without blocking the poll dispatcher.
 
 A unified TCP client endpoint belongs to one connection: it is reclaimed when that connection's I/O worker exits, including after remote disconnect or local `close_session`. A server listener is shared and remains open when one accepted session closes. Local `close_session` invalidates the session immediately; worker/endpoint cleanup is asynchronous, so use `close_endpoint` when explicit endpoint cancellation is required. An already-reclaimed endpoint returns `InvalidHandle` if closed again. Reconnect creates a new endpoint; keep polling so the game facade also releases its cached state. A session close does not introduce an extra `EndpointError`; legacy transport endpoints have been removed.
 
@@ -182,7 +302,7 @@ A unified TCP client endpoint belongs to one connection: it is reclaimed when th
 
 After ordinary authorization and `SessionReady`, the server may call `issue_resume_ticket(server_session, identity)` with an opaque 1–64-byte application identity. The client receives `GameEvent::ResumeTicket`; keep its bytes private and call `connect_resume(config, old_client_session, ticket.as_bytes())` or `connect_host_resume(...)` after interruption. These methods perform a **new Noise handshake** and use an explicit `RGR3` resume join; ordinary joins use `RGV3`. The same client static key, listener, protocol ID, and version are required. Old wire-v2 markers are rejected.
 
-The server receives `GameEvent::ResumeRequest` containing the claimed old server handle and identity, the new session, and the new join proof. It must recheck application identity and call `auth_decide(new_session, true)` or `false`. Only success emits `SessionResumed { old_session, new_session }` on each side; this event means the new handle is ready, and the old handle is invalid. For wire v4, authorization alone does not invalidate a still-live old route: takeover waits for the protected SELECT/ACK/READY exchange, and negotiation failure leaves the old route usable. A denied request never changes the old authorized session. Explicit `close_session`/`close_endpoint` revokes applicable tickets and pending claims. Tickets are valid once for 30 seconds by default; `with_resume(ttl, max_tickets)` changes the bounded policy (maximum TTL: five minutes). `resume_metrics_snapshot()` and `rnet_game_resume_*` Prometheus metrics expose issued, received, rejected, denied, revoked, resumed, and outstanding counts without player labels.
+The server receives `GameEvent::ResumeRequest` containing the claimed old server handle and identity, the new session, and the new join proof. It must recheck application identity and call `auth_decide(new_session, true)` or `false`. Only success emits `SessionResumed { old_session, new_session }` on each side; this event means the new handle is ready, and the old handle is invalid. Authorization alone does not invalidate a still-live old route: takeover waits for the protected SELECT/ACK/READY exchange, and negotiation failure leaves the old route usable. A denied request never changes the old authorized session. Explicit `close_session`/`close_endpoint` revokes applicable tickets and pending claims. Tickets are valid once for 30 seconds by default; `with_resume(ttl, max_tickets)` changes the bounded policy (maximum TTL: five minutes). `resume_metrics_snapshot()` and `rnet_game_resume_*` Prometheus metrics expose issued, received, rejected, denied, revoked, resumed, and outstanding counts without player labels.
 
 Tickets and replay state live only in one `GameRuntime`. Restarting it or connecting to another server instance requires a full login; copying the signing key alone would not preserve single-use protection. Built-in `Debug` output redacts keys, tickets, authentication bytes, and event payloads, but applications must still avoid logging credential bytes they explicitly extract. See [game_resume.rs](../crates/rnet-game/tests/game_resume.rs) for the TCP/UDP/KCP flow, replay denial, application rejection, kick revocation, and hostname reconnect.
 

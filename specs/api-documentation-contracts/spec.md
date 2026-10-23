@@ -38,7 +38,7 @@
    - [x] observe 公开契约（第一阶段已完成）。
    - [x] transport 公开配置、生命周期、发送与遥测契约。
    - [x] game / transport 的 SELECT/ACK/READY、恢复接管、心跳调度及端点清理内部路径收尾。
-5. [ ] 接入文档与防回退：统一多语言建立、授权、持续 poll、发送、接收、背压、关闭和日志示例；将可验证的注释/文档构建门禁接入现有检查。
+5. [x] 接入文档与防回退：统一多语言建立、授权、持续 poll、发送、接收、背压、关闭和日志示例；将可验证的注释/文档构建门禁接入现有检查。第五阶段 A–F 完成五语言示例与存在性门禁，不代表第 6 项全范围语义复查或生产资格完成。
 6. [ ] 对抗性复查：抽查每种语言的完整调用链，对照实际 diff、边界测试与生成文档检查语义；发现运行缺陷时，独立建立 RED → GREEN 回归后修复，不把行为变化藏在注释提交中。
 
 补注释超过现有文件行数限制时，按职责拆分，不通过放宽结构门禁或巨型公共文件解决。
@@ -305,3 +305,202 @@
 - 所有高内存命令串行并启用 15 GiB 可用内存守护。未重跑独立 Go race、ASan fuzz、Miri、Loom、release 导出检查或完整打包；未做目标弱网/长稳和其他平台资格测试。没有提交或推送。
 
 本节完成上一节保留的普通 completed 积压待办。既有 UDP/KCP 原生事件队列溢出仍可能关闭会话，本节没有把该策略改成无限等待。长稳继续留在整体完善之后，不宣称生产认证完成。
+
+## 第五阶段 A：C/C++ 永久文档门禁（2026-10-19）
+
+延续已确认的第 5 项，基线为干净的 `3356d60`。本批先补原生公开声明的文档防回退，不将完整多语言示例/文档生成及第 6 项全范围审查提前勾选完成。
+
+- 使用已安装的 Clang 前端识别 C11/C++11 声明及绑定的文档注释，覆盖类型、字段、枚举常量、回调 typedef、公开/受保护方法（含构造、析构、删除重载）。不把类型注释当作成员文档，不把私有成员、局部 RAII 类型或隐式生成的方法误判为公开 API。
+- 真实编译器驱动的删除注释、空注释、非法文档参数及编译失败测试先 RED，再实现检查；缺少编译器或无法解析 AST 应失败，不静默跳过。
+- 接入 make doc-check 和 Linux CI；说明构建依赖、覆盖范围和局限。此门禁不验证注释含义，不检查宏或命名空间注释，也不替代人工参数/返回值契约审查。
+- 不改变 wire、SDK ABI、默认配置或网络行为，不启动长稳，不提交或推送。
+
+### 实施结果与对抗性复查
+
+- 新增 `scripts/check_native_docs.py` 与 11 个真实 Clang 驱动的测试函数，接入 `make native-doc-check`、`make doc-check` 和 Linux CI。当前覆盖 C 486 个声明、C++ 290 个声明；计数包含 tag/typedef 等不同声明，不等同于独立 API 或导出符号数量。
+- 删除字段、枚举、回调或重载文档，空注释、普通注释、非法 `@param`、编译错误和编译器不可用均会拒绝通过。命令行测试还验证缺少头文件清单时返回失败；不把零覆盖当成功。
+- 需求/范围复查：仅增加文档存在性及编译器文档语法检查，不改变协议和运行时；宏、命名空间摘要、语义准确性仍需人工核对。按本机预处理条件检查，不声称覆盖所有平台条件分支。
+- 实现/边界复查：重复命名空间、依赖头文件、访问控制及局部类型均有测试。发现 C 依赖头文件缺注释时错误归属到入口文件，先用位置断言复现失败，再修正 Clang 省略文件名时的来源跟踪；C++ 依赖按各自头文件单独检查。新增未支持的公开模板声明会失败，不能悄悄漏检。
+- 测试/成本复查：测试实际删除绑定的注释并调用编译器，不用手造 AST 代替前端；增加命令行成功/失败回归。C++ AST 限定命名空间以避免保留标准库大树，每次编译设置 60 秒超时，头文件串行检查。
+- 文档/交付复查：明确 Python/Clang 依赖和工具覆盖参数，纠正 README 的语言示例覆盖说明；不声称已生成 C/C++ HTML 文档或完成整个第 5/6 项。
+
+### 本批验证与边界
+
+- 基线 C++11 回归通过；检查器先 RED 后 GREEN，依赖文件诊断另有独立 RED → GREEN。最终 `make -j1 native-doc-check doc-check cpp-test structure-check` 通过：11 个检查器测试、全部当前公开头文件、六个 Rust crate 的严格 rustdoc/doctest、C++11 所有权测试及四个联网示例。
+- 临时证据：`/tmp/netlib-native-docs-baseline.log`、`/tmp/netlib-native-docs-red.log`、`/tmp/netlib-native-docs-green.log`、`/tmp/netlib-native-docs-review-red.log`、`/tmp/netlib-native-docs-final.log`。这是本机修改树结果；CI 已接入但没有远端运行结果。
+- 高内存命令串行并使用 15 GiB 可用内存守护。本批没有 Rust/网络实现改动，未重跑完整 workspace、Clippy、Go/C#、Go race、ASan fuzz、Miri、Loom、ABI 发布包或目标平台弱网/长稳；不继承历史资格为当前发布认证。未提交或推送。
+
+## 第五阶段 B：C11 完整游戏接入示例（2026-10-19）
+
+延续已确认的多语言接入文档任务，先补 C 的可运行路径。现有 C 文档在 poll 错误时直接返回，未释放已导出前缀；本批单独建立真实 native 缓冲区所有权回归后修正示例，不更改 SDK ABI 或网络实现。保留本轮开始时尚未提交的第五阶段 A 改动。
+
+- [x] 演示两个 runtime 的身份固定、建立、授权、就绪、双向二进制/空消息收发、应用有界重试、日志注入、显式关闭及 stop/destroy；命令行选择 TCP/UDP/KCP，拒绝授权作为错误场景。
+- [x] poll 或业务处理失败仍释放全部已导出主/辅助 token，只处理 out_count 前缀；保留最初错误，避免清理覆盖诊断。重试必须保留 payload 副本，继续正容量 poll，受整体截止时间限制。
+- [x] C 示例及所有权失败测试接入 make/CI，发布脚本收录源码；文档以可编译源码为准，明确 UDP 不保证送达、演示票据不用于生产和 SDK/业务版本的区别。
+
+### 对抗性复查
+
+| 检查 | 证据与边界 |
+| --- | --- |
+| 原 C 文档失败时直接返回，泄漏已导出的主/辅助缓冲区 | 从原处理方式建立两条 RED（poll 失败、handler 失败），真实 native destroy 因遗留 token 拒绝；改为保存首个错误、停止业务分派但释放整个前缀，GREEN |
+| 清理不能越界或覆盖诊断 | 额外导出未计入 out_count 的测试自有 token，确认示例没有释放；验证原错误字符串、首个/后段 handler 失败、零导出前缀及关闭时丢弃模式，共 6 个所有权场景 |
+| 不把成功入队当送达、不因零字节消息误判为空队列 | TCP/UDP/KCP 各做真实二进制及空消息双向回显；客户端校验字节与长度，成功标记仅在双端销毁成功后打印 |
+| 背压不是无限等待或持有悬空接收指针 | 链接拦截让双方前两次发送拒绝，然后走真实 native 发送；每端持有 128 字节单槽副本，持续 poll，验证完整回显。持续拒绝场景验证十秒截止和清理；不冒充真实高负载容量测试 |
+| 异常、日志、销毁边界 | 三传输授权拒绝须返回非零及 -13，而非等到超时；未知传输/参数必须拒绝。回调不输出业务或票据、不停止 runtime；所有 setup 分支汇聚清理，私钥副本擦除。stderr 仅为演示，生产需快速日志组件 |
+| 文档与交付范围 | 修正 C 失败路径片段，提供源码和运行命令；统一五语言入口但明确 Go/C# 是回归程序，其他语言的完整背压示例仍未收尾。删除指南中残留的独立 range 入口表述，不改变实际 SDK |
+
+本批不是全部五种语言契约复查完成；第 5/6 项仍未整体勾选，不启动长稳，不提交或推送。
+
+### 本批验证
+
+- 基线 `cargo test -p rnet-ffi --test game_ffi` 的 9 条测试通过。最终 `make -j1 c-test doc-check cpp-test structure-check` 通过；收紧授权失败断言后再次完整运行 `make c-test` 通过（6 个所有权场景、5 个端到端测试函数及其各传输子场景）。Rust 格式、`git diff --check` 和发布脚本 `bash -n` 通过。
+- RED 证据为 `/tmp/netlib-c-poll-red.log`、`/tmp/netlib-c-handler-red.log`，均为真实 native destroy 检出未释放缓冲区，并非编译错误。基线与最终结果分别见 `/tmp/netlib-c-quickstart-baseline.log`、`/tmp/netlib-c-quickstart-final.log`、`/tmp/netlib-c-quickstart-verified.log`；临时日志不等于发布资格。
+- 本机 Linux C11 验证，重命名/分文件仅涉及示例；未修改运行库、头文件 ABI 或 wire。构建串行并有 15 GiB 可用内存守护。没有重跑完整 Rust workspace/Clippy、Go/C#、Go race、ASan/Miri/Loom、目标弱网或长稳，也未重新生成发布包；CI 与发布清单只是接入，没有远端 CI/完整打包结果。
+
+## 第五阶段 C：Rust 示例背压与生命周期（2026-10-21）
+
+继续已确认的第 5 项，保留未提交的 C 示例和文档门禁。本轮只完善 Rust 可执行示例，不改运行库、wire 或 ABI。
+
+- [x] 有界应用待发副本：单端最多两条、每条最多 128 字节；WouldBlock 保留原消息、停止本轮重试并继续双端正容量 poll；终止错误保留原因，截止时间前未完成则失败。
+- [x] 同一示例运行 TCP/UDP/KCP，支持演示授权拒绝和单消息发送预算；真实回显验证二进制与空消息，而非只确认 send 返回成功。
+- [x] 将失败事件、日志注入、显式关闭以及双端 stop 汇入完整生命周期；不能以最终超时掩盖 JoinFailed/ProtocolRejected，也不能在一个 stop 失败后跳过另一端。
+- [x] 按 TDD 先验证重试队列的丢失/过期边界，再运行真实网络回归；继续使用同一源文件生成 rustdoc，示例测试纳入 workspace。完整多语言及长稳资格不在本批完成声明内。
+
+### 对抗性复查
+
+| 检查 | 结果与边界 |
+| --- | --- |
+| 原示例 send 返回 WouldBlock 就退出 | 应用待发队列提取后的 RED 复现背压退出、过期仍调用 send、终止错误过早出队；GREEN 改为仅在成功入队后删除，阻塞时返回外层 poll，保留副本 |
+| 不能只用假发送闭包证明网络恢复 | 闭包检查确定性的 FIFO/复制/边界；另在 TCP/UDP/KCP 各跑默认预算与真实单消息预算，要求单槽模式实际出现阻塞并最终收到两条精确回显 |
+| 部分入队和空消息可能被重复/遗漏 | 二进制含 NUL/非 UTF-8 字节；零长度单独占消息数。测试先接受第一条再拒绝第二条，下一轮不得重发第一条；128/129 字节和两条/三条计数边界均验证 |
+| 掩盖连接失败或清理失败 | 三传输拒绝授权均保留 AuthRejected；错误事件转换检查握手、协议、关闭及端点类别。先执行双端 stop 再选返回错误，保留原始失败且输出清理失败；成功路径不忽略 stop 错误 |
+| 示例的保守策略不能变成库承诺 | 单会话、最多两条应用待发，不是多人队列；遇 EndpointError 一律终止是演示策略，库允许部分端点错误恢复。UDP 丢失/重复/乱序可使严格回显失败，不额外承诺可靠性 |
+| 文档、日志和测试入口 | 错误日志只用库诊断，示例不打印业务载荷/票据；stderr 与固定票据仅作演示。明确默认 30 秒摘要不会必然出现在短回显中，示例测试通过 Cargo 的 test=true 纳入 workspace |
+
+仅完成 Rust 示例子项。C++11/Go/C# 的完整有界重试示例、跨语言契约复查及目标发布资格仍待后续；不启动长稳，不提交或推送。
+
+### 本批验证
+
+- 现有 game doctest 基线通过。新增队列测试首次为 3 失败/1 通过，失败分别是背压直接返回错误、过期仍发送和错误提前出队；最小修复后 4 条全部通过，再接入完整示例与其他回归，最终 11 个示例测试通过。
+- 当前树通过 `cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、`make -j1 doc-check structure-check`、Rust 格式及 diff 检查。workspace 日志确认实际执行了示例测试目标，而非仅编译。README 的 TCP 单槽命令实际返回两条成功回显并记录一次背压；KCP `--deny` 实际以 AuthRejected/退出码 1 结束，没有成功标记或清理错误。
+- 本机临时证据：`/tmp/netlib-rust-example-baseline.log`、`/tmp/netlib-rust-example-red.log`、`/tmp/netlib-rust-example-green.log`、`/tmp/netlib-rust-example-integration.log`、`/tmp/netlib-rust-example-doctest.log`、`/tmp/netlib-rust-example-final.log`、`/tmp/netlib-rust-example-cli.log`、`/tmp/netlib-rust-example-denied.log`。
+- 所有高内存命令串行并受 15 GiB 可用内存守护。没有重跑 C/C++/Go/C# 外部接入测试、Go race、ASan/Miri/Loom、完整发布包或目标弱网/长稳；Rust workspace 中的短 soak smoke 不等于长稳。CI 配置没有远端执行证据，不将本机修改树认证为生产版本。
+
+## 第五阶段 D：C++11 有界重试接入示例（2026-10-21）
+
+沿用已确认的第 5 项，保留全部既有未提交修改。不改变 SDK、wire 或运行库；已有恢复/版本协商 smoke 不删除，另加易读的双 runtime 示例。
+
+- 应用待发副本每端最多两条、每条最多 128 字节；只在成功发送后移除，WouldBlock 回到正容量 poll，不重复已接受前缀。单调截止时间防止无期限重试。
+- TCP/UDP/KCP 同一入口选择类型，使用真实单消息 scheduler 预算验证恢复；覆盖二进制、空消息、授权拒绝和错误公钥。
+- 日志回调不抛跨 C 边界、不持有载荷、不停止 runtime；显式关闭双端，即使第一端或主流程抛异常也继续第二端，保留主错误和清理诊断。
+- TDD 先验证复制、FIFO、过期、条数/字节及异常；示例与测试接入 cpp-test/CI，发布清单包含依赖头文件。Go/C# 与全范围契约复查仍是后续，长稳不提前做。
+
+### 实施与对抗性复查
+
+- 新增 `examples/cpp/game_quickstart.cpp`（双端建立/授权/收发/日志/关闭）和 `game_quickstart_support.hpp`（有界应用重试与异常汇合），保持职责分离，不向 SDK 添加接口。原有四个联网 smoke 与所有权回归均保留。
+- 队列初版 RED 明确复现背压抛出、过期仍发送、终止错误提前出队；GREEN 仅在成功入队后删除。7 个 C++ 边界场景覆盖复制、二进制/空消息、128/129 字节、两条/三条、部分接受不重发前缀、bad_alloc 传播、双端关闭及原始异常保存。发送回调只作为外部边界注入；真实队列背压另行联网验证。
+- 4 个 Python CLI 测试函数覆盖三传输默认/单槽真实预算、拒绝授权、错误公钥、默认入口及非法参数。单槽测试必须观察到 blocked > 0 并验证两个精确回显，不用 send 返回成功替代送达判断。
+- 首轮错误公钥 TCP 场景的断言过严：双 runtime 中服务器可能先观察到握手 EOF（IoError），尚未 poll 客户端的具体公钥错误。保留这个真实的首个本地原因，测试只在明确握手 EOF 日志下接受 -7，否则要求握手/公钥/加密拒绝；所有分支都要求没有业务授权/就绪且非超时退出。不是把任意网络错误算作信任校验通过；单端精确错误语义仍由已有库测试覆盖。
+- 资源与异常审查：客户端创建失败也进入服务端显式清理；第一端清理抛出后仍尝试第二端，primary 通过 exception_ptr 保存原异常类别/内容。callback 不抛跨 C 边界、不持有借用字节、不关闭 runtime；敏感业务数据不由示例日志输出。
+- 文档说明保守端点错误策略、UDP 不可靠、双消息演示队列范围、非抢占式截止时间以及默认 30 秒 P95/P99 摘要。发布清单包含两个源码依赖；该路径未重新完整打包，不提前声称发布验证完成。
+
+### 验证与资格边界
+
+- 修改前 `make -j1 cpp-test` 基线通过。最终 `make -j1 cpp-test doc-check structure-check` 通过，包含旧 C++ 回归、新边界/CLI 检查、原生文档门禁、六个 Rust crate 严格 rustdoc/doctest。Rust 格式、`git diff --check`、发布脚本 `bash -n` 通过；最终仅补充重试回调不可重入注释和本记录。
+- 临时证据：`/tmp/netlib-cpp-quickstart-baseline.log`、`/tmp/netlib-cpp-quickstart-red.log`、`/tmp/netlib-cpp-quickstart-green.log`、`/tmp/netlib-cpp-quickstart-integration.log`（保留首轮错误公钥断言失败）、`/tmp/netlib-cpp-quickstart-final.log`（最终通过）。
+- 仅本机 Linux C++11；构建串行、使用 15 GiB 可用内存守护。没有重跑完整 Rust workspace/Clippy、C/Go/C# 接入、Go race、ASan/Miri/Loom、独立依赖审计、远端 CI 或完整发布包，更未做目标弱网/长稳。保留已有修改，未提交或推送；整体第 5/6 项和生产资格仍未完成。
+
+## 第五阶段 E：Go 有界重试接入示例（2026-10-21）
+
+延续已确认的第 5 项，保留前序全部未提交变更。本批不修改 SDK、ABI、wire 或默认安全策略，仅补全 Go 游戏接入示例、测试及交付入口。
+
+- `examples/go/game_quickstart` 按命令行、runtime 建立/收发/关闭、应用重试队列分为三个实现文件。演示两个独立 runtime、固定服务端公钥、授权、游戏就绪、二进制/空消息回显、日志注入与显式关闭。
+- 每端至多两条、每条至多 128 字节的应用副本；只有成功 admission 才移除消息，WouldBlock 保留消息并回到双端正容量 poll。十秒交换截止时间限制重试尝试，不承诺抢占 native 调用或阻塞日志回调。
+- TCP/UDP/KCP 共用 API；`--one-slot` 限制真实 native 游戏 scheduler 为一条消息，各传输测试要求确实出现背压并完成回显。`--deny` 必须返回 AuthRejected，而不是静默成功或超时。
+- `errors.Join` 保留原始与清理错误，双端关闭均尝试；每端清理有独立五秒背压重试期限。示例在收到全部回显后主动关闭 session 和 listener，最终成功信息仅在 runtime 清理成功后打印。
+- 更新 README、游戏指南和 getting-started 的 Go 入口，移除忽略错误且未展示收发的旧片段。`make go-test`、CI/race 和发布清单包含示例；CI 增加从发布包目录编译运行 Go 源码的检查。
+
+### 对抗性复查
+
+| 检查 | 结果与边界 |
+| --- | --- |
+| 需求与接口 | 无新增 SDK 包类型或 transport 参数；建立时选择传输，发送只有 session/payload。始终等待 GameSessionReady，示例保持加密；策略切换、恢复、协商的既有 SDK 测试保留 |
+| 测试质量 | 先建立可编译接口骨架，队列/清理四项 RED 因能力未实现而失败，GREEN 后再做真实三传输与命令行 RED → GREEN；不是编译错误，也不声称骨架是旧 SDK 缺陷。最终八个测试函数及其子场景覆盖复制、二进制/空值、128/129 字节、两条/三条、部分 admission 不重发、过期、终止错误、双端清理和事件类别 |
+| 实际背压与送达 | 闭包仅替代外部发送边界验证确定性 FIFO/失败行为；另在真实 TCP/UDP/KCP 的默认/单槽预算下验证两条字节匹配回显和 blocked > 0。UDP 丢失、重复、乱序可使严格示例失败，不额外承诺可靠性或容量 |
+| 资源与并发 | logger 使用同一个 log.Logger 串行化双 runtime 原生回调；无异步应用发送 goroutine。首端创建后即登记双端清理，第二端创建失败也不会漏清理。回调不 Stop/Close；Go 侧清理及日志并发由 race 回归验证，但 race 不检测 Rust/C 内部的数据竞争 |
+| 安全与可追溯性 | 错误保留 native 类别、endpoint/session 与库日志；ProtocolViolation 的 status=0 不作为成功。示例不输出凭证或业务载荷；明确 Go 值/编译器复制意味着擦除自有私钥缓冲区不等于保证擦净所有副本。30 秒 P95/P99 摘要通常不会在短回显中出现 |
+| 交付与文档 | 独立 Go 包布局首次编译因本机 /tmp 上层不可用的 .git 占位导致自动 VCS 标记失败；不改该目录，将源码包命令/CI 明确为 -buildvcs=false，重跑通过。避免源码包依赖外部 checkout 元数据；完整发布包与远端 CI 尚未执行 |
+
+本轮未发现需要修改运行库的高置信新增缺陷。测试盲区：没有强制触发真实 Go/native OOM、Close 持续背压或永不返回的日志组件；双端清理错误通过外部 closer 边界测试，不冒充全部原生关闭故障覆盖。示例队列只是单会话演示，生产需要自行定义每玩家预算和过载策略。
+
+### 验证与资格边界
+
+- 修改前 `make -j1 go-test` 通过。最终 `make -j1 go-test` 通过，包含现有 SDK、八个示例测试函数及子场景、可执行文件构建和部分导出失败时的原生 token 释放回归。
+- `go test -a -p 1 -count=1 -race ./go/rnet ./examples/go/game_quickstart` 通过；随后仅补内部契约注释、包内编译参数和记录，示例普通测试再次通过。
+- `make -j1 doc-check structure-check` 通过；包含原生注释门禁、六个 Rust crate 严格文档与 doctest。独立临时 Go 发布布局（当前 debug archive，不是完整 release 包）编译成功，实际进程验证 TCP 单槽、UDP/KCP、拒绝授权退出 1、非法参数退出 2。Go 格式、diff 和发布脚本 bash 语法检查通过。
+- 临时证据：`/tmp/netlib-go-quickstart-baseline.log`、`/tmp/netlib-go-quickstart-red.log`、`/tmp/netlib-go-quickstart-green.log`、`/tmp/netlib-go-quickstart-exchange-red.log`、`/tmp/netlib-go-quickstart-integration.log`、`/tmp/netlib-go-quickstart-cli-red.log`、`/tmp/netlib-go-quickstart-final.log`、`/tmp/netlib-go-quickstart-race.log`、`/tmp/netlib-go-quickstart-postreview.log`（末尾保留首次包布局 VCS 失败）、`/tmp/netlib-go-quickstart-package.log`（包布局最终通过）。
+- 构建串行并保留至少 15 GiB 可用内存；本机 Linux/Go 1.22.2。不重跑 Rust 全 workspace/Clippy、C/C++/C# 接入、ASan/Miri/Loom、独立审计或完整 release 包；不将文档 doctest 或回环回显当作长稳。没有提交/推送，仍需完成 C# 完整示例、第 5/6 项整体契约收尾和最终目标发布资格。
+
+## 第五阶段 F：C# 有界重试接入示例（2026-10-21）
+
+沿用已确认的第 5 项，保留全部既有修改，不改 SDK、ABI、wire 或默认安全策略。五语言完整接入示例与文档门禁已分别交付，第 6 项全范围契约复查仍未结束。
+
+- 新增 `csharp/RNet.Quickstart`，分为命令行、双 runtime 游戏流程、应用待发队列/清理异常汇合三个实现文件。覆盖固定公钥、授权、SessionReady、二进制/空消息、正容量 poll、有界背压、日志、CloseSession/CloseEndpoint 和显式 Stop/Dispose。
+- 每端至多两条、每条至多 128 字节的应用副本；空消息也计数，成功 admission 才出队，终止错误/分配异常不提前移除，WouldBlock 回到 poll。单调 Stopwatch 限制交换重试为十秒、各端 Stop 重试为五秒，不承诺抢占 native 调用、Dispose 或阻塞日志。
+- 保留原有 `RNet.Smoke` 全部回归，新增无外部 NuGet 测试依赖的四类队列/清理场景和三个 Python CLI 测试函数。CLI 覆盖 TCP/UDP/KCP 默认/真实单槽预算、拒绝授权、默认入口及非法/重复参数；单槽须观察到 blocked > 0 且两个字节匹配回显，拒绝授权须是 -13/退出 1，非法参数退出 2。
+- 补充关键字段和接口约束注释，替换 C# 指南中遇背压直接退出、没有显式 Stop 的旧片段；更新 README 和多语言入口。Make/CI/发布清单包含示例及依赖源码，CI 增加包内引用同批 DLL 的运行检查。
+
+### 对抗性复查
+
+| 检查 | 结果与边界 |
+| --- | --- |
+| 契约与可用性 | 同一 Send/Poll 用于三传输，建立时选择类型，AuthDecide 后仍等待游戏就绪；示例保持加密，原有动态策略/恢复/协商 SDK 测试保留 |
+| TDD 与测试质量 | 可编译骨架阶段四类契约测试因缺少实现失败，最小 GREEN 后完成队列；CLI 骨架再以真实进程退出/输出验证 RED，完整流程 GREEN。不是编译错误或 SDK 旧缺陷。发送闭包只隔离外部 admission 边界，真实背压由联网单槽测试另验 |
+| 错误与关闭 | 单一异常保留对象/原堆栈，多异常 AggregateException 保留主错误在前及两端清理原因；第一端失败仍尝试另一端。明确 SafeHandle Dispose 不抛内部 native 清理错误，成功标记仅声称完成 Stop/Dispose 序列，不声称已验证原生 destroy 成功 |
+| 所有权与并发 | Keypair 作用域释放，登录数组在 Connect 后清零，授权事件用后清零；应用无并发调用者，双 native 日志回调经 Console.Error 串行写，不引用短生命周期外部资源，也不关闭 runtime。SDK 捕获日志异常不等于保证日志不丢失 |
+| 安全/诊断 | 生命周期错误保留 native code 和 endpoint/session；ProtocolViolation 的零 status 不被当作成功。日志带时间/runtime/endpoint/session/correlation，不打印凭证或业务载荷。默认摘要间隔 30 秒，不能要求短回显一定输出 P95/P99 |
+| 发布与平台 | 在没有 SDK 项目源码的独立临时目录，仅以示例源码、RNet.dll/XML 和当前 debug native 库构建并运行全部 CLI 用例，验证 RNetDll 引用和 native 搜索路径。不是完整 release 打包/跨平台验证，也不扩大 Unity/IL2CPP/AOT 支持声明 |
+
+测试盲区：未强制耗尽真实托管/native 内存，OutOfMemoryException 仅是发送边界异常注入；未注入持久 Stop 背压、SafeHandle destroy 失败或永不返回的日志组件。异常汇合测试不替代全部 native 故障测试。UDP 丢失/重复/乱序可使严格回显失败，未增加可靠 UDP 或多人队列承诺。本轮未发现需要修改运行库的高置信新增缺陷。
+
+### 验证与资格边界
+
+- 修改前 `make -j1 csharp-test` 基线通过；最终 `make -j1 csharp-test doc-check structure-check` 通过，包含原 smoke、四类托管边界测试、三个真实 CLI 测试函数及子场景、原生注释门禁、六个 Rust crate 严格文档和 doctest。C# warnings-as-errors 构建零警告/零错误。
+- 独立 C# 包布局构建及全部 CLI 回归通过；最终 diff 和发布脚本 `bash -n` 检查通过。本批仅补示例/测试/文档/构建入口，没有 SDK 声明或布局变更。
+- 临时证据：`/tmp/netlib-csharp-quickstart-baseline.log`、`/tmp/netlib-csharp-quickstart-red.log`、`/tmp/netlib-csharp-quickstart-green.log`、`/tmp/netlib-csharp-quickstart-cli-red.log`、`/tmp/netlib-csharp-quickstart-integration.log`、`/tmp/netlib-csharp-quickstart-final.log`、`/tmp/netlib-csharp-quickstart-package.log`。
+- 构建串行，使用至少保留 15 GiB 可用内存的守护；仅本机 Linux x86_64/.NET 8。未重跑 Rust workspace/Clippy、C/C++/Go 接入或 Go race、ASan/Miri/Loom、完整 release 打包、独立审计或远端 CI；未做目标环境弱网与长稳。保留修改，未提交/推送；后续先完成第 6 项跨语言契约复查，再进行干净发布树与目标环境资格验证。
+
+## 第六阶段 A：跨语言核心契约抽查与 Go 时钟转换（2026-10-23）
+
+本批按已确认的第 6 项继续，保留前序未提交修改。结合代码/API 契约与对抗性审查，先横向核对五语言的建连就绪、poll 所有权、时间表示、错误和关闭路径；本地 SDK 不套用 HTTP 资源命名/分页规则，也不新增 RPC 或兼容层。没有把此批抽查视为全部状态路径/平台审查完成。
+
+### 发现与处理
+
+| 级别 | 证据/影响 | 处理 |
+| --- | --- | --- |
+| 必须修复：数值正确性（中） | Go ClockSyncSnapshot 将 native int64 微秒直接乘成纳秒 Duration；RED 中最大正值变成 -1µs、最小负值变成 0，刚越界的正负值反号。Rust/C/C++/C# 保留 int64 微秒，不存在此纳秒转换 | 先在实际 Go 查询入口做仅测试标签启用的 ABI 边界注入，确认四个越界失败与五个正常/边界成功；再于乘法前按符号限幅到可表示的整微秒边界，沿用已有无符号 RTT 转换的限幅原则。不取绝对值，避免 MinInt64 再次溢出 |
+| 建议修订：前置条件说明 | Rust clock_sync_snapshot 先 ensure_game_ready；C/C++/Go/C# 的“无样本”说明容易被理解为未就绪也返回 absent | 补充 game-ready 要求，pending/stale 是错误，不是 None/available=false/null；不改实际错误码或状态机 |
+| 建议修订：语言差异可见性 | 五语言的单位、收包所有权、expiry 禁用值和关闭错误暴露不完全相同，不能只说“同一 API” | getting-started 增加逐语言契约表；明确 Rust Some(0) 立即过期而 C 系列 expiry_ms=0 禁用，Go 正期限向上取整到毫秒；明确 C# Dispose 与 C++ 析构不等于 checked destroy |
+
+### 抽查路径与不变量
+
+- Rust GameRuntime → C game FFI → C++/Go/C# 包装：endpoint/auth accept 不等于游戏就绪；句柄归所属 runtime，发送只用 session/opaque payload，成功只代表本地 admission。业务版本范围和 SDK/wire 版本分开，本批无接口、布局、枚举或 wire 变更。
+- Poll：Rust 返回拥有的 Bytes；C 导出字节由 token 持有，失败也释放 out_count 前缀主/辅助 token；其余包装层复制后释放。C++ 作用域守卫、Go defer、C# finally 都覆盖已导出前缀，不承诺失败事件重放。Go 容量上限 65536、C# 上限 4096，未擅自统一为新的限制。
+- 零容量 poll：只做有界维护；公共积压满额暂停后续传输读取，定时器仍推进，长期零容量不能保证心跳存活。文档保留用户已选的持续正容量 poll 背压契约。
+- 时钟：native signed microseconds 与 Go signed nanoseconds 范围不同；新增限幅保持符号，不把巨大偏移变成貌似正常的零/负微秒。无样本仍与零偏移样本区分，未知句柄仍报错。时钟控制受认证不等于对端时钟可信，不修改 Rust 的四时间戳估计公式。
+- 关闭与日志：C/Go/C++ 显式错误路径可观察 stop/destroy；C# 显式 Stop 可观察错误，SafeHandle Dispose 内部失败不通过 RNetException 暴露，在途 lease 可延后清理。所有语言均要求退出并发调用者后清理、回调不 Stop/destroy。此已知 C# 可观测性边界未被示例成功标记掩盖，也未在本轮改造为新 API。
+
+### 测试质量与剩余边界
+
+- 新 hook 仅在 Linux 且显式 rnet_test_faults 标签启用，针对指定 runtime 一次性注入 native 返回结构，其他调用走真实库；测试调用公开 ClockSyncSnapshot，不仅测试一份重新实现的转换公式。普通 go list 确认两个故障注入模块都在 IgnoredGoFiles。
+- 覆盖正负普通偏移、零样本、可表示上下界、上下界外一微秒、int64 极值、无样本、无效真实 session 错误，以及 RTT/样本数字段未被改坏；测试不依赖等待数百年的真实时钟，也不冒充弱网时钟精度验证。
+- make go-test 的故障标签路径改跑整个 Go SDK 测试，避免新测试被旧的单函数过滤漏掉；CI 增加故障标签 race。无外部测试服务、无真实 OOM 或网络洪泛。
+- 第 6 项仍未整体勾选：仍需更完整的生命周期失败/并发处置和跨语言高级接口对照；C# 原生清理失败可观测性、目标平台资格与最终干净发布树验证仍须明确处理。未开始长稳、未提交/推送，不将本批标为生产认证。
+
+### 本批验证
+
+- 修改前 `make -j1 go-test` 通过。新增时钟回归 RED 明确是四个极值转换错误，非编译失败；修复后整个故障标签 Go SDK 回归通过。
+- 最终 `make -j1 c-test cpp-test go-test csharp-test doc-check structure-check abi-check` 全部通过。包含原有多语言集成与五语言示例相关检查、Go 所有权/极值故障测试、C# smoke/边界/CLI、C/C++ 注释门禁、Rust 严格文档/doctest；ABI 检查重新构建 release rnet-ffi 并核对导出。
+- `go test -a -p 1 -count=1 -race -tags rnet_test_faults ./go/rnet ./examples/go/game_quickstart` 通过。该结果覆盖 Go 侧并发检查，不是对 Rust/C 内部的线程检测。Go 格式、`git diff --check`、发布脚本 `bash -n` 通过；审查后没有遗留本轮已确认的行为缺陷。
+- 临时证据：`/tmp/netlib-contract-audit-baseline.log`、`/tmp/netlib-clock-duration-red.log`、`/tmp/netlib-clock-duration-green.log`、`/tmp/netlib-contract-audit-final.log`、`/tmp/netlib-contract-audit-race.log`。均为当前脏工作树的本机证据，不转记为干净发布提交资格。
+- 构建串行并使用 15 GiB 可用内存守护；没有重跑 Rust workspace/严格 Clippy、ASan/Miri/Loom、独立审计、完整发布包/远端 CI 或目标环境长稳。已有跨阶段未提交修改保留；后续获授权提交时宜按阶段组织，不把巨大累计 diff 当作单一小修复。

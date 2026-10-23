@@ -221,6 +221,7 @@ type GameClockSync struct {
 	// Available false on server sessions or before first client sample.
 	Available bool
 	// ServerMinusClient signed duration added to client monotonic clock to approximate the server runtime clock.
+	// Saturates at signed whole-microsecond Duration bounds if native microseconds exceed the Go range.
 	ServerMinusClient time.Duration
 	// RTT round-trip estimate after subtracting reported server turnaround; not trusted time.
 	RTT time.Duration

@@ -138,7 +138,7 @@ public sealed unsafe partial class GameRuntime {
             q.UdpExpected, q.UdpMissing, q.KcpSent, q.KcpRetransmitted);
     }
     /// <summary>Queries the latest approximate client-side four-timestamp clock sample.</summary>
-    /// <param name="session">Local tracked session.</param>
+    /// <param name="session">Local game-ready session; pending/stale handles throw rather than return null.</param>
     /// <returns>Null on server sessions or before a sample; offset is monotonic-runtime time, not UTC/anti-cheat
     /// authority.</returns>
     public ClockSample? ClockSyncSnapshot(ulong session) {

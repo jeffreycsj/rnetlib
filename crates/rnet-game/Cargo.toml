@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[[example]]
+name = "game_quickstart"
+test = true
+
 [features]
 fuzzing = []
 loom = ["dep:loom"]

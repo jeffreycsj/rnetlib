@@ -282,6 +282,7 @@ class GameRuntime {
   }
 
   /// Approximate client offset sample; available=false on server/before sampling. Not anti-cheat time.
+  /// session must be game-ready; pending/stale handles throw rather than return an absent sample.
   GameClockSync clock_sync_snapshot(rnet_session_t session) const {
     rnet_game_clock_sync_t raw{};
     check(rnet_game_clock_sync_snapshot(handle_, session, &raw));

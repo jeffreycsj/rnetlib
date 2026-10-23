@@ -73,6 +73,8 @@ for event in runtime.poll(64, std::time::Duration::from_millis(10)) {
 
 `send` is nonblocking and bounded. If it returns `WouldBlock`, retain the business message, keep polling so the scheduler can drain, then retry; a successful return means locally staged, not delivered. Transport backpressure after admission keeps the message in the scheduler for a later bounded flush. Never send before `SessionReady`. A complete executable server/client echo is in [`game_quickstart.rs`](crates/rnet-game/examples/game_quickstart.rs) and can be run with `cargo run -p rnet-game --example game_quickstart`.
 
+To exercise real bounded admission, run `cargo run -p rnet-game --example game_quickstart -- tcp --one-slot` (also accepts `udp` or `kcp`). It verifies binary/empty echoes, retains bounded pending copies on backpressure, injects a logger and stops both runtimes. `--deny` demonstrates authorization failure and intentionally exits nonzero. Its tests run in `cargo test --workspace`.
+
 Advanced sends remain optional. `send_with_options` adds a fair local priority, a pre-transport expiry, tick/sequence metadata and a correlation ID; transport selection and business packet type still do not appear in the call. All ordinary and advanced sends first enter a bounded per-session-fair scheduler that `poll` flushes automatically. `scheduled_queue_snapshot()` and Prometheus report per-priority admission/forwarding, backpressure requeues, expiry, and local queue-delay P90/P95/P99/max. Expiry cannot recall bytes already owned by a socket or KCP.
 
 | Language | Send | Receive and lifecycle |
@@ -83,13 +85,13 @@ Advanced sends remain optional. `send_with_options` adds a fair local priority, 
 | Go | `runtime.Send(session, payload)` | `runtime.Poll(...)` → `GameMessage` |
 | C# (.NET 8+) | `runtime.Send(session, payload)` | `runtime.Poll(...)` → `GameEventType.Message` |
 
-The [game networking guide](docs/game-networking.md#sending-and-receiving) contains complete event-loop snippets for all four languages, including C buffer-token release.
+The [game networking guide](docs/game-networking.md#sending-and-receiving) contains event-loop snippets for Rust, C, C++11 and Go, including C buffer-token release; use the [C# guide](docs/csharp.md) for .NET integration. These snippets explain dispatch, while the linked runnable examples/tests cover setup and teardown.
 
 For replaceable state snapshots, use `send_latest(session, key, payload)`. Repeated sends with the same `(session, key)` coalesce in a bounded game queue before `poll(...)` or `flush_realtime(capacity)` forwards them. TCP/KCP can also replace a keyed snapshot while it remains in the transport-pending slot; once the I/O worker takes the slot, socket writes and KCP-owned data cannot be recalled. `transport_latest_snapshot()` exposes pending replacements, irreversible worker pickups and admission failures by stable reason. Ordinary reliable sends retain FIFO semantics.
 
 Use `GameProtocol::new(id, min_version, max_version)` with `listen` / `connect` (or `connect_host`). Bounds are inclusive; equal bounds require an exact application version. The server chooses the highest common version under authenticated control, and `selected_protocol_version(session)` exposes it during authorization. Both peers must poll until game readiness. C, C++11, Go and C# use the same min/max configuration through their ordinary listen/connect/resume methods; there are no separate range aliases. Previous SDK wire formats and ABI layouts are rejected; the sole current ABI discriminator is 4. See the [negotiation integration test](crates/rnet-game/tests/game_range.rs) and [C++11 example](examples/cpp/game_range_smoke.cpp).
 
-See the [game networking guide](docs/game-networking.md), the [TCP/UDP/KCP integration test](crates/rnet-game/tests/game_runtime.rs), the [C++11 example](examples/cpp/game_echo_smoke.cpp), and the [Go tests](go/rnet/game_test.go) for client setup, event handling, and security transitions. Raw UDP does not guarantee delivery; choose KCP or TCP if your game requires reliable messages.
+See the [game networking guide](docs/game-networking.md), the [TCP/UDP/KCP integration test](crates/rnet-game/tests/game_runtime.rs), the [C++11 example](examples/cpp/game_echo_smoke.cpp), and the [Go quickstart](examples/go/game_quickstart/runtime.go) for client setup and event handling. Additional security transitions are covered by the [Go tests](go/rnet/game_test.go). Raw UDP does not guarantee delivery; choose KCP or TCP if your game requires reliable messages.
 
 ## Advanced transport APIs
 
@@ -105,14 +107,24 @@ See [Getting started](docs/getting-started.md) for transport-level Rust, C, C++1
 
 ## Build and test
 
-Requirements are Rust 1.85 or newer, a C++11 compiler, Go 1.22 or newer, .NET SDK 8+ for the C# checks/package, and a Linux-like linker.
+Requirements are Rust 1.85 or newer, C11 and C++11 compilers, Go 1.22 or newer, .NET SDK 8+ for the C# checks/package, and a Linux-like linker. Documentation checks also require Python 3 and Clang/Clang++ with JSON AST support (validated locally with Clang 17); no Python packages are required. C example failure tests use Linux linker `--wrap` support.
 
 ```sh
 cargo build -p rnet-ffi --release
 make check
 ```
 
-`make check` runs structure checks, formatting, Clippy, Rust/Loom tests, ABI export checks, and the C++11, Go and C# smoke tests. `make csharp-test DOTNET=/path/to/dotnet` selects an SDK installed outside PATH. Formatting and Clippy require the matching rustfmt/clippy components for the active Rust toolchain.
+`make check` runs structure checks, formatting, documentation checks, Clippy, Rust/Loom tests, ABI export checks, and the C11, C++11, Go and C# smoke tests. `make csharp-test DOTNET=/path/to/dotnet` selects an SDK installed outside PATH. Formatting and Clippy require the matching rustfmt/clippy components for the active Rust toolchain.
+
+`make c-test` builds the [complete C game echo](examples/c/game_echo.c), validates TCP/UDP/KCP binary and empty payloads, authorization rejection, bounded backpressure retries and event-token cleanup on failure. Run `./target/rnet-c-game-echo tcp` (or `udp`/`kcp`) afterwards. See the [C game guide](docs/game-networking.md#c-abi) for manual compilation and release-package use.
+
+`make cpp-test` also builds the [C++11 two-runtime echo](examples/cpp/game_quickstart.cpp), checks retry/exception boundaries, then exercises all three transports and negative authorization/trust cases. Run `./target/rnet-cpp-game-quickstart tcp --one-slot` to observe real game-queue backpressure. The CLI test runner needs Python 3; details and package compilation are in the [C++11 guide](docs/game-networking.md#c11).
+
+`make go-test` refreshes the native archive, tests the Go SDK and [complete Go game example](examples/go/game_quickstart/runtime.go), and builds `target/rnet-go-game-quickstart`. Run `./target/rnet-go-game-quickstart tcp --one-slot` (or `udp`/`kcp`) for binary/empty echo and real bounded-send retries; `--deny` intentionally fails authorization. See the [Go guide](docs/game-networking.md#go) for logging, cleanup and building from release-package sources.
+
+`make csharp-test` checks the existing SDK smoke and the [C# game quickstart](csharp/RNet.Quickstart/GameExample.cs), including bounded retry/cleanup failures and real TCP/UDP/KCP echoes. Run `LD_LIBRARY_PATH="$PWD/target/debug" dotnet run --project csharp/RNet.Quickstart -c Release -- tcp --one-slot`. The [C# guide](docs/csharp.md) covers package use and the distinction between observable Stop errors and SafeHandle disposal. Validated platform scope remains Linux x86_64/.NET 8.
+
+`make native-doc-check` checks attached documentation on C/C++ public declarations using Clang and runs deletion/error-path regressions for the checker. It is also part of `make doc-check` and Linux CI. Select tools with `CLANG=/path/to/clang CLANGXX=/path/to/clang++ PYTHON=/path/to/python3`. Missing tools, compiler errors and unhandled public declaration forms fail the gate; they are not silently skipped. Macros, namespace summaries and correctness/completeness of prose are outside this presence check. See [documentation validation](docs/getting-started.md#文档防回退检查) for language-specific gates and remaining limits.
 
 Game loggers default to a poll-driven 30-second `game_latency_summary`, with cumulative sample counts, P90/P95/P99/P99.9/max in microseconds and queue/logger counters. Configure or disable it with `set_metrics_log_interval` (Rust/C++), `rnet_game_metrics_log_interval_set` (C), or `SetMetricsLogInterval` (Go/C#); zero disables summaries. Supply your own callback at runtime creation. Callbacks must return promptly and must not stop/destroy their runtime; no business payload or credential is logged. See the language guides for ownership rules.
 

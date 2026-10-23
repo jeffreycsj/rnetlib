@@ -814,6 +814,7 @@ int32_t rnet_game_network_quality(rnet_runtime_t runtime,
 /** Writes this runtime's monotonic microseconds to required out; not Unix time. */
 int32_t rnet_game_clock_micros(rnet_runtime_t runtime, uint64_t *out);
 /** Writes approximate client-side server-minus-client offset to required out.
+ * session must be game-ready; pending/stale handles return an error, not available=0.
  * available=0 before sampling and on server sessions; not a trusted anti-cheat clock. */
 int32_t rnet_game_clock_sync_snapshot(rnet_runtime_t runtime,
                                       rnet_session_t session,
