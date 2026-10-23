@@ -6,6 +6,9 @@ architecture="$(uname -m)"
 destination="${project_dir}/dist/linux-${architecture}"
 
 cd "${project_dir}"
+mkdir -p target
+provenance_dir="$(mktemp -d "${project_dir}/target/package-source.XXXXXX")"
+"${PYTHON:-python3}" -B scripts/package_evidence.py capture --output "${provenance_dir}/source.json"
 # Reject stale SDK declarations before modifying the package destination. The check
 # builds the release library and compares its Cargo-generated header to the SDK copy.
 "${PYTHON:-python3}" -B scripts/generated_header.py --check --release
@@ -50,13 +53,24 @@ install -m 0644 docs/dependency-review.md "${destination}/docs/dependency-review
 install -m 0644 docs/game-production-qualification.md "${destination}/docs/game-production-qualification.md"
 install -m 0644 docs/getting-started.md "${destination}/docs/getting-started.md"
 install -m 0644 docs/generated-c-header.md "${destination}/docs/generated-c-header.md"
+install -m 0644 docs/release-evidence.md "${destination}/docs/release-evidence.md"
 install -m 0644 docs/csharp.md docs/game-library-review.md "${destination}/docs/"
 install -m 0644 docs/game-networking.md "${destination}/docs/game-networking.md"
 install -m 0644 docs/production-deployment.md "${destination}/docs/production-deployment.md"
 install -m 0644 docs/single-current-api.md "${destination}/docs/single-current-api.md"
 install -m 0644 Cargo.lock LICENSE README.md SECURITY.md go.mod "${destination}/"
 
+"${PYTHON:-python3}" -B scripts/package_evidence.py seal \
+  --before "${provenance_dir}/source.json" --package "${destination}"
+
 (
   cd "${destination}"
   find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+)
+"${PYTHON:-python3}" -B scripts/package_evidence.py verify --package "${destination}"
+# Preserve executable modes when workflow artifacts wrap the package in a ZIP.
+tar -C "${project_dir}/dist" -czf "${destination}.tar.gz" "linux-${architecture}"
+(
+  cd "${project_dir}/dist"
+  sha256sum "linux-${architecture}.tar.gz" > "linux-${architecture}.tar.gz.sha256"
 )

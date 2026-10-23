@@ -1,0 +1,42 @@
+name: release-qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rnet-release-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    # Trusted, pre-provisioned runner; available memory must exceed 15 GiB plus build headroom.
+    runs-on: [self-hosted, Linux, X64, rnet-qualification]
+    timeout-minutes: 600
+    env:
+      CARGO_BUILD_JOBS: "1"
+      RNET_EVIDENCE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run serial repository qualification
+        run: python3 -B scripts/release_evidence.py suite --release --output "target/release-evidence/${RNET_EVIDENCE_RUN_ID}"
+      - name: Archive partial or complete evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/release-evidence/${{ env.RNET_EVIDENCE_RUN_ID }}/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Archive repository-qualified candidate
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/linux-x86_64.tar.gz*
+          if-no-files-found: error
+          retention-days: 30

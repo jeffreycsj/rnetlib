@@ -48,6 +48,13 @@ jobs:
       - run: cd dist/linux-x86_64 && CGO_ENABLED=1 go run -buildvcs=false -a -p 1 ./examples/go/game_quickstart tcp --one-slot
       - run: LD_LIBRARY_PATH="$PWD/dist/linux-x86_64/lib" dotnet run --project dist/linux-x86_64/csharp/RNet.Smoke -c Release -p:RNetDll="$PWD/dist/linux-x86_64/lib/RNet.dll"
       - run: LD_LIBRARY_PATH="$PWD/dist/linux-x86_64/lib" dotnet run --project dist/linux-x86_64/csharp/RNet.Quickstart -c Release -p:RNetDll="$PWD/dist/linux-x86_64/lib/RNet.dll" -- tcp --one-slot
+      - name: Archive development SDK package (not full release qualification)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-linux-x86_64-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/linux-x86_64.tar.gz*
+          if-no-files-found: error
+          retention-days: 14
 
   supply-chain:
     runs-on: ubuntu-latest

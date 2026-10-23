@@ -189,6 +189,10 @@ Raw UDP is intentionally unreliable and unordered. KCP is reliable and ordered b
 
 See [Production deployment](docs/production-deployment.md), the current [game qualification record](docs/game-production-qualification.md), [SECURITY.md](SECURITY.md), [dependency-review.md](docs/dependency-review.md), and [adversarial-review.md](docs/adversarial-review.md) before production exposure.
 
+[Release evidence](docs/release-evidence.md) provides a serial, memory-guarded gate
+runner and package provenance. Clean-source reports bind logs and SDK checks to
+one revision; they do not replace final target-environment qualification.
+
 ## License
 
 RNet is licensed under the [MIT License](LICENSE).
