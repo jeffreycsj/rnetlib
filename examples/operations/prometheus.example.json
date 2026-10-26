@@ -1,0 +1,11 @@
+{
+  "global": {"scrape_interval": "15s", "evaluation_interval": "15s"},
+  "rule_files": ["alerts.rules.json"],
+  "scrape_configs": [{
+    "job_name": "rnet-game",
+    "honor_labels": false,
+    "scrape_timeout": "5s",
+    "metrics_path": "/metrics",
+    "static_configs": [{"targets": ["127.0.0.1:9464"]}]
+  }]
+}

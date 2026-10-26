@@ -46,6 +46,12 @@ recorded in `deny.toml` or the security review.
 
 ## Observability gate
 
+Follow the [game operations runbook](game-operations.md) for multi-language collection,
+tested alert rules and signal semantics, and complete the [capacity/SLO acceptance
+template](game-capacity-template.md). Example thresholds must match the actual configured
+budgets; the library does not start a metrics HTTP listener. The lifetime Prometheus
+percentiles are not sliding-window percentiles, even if their sample counter uses `increase`.
+
 Export `rnet_metrics_snapshot` (Rust: `metrics_snapshot`) and rotate latency windows at the monitoring interval. At minimum alert on event drops, lifecycle rejection, admission rejection by reason, endpoint/session/pending-handshake gauges, protocol errors, close reason, send backpressure, queued bytes, KCP update delay, and P99/P99.9. Use the current `rnet_logger_t` to retain the timestamp, event name, runtime, endpoint, session, transport, error code, and correlation ID needed to join an incident timeline.
 
 Game-layer malformed **unverified** business envelopes are silently dropped and counted in

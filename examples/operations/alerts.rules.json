@@ -1,0 +1,85 @@
+{
+  "groups": [{
+    "name": "rnet-game-example-only",
+    "rules": [
+      {
+        "alert": "RNetScrapeDown",
+        "expr": "up{job=\"rnet-game\"} == 0", "for": "1m",
+        "labels": {"severity": "critical"},
+        "annotations": {"summary": "Configured game metrics target cannot be scraped"}
+      },
+      {
+        "alert": "RNetNoTargets",
+        "expr": "absent(up{job=\"rnet-game\"})", "for": "1m",
+        "labels": {"severity": "critical"},
+        "annotations": {"summary": "No game metrics targets remain in discovery"}
+      },
+      {
+        "alert": "RNetMetricsMissing",
+        "expr": "(up{job=\"rnet-game\"} == 1) unless on(job,instance) rnet_game_logger_enabled{job=\"rnet-game\"}", "for": "1m",
+        "labels": {"severity": "critical"},
+        "annotations": {"summary": "Scrape succeeded but game facade metrics are absent"}
+      },
+      {
+        "alert": "RNetQueuePressure",
+        "expr": "(rnet_queued_send_bytes{job=\"rnet-game\"} > 53687091) or (rnet_queued_event_bytes{job=\"rnet-game\"} > 53687091) or (rnet_game_scheduled_queued_bytes{job=\"rnet-game\"} > 6710886)", "for": "2m",
+        "labels": {"severity": "warning"},
+        "annotations": {"summary": "Sustained queue pressure against example budgets"}
+      },
+      {
+        "alert": "RNetEventLoss",
+        "expr": "(increase(rnet_events_dropped_total{job=\"rnet-game\"}[5m]) > 0) or (increase(rnet_lifecycle_events_rejected_total{job=\"rnet-game\"}[5m]) > 0)", "for": "1m",
+        "labels": {"severity": "critical"},
+        "annotations": {"summary": "Event delivery or lifecycle admission has lost work"}
+      },
+      {
+        "alert": "RNetLogLoss",
+        "expr": "(increase(rnet_game_logger_dropped_total{job=\"rnet-game\"}[5m]) > 0) or (increase(rnet_game_logger_sink_panics_total{job=\"rnet-game\"}[5m]) > 0)", "for": "1m",
+        "labels": {"severity": "critical"},
+        "annotations": {"summary": "Diagnostic logger lost records or its sink panicked"}
+      },
+      {
+        "alert": "RNetLoggerDisabled",
+        "expr": "rnet_game_logger_enabled{job=\"rnet-game\"} == 0", "for": "5m",
+        "labels": {"severity": "warning"},
+        "annotations": {"summary": "Game diagnostic logger is not configured"}
+      },
+      {
+        "alert": "RNetHeartbeatTimeouts",
+        "expr": "increase(rnet_game_heartbeat_timeouts_total{job=\"rnet-game\"}[5m]) > 0", "for": "1m",
+        "labels": {"severity": "warning"},
+        "annotations": {"summary": "Heartbeat deadlines requested session closure"}
+      },
+      {
+        "alert": "RNetAdmissionRejected",
+        "expr": "(increase(rnet_admission_rejected_reason_total{job=\"rnet-game\"}[5m]) > 0) or (increase(rnet_game_scheduled_admission_rejected_total{job=\"rnet-game\"}[5m]) > 0)", "for": "1m",
+        "labels": {"severity": "warning"},
+        "annotations": {"summary": "Admission rejected work; correlate capacity and configured policy"}
+      },
+      {
+        "alert": "RNetUnexpectedClosures",
+        "expr": "increase(rnet_session_closed_total{job=\"rnet-game\",reason_code=~\"-5|-7|-8|-10|-12|-14|-16\"}[5m]) > 0", "for": "1m",
+        "labels": {"severity": "warning"},
+        "annotations": {"summary": "Timeout IO protocol or security closure needs diagnosis"}
+      },
+      {
+        "alert": "RNetGameDeliveryFailure",
+        "expr": "(increase(rnet_game_scheduled_expired_dropped_total{job=\"rnet-game\"}[5m]) > 0) or (increase(rnet_game_scheduled_send_failed_total{job=\"rnet-game\"}[5m]) > 0) or (increase(rnet_game_realtime_backpressure_dropped_total{job=\"rnet-game\"}[5m]) > 0) or (increase(rnet_game_realtime_send_failed_total{job=\"rnet-game\"}[5m]) > 0)", "for": "1m",
+        "labels": {"severity": "warning"},
+        "annotations": {"summary": "Queued game data expired failed or was pressure-dropped"}
+      },
+      {
+        "alert": "RNetHeartbeatHistoricalTail",
+        "expr": "(rnet_game_heartbeat_rtt_us{job=\"rnet-game\",quantile=\"0.99\"} > 100000) and ignoring(quantile) (increase(rnet_game_heartbeat_rtt_samples_total{job=\"rnet-game\"}[5m]) >= 20)", "for": "2m",
+        "labels": {"severity": "warning"},
+        "annotations": {"summary": "Lifetime heartbeat P99 is high with recent samples; not a window SLO"}
+      },
+      {
+        "alert": "RNetQueueHistoricalTail",
+        "expr": "(rnet_latency_us{job=\"rnet-game\",kind=~\"4|5|7\",quantile=\"0.99\"} > 50000) and ignoring(quantile) (increase(rnet_latency_samples_total{job=\"rnet-game\"}[5m]) >= 20)", "for": "2m",
+        "labels": {"severity": "warning"},
+        "annotations": {"summary": "Lifetime queue or KCP tick P99 is high with recent samples"}
+      }
+    ]
+  }]
+}

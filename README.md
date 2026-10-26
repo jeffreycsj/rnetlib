@@ -198,6 +198,12 @@ server and client processes over TCP/UDP/KCP. The SDK package includes the execu
 reports distinguish offered load, admission, actual echoes, backpressure and RTT samples.
 Local multi-process checks are not a target-machine capacity or long-soak result.
 
+[Game operations](docs/game-operations.md) includes actual-metric collection contracts,
+tested example alerts and upgrade/rollback procedures. Fill the
+[capacity/SLO acceptance template](docs/game-capacity-template.md) for each target deployment;
+example thresholds are not production guarantees. `make check` also requires `promtool`
+(override its path with `PROMTOOL`) to validate the shipped rules offline.
+
 ## License
 
 RNet is licensed under the [MIT License](LICENSE).

@@ -88,6 +88,7 @@ def output_directory(root, output):
 def toolchain_snapshot():
     """Allowlist versions only: no environment dump, tokens or private key data."""
     commands = {"rustc": ["rustc", "-Vv"], "cargo": ["cargo", "--version"],
+                "promtool": [os.environ.get("PROMTOOL", "promtool"), "--version"],
                 "go": ["go", "version"], "dotnet": [os.environ.get("DOTNET", "dotnet"), "--version"],
                 "cc": ["cc", "--version"], "python": ["python3", "--version"]}
     result = {}

@@ -1,0 +1,51 @@
+{
+  "rule_files": ["alerts.rules.json"], "evaluation_interval": "1m",
+  "tests": [
+    {
+      "name": "failure counters preserve cause labels and fire after sustained observation",
+      "interval": "1m",
+      "input_series": [
+        {"series": "rnet_events_dropped_total{job=\"rnet-game\",instance=\"a\"}", "values": "0+1x8"},
+        {"series": "rnet_game_logger_dropped_total{job=\"rnet-game\",instance=\"a\"}", "values": "0+1x8"},
+        {"series": "rnet_game_logger_enabled{job=\"rnet-game\",instance=\"a\"}", "values": "0+0x8"},
+        {"series": "rnet_game_heartbeat_timeouts_total{job=\"rnet-game\",instance=\"a\"}", "values": "0+1x8"},
+        {"series": "rnet_admission_rejected_reason_total{job=\"rnet-game\",instance=\"a\",reason=\"ip_rate_limit\"}", "values": "0+1x8"},
+        {"series": "rnet_session_closed_total{job=\"rnet-game\",instance=\"a\",reason_code=\"-16\"}", "values": "0+1x8"},
+        {"series": "rnet_session_closed_total{job=\"rnet-game\",instance=\"a\",reason_code=\"-18\"}", "values": "0+10x8"},
+        {"series": "rnet_game_scheduled_expired_dropped_total{job=\"rnet-game\",instance=\"a\"}", "values": "0+1x8"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "7m", "alertname": "RNetEventLoss", "exp_alerts": [{"exp_labels": {"job": "rnet-game", "instance": "a", "severity": "critical"}, "exp_annotations": {"summary": "Event delivery or lifecycle admission has lost work"}}]},
+        {"eval_time": "7m", "alertname": "RNetLogLoss", "exp_alerts": [{"exp_labels": {"job": "rnet-game", "instance": "a", "severity": "critical"}, "exp_annotations": {"summary": "Diagnostic logger lost records or its sink panicked"}}]},
+        {"eval_time": "7m", "alertname": "RNetLoggerDisabled", "exp_alerts": [{"exp_labels": {"job": "rnet-game", "instance": "a", "severity": "warning"}, "exp_annotations": {"summary": "Game diagnostic logger is not configured"}}]},
+        {"eval_time": "7m", "alertname": "RNetHeartbeatTimeouts", "exp_alerts": [{"exp_labels": {"job": "rnet-game", "instance": "a", "severity": "warning"}, "exp_annotations": {"summary": "Heartbeat deadlines requested session closure"}}]},
+        {"eval_time": "7m", "alertname": "RNetAdmissionRejected", "exp_alerts": [{"exp_labels": {"job": "rnet-game", "instance": "a", "reason": "ip_rate_limit", "severity": "warning"}, "exp_annotations": {"summary": "Admission rejected work; correlate capacity and configured policy"}}]},
+        {"eval_time": "7m", "alertname": "RNetUnexpectedClosures", "exp_alerts": [{"exp_labels": {"job": "rnet-game", "instance": "a", "reason_code": "-16", "severity": "warning"}, "exp_annotations": {"summary": "Timeout IO protocol or security closure needs diagnosis"}}]},
+        {"eval_time": "7m", "alertname": "RNetGameDeliveryFailure", "exp_alerts": [{"exp_labels": {"job": "rnet-game", "instance": "a", "severity": "warning"}, "exp_annotations": {"summary": "Queued game data expired failed or was pressure-dropped"}}]}
+      ]
+    },
+    {
+      "name": "transport kinds do not borrow samples and microseconds are not milliseconds",
+      "interval": "1m",
+      "input_series": [
+        {"series": "rnet_latency_us{job=\"rnet-game\",instance=\"a\",kind=\"4\",quantile=\"0.99\"}", "values": "100000+0x8"},
+        {"series": "rnet_latency_samples_total{job=\"rnet-game\",instance=\"a\",kind=\"4\"}", "values": "0+0x8"},
+        {"series": "rnet_latency_us{job=\"rnet-game\",instance=\"a\",kind=\"5\",quantile=\"0.99\"}", "values": "100+0x8"},
+        {"series": "rnet_latency_samples_total{job=\"rnet-game\",instance=\"a\",kind=\"5\"}", "values": "0+10x8"},
+        {"series": "rnet_latency_us{job=\"rnet-game\",instance=\"a\",kind=\"7\",quantile=\"0.99\"}", "values": "100000+0x8"},
+        {"series": "rnet_latency_samples_total{job=\"rnet-game\",instance=\"a\",kind=\"7\"}", "values": "0+10x8"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "7m", "alertname": "RNetQueueHistoricalTail", "exp_alerts": [{"exp_labels": {"job": "rnet-game", "instance": "a", "kind": "7", "quantile": "0.99", "severity": "warning"}, "exp_annotations": {"summary": "Lifetime queue or KCP tick P99 is high with recent samples"}}]}
+      ]
+    },
+    {
+      "name": "counter reset followed by real drops still alerts",
+      "interval": "1m",
+      "input_series": [{"series": "rnet_events_dropped_total{job=\"rnet-game\",instance=\"a\"}", "values": "100 0 1 2 3 4 5 6 7"}],
+      "alert_rule_test": [
+        {"eval_time": "7m", "alertname": "RNetEventLoss", "exp_alerts": [{"exp_labels": {"job": "rnet-game", "instance": "a", "severity": "critical"}, "exp_annotations": {"summary": "Event delivery or lifecycle admission has lost work"}}]}
+      ]
+    }
+  ]
+}

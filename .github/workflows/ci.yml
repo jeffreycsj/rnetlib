@@ -31,6 +31,15 @@ jobs:
           dotnet-version: "8.0.x"
       - name: Install native documentation checker dependencies
         run: sudo apt-get update && sudo apt-get install -y clang python3
+      - name: Install checksum-pinned offline rule validator (not a monitoring server)
+        run: |
+          tool_dir="$(mktemp -d)"
+          cd "${tool_dir}"
+          curl --fail --location --retry 3 --output prometheus.tar.gz https://github.com/prometheus/prometheus/releases/download/v2.55.1/prometheus-2.55.1.linux-amd64.tar.gz
+          echo '19700bdd42ec31ee162e4079ebda4cd0a44432df4daa637141bdbea4b1cd8927  prometheus.tar.gz' | sha256sum -c -
+          tar -xzf prometheus.tar.gz prometheus-2.55.1.linux-amd64/promtool
+          sudo install -m 0755 prometheus-2.55.1.linux-amd64/promtool /usr/local/bin/promtool
+      - run: make ops-test
       - run: cargo fmt --check
       - run: make structure-check
       - run: make header-check

@@ -10,9 +10,13 @@ RNET_MSRV ?= 1.85.0
 
 .PHONY: abi-check build check c-test cpp-test csharp-test doc-check native-doc-check fuzz-asan-smoke go-test header-check header-update loom-test miri-test package structure-check test
 .PHONY: dependency-check go-race msrv-check package-smoke
+.PHONY: ops-test
 
 build: header-check
 	cargo build -p rnet-ffi --release
+
+ops-test:
+	bash scripts/check-operations.sh
 
 header-update:
 	$(PYTHON) -B scripts/generated_header.py --update
@@ -101,6 +105,7 @@ miri-test:
 check:
 	$(MAKE) structure-check
 	cargo fmt --check
+	$(MAKE) ops-test
 	$(MAKE) doc-check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace

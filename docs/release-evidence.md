@@ -30,6 +30,12 @@ missing tools are failed/blocked gates, never silently skipped. `DOTNET` can sel
 an SDK outside PATH. `--timeout` is a positive per-gate deadline (default 3600 s).
 The suite still consists of short repository checks, not a long fuzz campaign.
 
+Provision a trusted `promtool` too (`PROMTOOL` selects its path). `make check` now runs
+offline operations-rule checks, including counter reset, absent samples, target failure
+and per-runtime matching. Packaging ships these rules; package-smoke validates the actual
+archived copies. Toolchain evidence records the validator version. No monitoring server
+is started or production configuration applied by these gates.
+
 `report.json` records the actual command, UTC timestamps, exit code, source
 revision/dirty state/input digest, lockfile hash, run ID and hashes of the log and
 toolchain record. `command.log` is written directly to disk without retaining it

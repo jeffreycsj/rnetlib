@@ -1,0 +1,85 @@
+{
+  "rule_files": ["alerts.rules.json"],
+  "evaluation_interval": "1m",
+  "tests": [
+    {
+      "name": "zero samples and frozen lifetime samples cannot assert current tail latency",
+      "interval": "1m",
+      "input_series": [
+        {"series": "up{job=\"rnet-game\",instance=\"idle\"}", "values": "1+0x10"},
+        {"series": "rnet_current_endpoints{job=\"rnet-game\",instance=\"idle\"}", "values": "0+0x10"},
+        {"series": "rnet_game_logger_enabled{job=\"rnet-game\",instance=\"idle\"}", "values": "1+0x10"},
+        {"series": "rnet_game_heartbeat_rtt_us{job=\"rnet-game\",instance=\"idle\",quantile=\"0.99\"}", "values": "999999+0x10"},
+        {"series": "rnet_game_heartbeat_rtt_samples_total{job=\"rnet-game\",instance=\"idle\"}", "values": "0+0x10"},
+        {"series": "rnet_game_heartbeat_rtt_us{job=\"rnet-game\",instance=\"old\",quantile=\"0.99\"}", "values": "999999+0x10"},
+        {"series": "rnet_game_heartbeat_rtt_samples_total{job=\"rnet-game\",instance=\"old\"}", "values": "100+0x10"},
+        {"series": "rnet_events_dropped_total{job=\"rnet-game\",instance=\"idle\"}", "values": "100 0 0 0 0 0 0 0 0 0 0"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "3m", "alertname": "RNetEventLoss", "exp_alerts": []},
+        {"eval_time": "10m", "alertname": "RNetHeartbeatHistoricalTail", "exp_alerts": []},
+        {"eval_time": "10m", "alertname": "RNetMetricsMissing", "exp_alerts": []},
+        {"eval_time": "10m", "alertname": "RNetLoggerDisabled", "exp_alerts": []}
+      ]
+    },
+    {
+      "name": "queue persistence and recovery use current gauge rather than peak",
+      "interval": "1m",
+      "input_series": [
+        {"series": "rnet_queued_send_bytes{job=\"rnet-game\",instance=\"a\"}", "values": "60000000+0x4 0+0x5"},
+        {"series": "rnet_peak_queued_send_bytes{job=\"rnet-game\",instance=\"b\"}", "values": "90000000+0x10"},
+        {"series": "rnet_queued_send_bytes{job=\"other\",instance=\"c\"}", "values": "90000000+0x10"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "1m", "alertname": "RNetQueuePressure", "exp_alerts": []},
+        {"eval_time": "3m", "alertname": "RNetQueuePressure", "exp_alerts": [
+          {"exp_labels": {"job": "rnet-game", "instance": "a", "severity": "warning"}, "exp_annotations": {"summary": "Sustained queue pressure against example budgets"}}
+        ]},
+        {"eval_time": "6m", "alertname": "RNetQueuePressure", "exp_alerts": []}
+      ]
+    },
+    {
+      "name": "heartbeat sample gating cannot borrow samples from another instance or runtime",
+      "interval": "1m",
+      "input_series": [
+        {"series": "rnet_game_heartbeat_rtt_us{job=\"rnet-game\",instance=\"a\",runtime=\"one\",quantile=\"0.99\"}", "values": "200000+0x8"},
+        {"series": "rnet_game_heartbeat_rtt_samples_total{job=\"rnet-game\",instance=\"a\",runtime=\"one\"}", "values": "0+10x8"},
+        {"series": "rnet_game_heartbeat_rtt_us{job=\"rnet-game\",instance=\"a\",runtime=\"two\",quantile=\"0.99\"}", "values": "200000+0x8"},
+        {"series": "rnet_game_heartbeat_rtt_samples_total{job=\"rnet-game\",instance=\"a\",runtime=\"two\"}", "values": "0+0x8"},
+        {"series": "rnet_game_heartbeat_rtt_us{job=\"rnet-game\",instance=\"b\",runtime=\"one\",quantile=\"0.99\"}", "values": "200000+0x8"},
+        {"series": "rnet_game_heartbeat_rtt_samples_total{job=\"rnet-game\",instance=\"b\",runtime=\"one\"}", "values": "0+0x8"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "7m", "alertname": "RNetHeartbeatHistoricalTail", "exp_alerts": [
+          {"exp_labels": {"job": "rnet-game", "instance": "a", "runtime": "one", "quantile": "0.99", "severity": "warning"}, "exp_annotations": {"summary": "Lifetime heartbeat P99 is high with recent samples; not a window SLO"}}
+        ]}
+      ]
+    },
+    {
+      "name": "scrape down missing facade and disappearing target are separate failures",
+      "interval": "1m",
+      "input_series": [
+        {"series": "up{job=\"rnet-game\",instance=\"down\"}", "values": "0+0x6"},
+        {"series": "up{job=\"rnet-game\",instance=\"wrong-handler\"}", "values": "1+0x6"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "3m", "alertname": "RNetScrapeDown", "exp_alerts": [
+          {"exp_labels": {"job": "rnet-game", "instance": "down", "severity": "critical"}, "exp_annotations": {"summary": "Configured game metrics target cannot be scraped"}}
+        ]},
+        {"eval_time": "3m", "alertname": "RNetMetricsMissing", "exp_alerts": [
+          {"exp_labels": {"job": "rnet-game", "instance": "wrong-handler", "severity": "critical"}, "exp_annotations": {"summary": "Scrape succeeded but game facade metrics are absent"}}
+        ]}
+      ]
+    },
+    {
+      "name": "no registered targets is not a healthy empty result",
+      "interval": "1m",
+      "input_series": [],
+      "alert_rule_test": [
+        {"eval_time": "3m", "alertname": "RNetNoTargets", "exp_alerts": [
+          {"exp_labels": {"job": "rnet-game", "severity": "critical"}, "exp_annotations": {"summary": "No game metrics targets remain in discovery"}}
+        ]}
+      ]
+    }
+  ]
+}

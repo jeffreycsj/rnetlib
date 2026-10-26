@@ -20,6 +20,11 @@ cmp "${original_package}/SHA256SUMS" "${package_dir}/SHA256SUMS"
 "${PYTHON:-python3}" -B scripts/package_evidence.py verify --package "${package_dir}"
 test -x "${package_dir}/bin/game_soak"
 test -x "${package_dir}/bin/game_probe"
+(
+  cd "${package_dir}/examples/operations"
+  "${PROMTOOL:-promtool}" check config prometheus.example.json
+  "${PROMTOOL:-promtool}" test rules alerts.test.json outcomes.test.json
+)
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -I"${package_dir}/include" \
   "${package_dir}/examples/c/game_echo.c" "${package_dir}/lib/librnet.a" \
   -lpthread -ldl -lm -o "${test_dir}/c-echo"
