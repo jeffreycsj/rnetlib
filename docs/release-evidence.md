@@ -30,6 +30,16 @@ missing tools are failed/blocked gates, never silently skipped. `DOTNET` can sel
 an SDK outside PATH. `--timeout` is a positive per-gate deadline (default 3600 s).
 The suite still consists of short repository checks, not a long fuzz campaign.
 
+`dependency-check` audits both the root and independent fuzz lockfiles. Advisory warnings
+are failures, including informational safety advisories; `cargo deny` applies the same
+repository policy to both dependency graphs with `--locked`, so qualification cannot
+silently re-resolve them. Policy-permitted duplicate-version warnings remain visible.
+Any failed check stops this gate. This covers the fuzz harness dependencies as well as
+the shipped library; it does not constitute an independent dependency security audit.
+The approved NCSA exception is restricted to fuzz-only `libfuzzer-sys = 0.4.13`;
+upgrading it requires renewed license review. NCSA is not globally allowed, and
+the exception does not relax advisory checks.
+
 Provision a trusted `promtool` too (`PROMTOOL` selects its path). `make check` now runs
 offline operations-rule checks, including counter reset, absent samples, target failure
 and per-runtime matching. Packaging ships these rules; package-smoke validates the actual

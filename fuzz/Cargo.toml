@@ -3,6 +3,7 @@ name = "rnet-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
+license = "MIT"
 
 [package.metadata]
 cargo-fuzz = true
@@ -10,10 +11,10 @@ cargo-fuzz = true
 [dependencies]
 bytes = "1.10.1"
 libfuzzer-sys = "0.4"
-rnet-protocol = { path = "../crates/rnet-protocol" }
-rnet = { package = "rnet-ffi", path = "../crates/rnet-ffi" }
-rnet-transport = { path = "../crates/rnet-transport", features = ["fuzzing"] }
-rnet-game = { path = "../crates/rnet-game", features = ["fuzzing"] }
+rnet-protocol = { version = "0.1.0", path = "../crates/rnet-protocol" }
+rnet = { version = "0.1.0", package = "rnet-ffi", path = "../crates/rnet-ffi" }
+rnet-transport = { version = "0.1.0", path = "../crates/rnet-transport", features = ["fuzzing"] }
+rnet-game = { version = "0.1.0", path = "../crates/rnet-game", features = ["fuzzing"] }
 
 [[bin]]
 name = "frame_parser"

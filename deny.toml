@@ -15,6 +15,12 @@ confidence-threshold = 0.8
 name = "cbindgen"
 allow = ["MPL-2.0"]
 
+# Fuzz-only dependency; upgrading it requires a new license-policy review.
+[[licenses.exceptions]]
+name = "libfuzzer-sys"
+version = "=0.4.13"
+allow = ["NCSA"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

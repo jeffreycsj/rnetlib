@@ -135,8 +135,10 @@ msrv-check:
 	cargo +$(RNET_MSRV) check --workspace --all-targets --locked
 
 dependency-check:
-	cargo audit
-	cargo deny check
+	cargo audit --deny warnings
+	cargo deny --locked check
+	cargo audit --file fuzz/Cargo.lock --deny warnings
+	cargo deny --manifest-path fuzz/Cargo.toml --locked --config deny.toml check
 
 package-smoke:
 	bash scripts/test-package.sh
