@@ -15,6 +15,11 @@
 - The adapter has deterministic loss/reordering recovery coverage. End-to-end KCP additionally passes Noise handshake, explicit application authorization, 4096-byte message transfer, and shutdown tests.
 - Each connection negotiates a random nonzero conversation in the authenticated-cookie preflight. RNet rejects stale conversations and impossible future/older-than-60-second ACK timestamps before they enter the dependency; saved fuzz input and signed-wrap boundary regressions cover both cases.
 - KCP alone is built with wrapping arithmetic because its sequence calculations require modulo-2^32 behavior; overflow checks remain enabled for RNet workspace code.
+- The fuzz workspace explicitly enables release-profile debug assertions and overflow checks,
+  with only KCP exempted from overflow checks. This matches cargo-fuzz's compiler flags so
+  Cargo emits the KCP override; relying on implicit release defaults can accidentally enable
+  checked subtraction in KCP's serial comparisons. The 2026-10-26 ASan gate exposed this
+  configuration mismatch, and replaying its saved input after the profile fix succeeded.
 - Residual qualification gaps are long-duration sanitizer/fuzz campaigns, broad `tc netem`
   matrices, independent dependency review, and production tuning against target latency/bandwidth
   profiles. Short ASan campaigns exercise all six fuzz boundaries, while Miri covers the pure core
@@ -24,7 +29,22 @@
 
 - The workspace declares Rust 1.85 as its MSRV, and CI pins 1.85.0 for a locked, all-target compilation gate.
 - The final local production gate recorded in the qualification reports used TencentOS Rust 1.96.0. Formatting and Clippy do not replace the system compiler or PATH.
-- The latest dependency gate scanned 104 locked packages, including the optional test-only Loom graph, with `cargo audit` and reported no advisory. `cargo deny check` passed advisories, licenses, bans, and sources; duplicate-version warnings remain explicitly visible.
+- The historical dependency gate scanned 104 locked packages; that result does not qualify later lockfiles. Current checks and their source fingerprints must be recorded separately.
+
+## Tokio safety update (2026-10-26)
+
+The fresh dependency gate rejected Tokio 1.53.1 under
+[RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386.html).
+The advisory concerns I/O ownership in the Unix `AsyncFd` constructors and a possible
+use-after-free. No direct use of these constructors was found in RNet; this is not evidence
+of an exploitable RNet packet path, nor a reason to waive a dependency safety advisory.
+
+The workspace minimum and both the application and fuzz lockfiles now use Tokio 1.53.3,
+a patched version. Raising the manifest minimum also prevents downstream Cargo consumers
+from selecting the older affected versions when they do not use this repository's lockfile.
+No advisory ignore entry or security-policy relaxation was added. Keep the original failed
+gate as evidence and rerun compilation, transport/SDK tests and specialist gates against
+the updated source. This dependency change is not target-environment certification.
 
 The exact repository results, sanitizer/Miri scope, short transport probe, and final external gates
 are recorded in [game-production-qualification.md](game-production-qualification.md).

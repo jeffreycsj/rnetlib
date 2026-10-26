@@ -60,7 +60,13 @@ bench = false
 [workspace]
 members = ["."]
 
-# cargo-fuzz is a separate workspace and enables overflow checks in its release profile.
-# KCP serial comparisons intentionally use C-compatible modulo-2^32 arithmetic.
+# Match cargo-fuzz's debug assertions explicitly so Cargo emits the per-package
+# overflow override instead of assuming release defaults before RUSTFLAGS are applied.
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+# KCP serial comparisons intentionally use C-compatible modulo-2^32 arithmetic;
+# RNet and the remaining dependencies retain checked arithmetic under ASan.
 [profile.release.package.kcp]
 overflow-checks = false

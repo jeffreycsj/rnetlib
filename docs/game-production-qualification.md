@@ -2,13 +2,13 @@
 
 This record separates repository qualification from target-environment certification.
 
-## Current release status (2026-10-14)
+## Current release status (2026-10-26)
 
-**Candidate, not certified; code migration implemented, release qualification incomplete.** The historical results below were recorded
-on a dirty 2026-09-23 development tree. They do not qualify the current HEAD or subsequent local
-changes. In particular, the later current-ABI, opaque-send, secure-default and plaintext-error
-changes do not inherit those ASan, Miri, Loom, Go race or packaged-binary results. See the
-[incremental migration record](single-current-api.md) for the narrower checks actually rerun.
+**Candidate, not certified; all nine local repository gates passed on the development snapshot
+identified below, but clean-release and target-environment qualification remain incomplete.**
+The fresh results do not turn the historical 2026-09-23 evidence into current evidence, nor
+qualify subsequent source changes. See the [incremental migration record](single-current-api.md)
+for earlier, narrower checks.
 
 Final qualification must reference one clean release commit and its exact native/SDK package
 hashes. Old-endpoint removal, single-wire game negotiation, public exact/range API consolidation
@@ -20,6 +20,44 @@ independent audit of snow, ring or their Noise/KCP integration.
 Linux guard-page ABI checks do not qualify other operating systems. Managed integration evidence
 is limited to Linux x86_64 / .NET 8, not Windows, macOS, Unity/IL2CPP or mobile. Target capacity and
 long-term stability remain unmeasured; short loopback probes are not substitutes.
+
+## Development verification (2026-10-26)
+
+The serial suite `pre-soak-20261026-candidate` passed `check`, `go-race`, `msrv`,
+`fuzz-build`, `fuzz-asan`, `miri`, `supply-chain`, `package` and `package-smoke`.
+`check` includes strict Clippy, workspace/doc tests, Loom, ABI, C, C++11, Go and
+C# integration, generated-header consistency and monitoring-rule tests. ASan ran all
+six targets for ten seconds each with a 2 GiB RSS limit; no local leak-check override
+was applied. Miri covered only `rnet-core` and `rnet-protocol`. MSRV used Rust 1.85.0.
+These are bounded local checks, not a long fuzz campaign or capacity measurement.
+
+The dependency gate first rejected Tokio 1.53.1 under RUSTSEC-2026-0386. Both lockfiles
+and the manifest minimum were updated to patched 1.53.3 without an advisory waiver.
+ASan then exposed a fuzz-profile mismatch in KCP's wrapping subtraction; explicit
+profile defaults restored the existing KCP-only exception while retaining checks for
+RNet. The saved failing input replayed successfully, followed by the full six-target pass.
+Fresh audit scanned 128 root-lock dependencies; an additional
+`cargo audit --file fuzz/Cargo.lock --deny warnings` scanned 115 fuzz-lock dependencies
+without warnings. Duplicate-version warnings from `cargo deny` remain visible.
+
+Every gate recorded the same before/after source fingerprint and revision:
+
+- Revision: `b05e93a8a7d9c9b187be94e86eacb3992845e7f0`, with local modifications.
+- Source input SHA256: `ffca1d3fbcae4f1e2bb71aecec6dccc6f25a71b7b7539c4cd7912dcdeea318fc`.
+- Root lockfile SHA256: `dcb9a9f33bc9e3ae9b4db79748b779982cf9073f9c40e4a320f56d281591a9be`.
+- Linux x86_64 archive SHA256: `7b382703a2f6f7308ab7663486dda19e41cf950ceca4cc40848faae0d30ec8b1`.
+- Package manifest SHA256: `fbd4aefefd2b1ea38a9d947ae486d8262b800c93907f30605ed3202509d9ab3f`.
+
+Package smoke exercised the actual extracted archive, including its independent probe,
+monitoring examples and multilanguage SDK. Local reports/logs reside under
+`target/release-evidence/pre-soak-20261026-candidate/`; the original audit/fuzz failures
+remain in separate earlier records. These ignored local files are not a permanent CI archive.
+The suite summary is deliberately `incomplete` because the tested tree was dirty, not
+because any of its nine gate commands failed. This qualification entry was written after
+the suite and is not part of the fingerprint or packaged documentation above.
+
+No target-machine weak-network matrix, 24–72 hour soak, independent security audit,
+remote CI run, production deployment or release commit was performed in this increment.
 
 ## Historical evidence (not current-HEAD qualification)
 
