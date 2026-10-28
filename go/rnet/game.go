@@ -366,7 +366,7 @@ func (r *GameRuntime) PrometheusSnapshot() (string, error) {
 	if raw.token != 0 {
 		defer C.rnet_game_buffer_release(handle, raw.token)
 	}
-	bytes, err := gameCopyBytes(raw.data, raw.len)
+	bytes, err := copyNativeBytes(raw.data, raw.len)
 	if err != nil {
 		return "", err
 	}
@@ -428,11 +428,11 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 	result = make([]GameEvent, 0, count)
 	for i := 0; i < int(count); i++ {
 		source := native[i]
-		data, copyErr := gameCopyBytes(source.data, source.data_len)
+		data, copyErr := copyNativeBytes(source.data, source.data_len)
 		if copyErr != nil {
 			return nil, copyErr
 		}
-		aux, copyErr := gameCopyBytes(source.aux_data, source.aux_data_len)
+		aux, copyErr := copyNativeBytes(source.aux_data, source.aux_data_len)
 		if copyErr != nil {
 			return nil, copyErr
 		}
@@ -455,16 +455,6 @@ func (r *GameRuntime) Poll(capacity int, timeout time.Duration) (result []GameEv
 		result = append(result, event)
 	}
 	return result, nil
-}
-
-func gameCopyBytes(pointer *C.uint8_t, length C.size_t) ([]byte, error) {
-	if length == 0 {
-		return nil, nil
-	}
-	if pointer == nil || uint64(length) > math.MaxInt32 {
-		return nil, fmt.Errorf("rnet: invalid game event buffer")
-	}
-	return C.GoBytes(unsafe.Pointer(pointer), C.int(length)), nil
 }
 
 // Stop requests native shutdown without destroying this wrapper. Already stopped/closed is a no-op.

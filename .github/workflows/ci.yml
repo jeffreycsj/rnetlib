@@ -17,8 +17,21 @@ jobs:
 
   linux:
     runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: "1"
+      RUST_TEST_THREADS: "1"
+      RNET_REQUIRE_RESOURCE_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Require resource-qualified runner before building
+        run: |
+          python3 -B - <<'PY'
+          import sys
+          sys.path.insert(0, "scripts")
+          from release_evidence import memory_available, START_AVAILABLE
+          if memory_available() < START_AVAILABLE:
+              raise SystemExit("CI requires 19 GiB available memory (15 GiB reserve + 4 GiB build headroom); configure a suitable runner")
+          PY
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: stable
@@ -55,9 +68,9 @@ jobs:
       - run: make csharp-test
       - run: make abi-check
       - run: make package
-      - run: cd dist/linux-x86_64 && CGO_ENABLED=1 go run -buildvcs=false -a -p 1 ./examples/go/game_quickstart tcp --one-slot
+      # Extract the archive and final-link all language examples before upload.
+      - run: make package-smoke
       - run: LD_LIBRARY_PATH="$PWD/dist/linux-x86_64/lib" dotnet run --project dist/linux-x86_64/csharp/RNet.Smoke -c Release -p:RNetDll="$PWD/dist/linux-x86_64/lib/RNet.dll"
-      - run: LD_LIBRARY_PATH="$PWD/dist/linux-x86_64/lib" dotnet run --project dist/linux-x86_64/csharp/RNet.Quickstart -c Release -p:RNetDll="$PWD/dist/linux-x86_64/lib/RNet.dll" -- tcp --one-slot
       - name: Archive development SDK package (not full release qualification)
         uses: actions/upload-artifact@v4
         with:

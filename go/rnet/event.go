@@ -7,6 +7,7 @@ import "C"
 
 import (
 	"fmt"
+	"math"
 	"time"
 	"unsafe"
 )
@@ -79,7 +80,9 @@ func (e Event) SecurityChange() (SecurityChange, error) {
 // Negative capacity is invalid; zero validates the runtime but returns no events.
 // timeout is an idle wait, truncated to milliseconds and clamped to [0, MaxUint32],
 // not a total-call deadline. Prefer one event consumer to preserve application order.
-func (r *Runtime) Poll(capacity int, timeout time.Duration) ([]Event, error) {
+// Invalid native buffers (including lengths above MaxInt32) return an error;
+// all exported tokens are released even if polling or copying fails.
+func (r *Runtime) Poll(capacity int, timeout time.Duration) (result []Event, err error) {
 	defer lockNativeThread()()
 	handle, err := r.handleValue()
 	if err != nil {
@@ -101,7 +104,22 @@ func (r *Runtime) Poll(capacity int, timeout time.Duration) ([]Event, error) {
 		timeoutMS = int64(^uint32(0))
 	}
 	var count C.size_t
-	if err := statusError(C.rnet_poll_events(handle, &native[0], C.size_t(capacity), C.uint32_t(timeoutMS), &count)); err != nil {
+	err = statusError(C.rnet_poll_events(handle, &native[0], C.size_t(capacity), C.uint32_t(timeoutMS), &count))
+	// A failed native poll may still export a prefix. Capture its thread-local
+	// diagnostic before release calls replace it, and never abandon later tokens.
+	defer func() {
+		for i := 0; i < int(count); i++ {
+			if token := native[i].buffer_token; token != 0 {
+				if releaseErr := statusError(C.rnet_buffer_release(handle, token)); err == nil {
+					err = releaseErr
+				}
+			}
+		}
+		if err != nil {
+			result = nil
+		}
+	}()
+	if err != nil {
 		return nil, err
 	}
 	events := make([]Event, 0, count)
@@ -114,15 +132,24 @@ func (r *Runtime) Poll(capacity int, timeout time.Duration) ([]Event, error) {
 			CorrelationID: uint64(source.correlation_id),
 			Status:        int32(source.status),
 		}
-		if source.data_len != 0 {
-			event.Data = C.GoBytes(unsafe.Pointer(source.data), C.int(source.data_len))
+		data, copyErr := copyNativeBytes(source.data, source.data_len)
+		if copyErr != nil {
+			return nil, copyErr
 		}
-		if source.buffer_token != 0 {
-			if err := statusError(C.rnet_buffer_release(handle, source.buffer_token)); err != nil {
-				return nil, err
-			}
-		}
+		event.Data = data
 		events = append(events, event)
 	}
 	return events, nil
+}
+
+// C.GoBytes accepts a signed C int, not size_t. Validate before narrowing so
+// malformed or oversized native buffers cannot panic or silently truncate.
+func copyNativeBytes(pointer *C.uint8_t, length C.size_t) ([]byte, error) {
+	if length == 0 {
+		return nil, nil
+	}
+	if pointer == nil || uint64(length) > math.MaxInt32 {
+		return nil, fmt.Errorf("rnet: invalid native buffer")
+	}
+	return C.GoBytes(unsafe.Pointer(pointer), C.int(length)), nil
 }

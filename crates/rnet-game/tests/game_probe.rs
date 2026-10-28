@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 #[path = "game_probe/faults.rs"]
 mod faults;
 
+#[path = "support/resource_skip.rs"]
+mod resource_skip;
+
 fn binary() -> PathBuf {
     std::env::var_os("RNET_GAME_PROBE_BINARY")
         .map(PathBuf::from)
@@ -137,7 +140,7 @@ fn resources_available() -> bool {
         .parse::<u64>()
         .unwrap();
     if available < 19 * 1024 * 1024 {
-        eprintln!("SKIPPED game probe smoke: startup needs 19 GiB available");
+        resource_skip::report("SKIPPED game probe smoke: startup needs 19 GiB available");
         return false;
     }
     true

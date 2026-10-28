@@ -1,5 +1,8 @@
 use std::process::Command;
 
+#[path = "support/resource_skip.rs"]
+mod resource_skip;
+
 const MIN_AVAILABLE_KIB: u64 = 15 * 1024 * 1024;
 
 fn available_memory_kib() -> Option<u64> {
@@ -46,9 +49,9 @@ fn game_soak_smoke_covers_all_transports_when_memory_available() {
     // The probe's memory floor protects the machine. On a smaller CI runner this smoke test
     // has no valid execution environment; resource rejection is not a network failure.
     if let Some(available) = available_memory_kib().filter(|value| *value < MIN_AVAILABLE_KIB) {
-        eprintln!(
+        resource_skip::report(&format!(
             "SKIPPED game soak smoke: MemAvailable {available} KiB is below the 15 GiB guard"
-        );
+        ));
         return;
     }
     for transport in ["tcp", "udp", "kcp"] {
@@ -59,7 +62,9 @@ fn game_soak_smoke_covers_all_transports_when_memory_available() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !output.status.success() && is_memory_guard_refusal(&stderr) {
-            eprintln!("SKIPPED remaining game soak smoke: {transport} hit the 15 GiB guard");
+            resource_skip::report(&format!(
+                "SKIPPED remaining game soak smoke: {transport} hit the 15 GiB guard"
+            ));
             return;
         }
         assert!(

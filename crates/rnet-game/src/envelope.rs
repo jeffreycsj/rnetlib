@@ -123,13 +123,20 @@ pub(crate) fn decode(input: &[u8], maximum_len: usize) -> Result<DecodedEnvelope
         return Err(protocol_error("game envelope contains unsupported flags"));
     }
     let header_len = usize::from(u16::from_be_bytes([input[2], input[3]]));
-    if !(HEADER_LEN..=input.len()).contains(&header_len) {
+    // The current wire has exactly one optional extension. Unknown header bytes
+    // must not be silently discarded before the application payload is exposed.
+    let expected_header_len = if flags & HAS_DATAGRAM_SEQUENCE != 0 {
+        HEADER_LEN + 4
+    } else {
+        HEADER_LEN
+    };
+    if header_len != expected_header_len || header_len > input.len() {
         return Err(protocol_error("game envelope header length is invalid"));
     }
     let sequence = u32::from_be_bytes(input[4..8].try_into().expect("fixed sequence field"));
     let tick = u32::from_be_bytes(input[8..12].try_into().expect("fixed tick field"));
     let datagram_sequence = if flags & HAS_DATAGRAM_SEQUENCE != 0 {
-        if header_len < HEADER_LEN + 4 || kind != APPLICATION {
+        if kind != APPLICATION {
             return Err(protocol_error("UDP sequence extension is invalid"));
         }
         Some(u32::from_be_bytes(

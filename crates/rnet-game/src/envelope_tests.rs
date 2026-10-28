@@ -107,6 +107,42 @@ fn malformed_or_unsupported_envelopes_are_rejected_before_payload_access() {
 }
 
 #[test]
+fn unknown_header_bytes_are_rejected_even_when_the_frame_contains_them() {
+    for payload in [b"".as_slice(), b"payload".as_slice()] {
+        let mut frames = vec![
+            encode_application(payload, None, None, 1024).unwrap(),
+            encode_udp_application(payload, None, None, 7, 1024).unwrap(),
+        ];
+        for kind in [
+            ControlKind::Heartbeat,
+            ControlKind::ClockSync,
+            ControlKind::Resume,
+            ControlKind::Protocol,
+        ] {
+            frames.push(encode_control(kind, payload, 1024).unwrap());
+        }
+        for frame in frames {
+            assert!(
+                decode(&frame, 1024).is_ok(),
+                "canonical header must remain valid"
+            );
+            let header_len = usize::from(u16::from_be_bytes([frame[2], frame[3]]));
+            for extra in [1, 4] {
+                let mut extended = frame.to_vec();
+                extended.splice(header_len..header_len, vec![0xab; extra]);
+                extended[2..4].copy_from_slice(&((header_len + extra) as u16).to_be_bytes());
+                assert_eq!(
+                    decode(&extended, 1024)
+                        .expect_err("unknown header extension")
+                        .code(),
+                    ErrorCode::ProtocolError
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn configured_length_limit_is_enforced_on_encode_and_decode() {
     assert_eq!(
         encode_application(b"too large", None, None, HEADER_LEN)

@@ -98,14 +98,26 @@ using cargo-audit 0.22.2 and cargo-deny 0.20.2 with locked installation dependen
 It checks both graphs and propagates failures, rather than maintaining separate
 action defaults that may omit the fuzz workspace. It does not replace the full suite.
 
+The ordinary Linux SDK job requires 19 GiB available before building and sets
+`RNET_REQUIRE_RESOURCE_TESTS=1`. Probe/soak resource refusals then fail the test,
+including pressure detected after startup, rather than returning a passing skip.
+This flag is inherited by packaged probe tests too. Insufficient runner memory
+blocks SDK upload; provision an appropriate runner separately instead of lowering
+the reserve. Local developers may omit the flag to retain explicit resource skips;
+the qualification supervisor still rejects those skip markers.
+
 The manual `release-qualification` workflow uses a **pre-provisioned**, dedicated
 self-hosted runner labeled `rnet-qualification`, with Linux/X64 labels. It does not
 create a machine, install system software, publish a release or run target soak.
 Only dispatch trusted commits on this runner; do not execute untrusted PR code.
 It archives evidence even after failure; packages are uploaded only on success.
 Keep durable release records beyond the workflow artifact retention period.
+The [manual Release archive design](../specs/release-evidence-archive/spec.md) is
+pending approval and implementation; it is not an active long-term archive yet.
 
-Existing CI additionally archives its package after successful package checks.
+Existing CI additionally runs `make package-smoke` after packaging and before
+uploading its development SDK. This checks the actual archive and the shipped
+C/C++11/Go/C# examples for TCP/UDP/KCP, not just the build-tree library.
 It is not represented as a complete evidence suite. Artifact upload follows the
 [official action interface](https://github.com/actions/upload-artifact/tree/v4).
 
