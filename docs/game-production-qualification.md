@@ -2,7 +2,7 @@
 
 This record separates repository qualification from target-environment certification.
 
-## Current release status (2026-10-26)
+## Current release status (2026-10-28)
 
 **Candidate, not certified; all nine local repository gates passed on the development snapshot
 identified below, but clean-release and target-environment qualification remain incomplete.**
@@ -21,7 +21,45 @@ Linux guard-page ABI checks do not qualify other operating systems. Managed inte
 is limited to Linux x86_64 / .NET 8, not Windows, macOS, Unity/IL2CPP or mobile. Target capacity and
 long-term stability remain unmeasured; short loopback probes are not substitutes.
 
-## Development verification (2026-10-26)
+## Development verification (2026-10-28): external Rust KCP consumers
+
+The serial suite `rust-consumer-kcp-20261028` passed all nine gates: `check`,
+`go-race`, `msrv`, `fuzz-build`, `fuzz-asan`, `miri`, `supply-chain`, `package`,
+and `package-smoke`. These are fresh checks after replacing the profile-dependent
+upstream KCP with an isolated, explicitly wrapping direct dependency. Public API,
+ABI and wire remain unchanged. The upstream MIT license/provenance ship in the SDK.
+
+`check` now includes a genuinely independent Rust consumer workspace in default test
+and checked release builds. Additional KCP tests cover signed/unsigned clock and
+sequence rollover, selective ACK, fragmentation, loss, retransmission and queue drain.
+The ten all-features KCP tests and fifty script tests passed. Optional KCP features
+also passed strict Clippy and Rust 1.85 checks separately before the full suite.
+Six ASan targets ran ten-second campaigns with a 2 GiB RSS limit and no leak-check
+override. Miri remains limited to core/protocol. Both dependency graphs and the
+original vendored `kcp 0.6.0` identity were audited; existing duplicate-version
+warnings remain visible. No security advisory or additional license waiver was added.
+
+All nine gates have identical before/after source identities:
+
+- Revision: `7c118895301f9b7d124de1682f757cdb0600834b`, with local modifications.
+- Source SHA256: `0f491ffd52f9a1d9abc1b9ec459534ae58be72b10021b22c1858ee9fb10da7a5`.
+- Root lock SHA256: `3919f5fc1b1b16deb95e310dc75e45c72d6eb7b712c69a4a8b3e943c601fda69`.
+- Linux x86_64 archive SHA256: `230e69929c2906d42e9258192c8936d7232a350058f8429f7f2cb2483b8e221c`.
+- Package manifest SHA256: `123015b0b7aaaf6f3a6493d9c59b5f4061f93ae4103d511b83d3f7139a7f2926`.
+
+Reports and logs: `target/release-evidence/rust-consumer-kcp-20261028/` (local ignored
+outputs, not permanent CI evidence). The suite intentionally returns `incomplete`
+because the snapshot is dirty; no gate command failed and no source changed during
+the suite. This qualification entry and final spec/review notes were written afterwards
+and are not in the tested fingerprint or packaged documentation. No code, test or
+build configuration was changed after the suite. The previous generated SDK was
+preserved at `/tmp/rnet-kcp-package-backup.adtRbz` before rebuilding the candidate.
+
+No commit/push, remote CI, deployment, target long soak/weak-network matrix or
+independent third-party security audit was performed. The earlier profile workaround
+described below is historical and has been removed from both workspaces.
+
+## Historical development verification (2026-10-26)
 
 The serial suite `pre-soak-20261026-candidate` passed `check`, `go-race`, `msrv`,
 `fuzz-build`, `fuzz-asan`, `miri`, `supply-chain`, `package` and `package-smoke`.

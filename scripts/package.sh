@@ -64,6 +64,9 @@ install -m 0644 docs/game-networking.md "${destination}/docs/game-networking.md"
 install -m 0644 docs/production-deployment.md "${destination}/docs/production-deployment.md"
 install -m 0644 docs/single-current-api.md "${destination}/docs/single-current-api.md"
 install -m 0644 Cargo.lock LICENSE README.md SECURITY.md go.mod "${destination}/"
+mkdir -p "${destination}/licenses/rnet-kcp"
+install -m 0644 vendor/rnet-kcp/LICENSE vendor/rnet-kcp/UPSTREAM.md \
+  vendor/rnet-kcp/upstream.Cargo.lock "${destination}/licenses/rnet-kcp/"
 
 "${PYTHON:-python3}" -B scripts/package_evidence.py seal \
   --before "${provenance_dir}/source.json" --package "${destination}"

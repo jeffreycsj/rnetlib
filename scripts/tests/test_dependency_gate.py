@@ -12,6 +12,7 @@ CHECKS = [
     "deny --locked check",
     "audit --file fuzz/Cargo.lock --deny warnings",
     "deny --manifest-path fuzz/Cargo.toml --locked --config deny.toml check",
+    "audit --file vendor/rnet-kcp/upstream.Cargo.lock --deny warnings",
 ]
 
 

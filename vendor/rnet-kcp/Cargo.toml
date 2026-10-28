@@ -1,0 +1,18 @@
+[package]
+name = "rnet-kcp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "RNet's arithmetic-hardened fork of kcp 0.6.0"
+publish = false
+
+[dependencies]
+bytes = "1.10.1"
+log = "0.4"
+thiserror = "2.0.16"
+tokio = { version = "1", features = ["io-util"], optional = true }
+
+[features]
+fastack-conserve = []
+tokio = ["dep:tokio"]

@@ -361,17 +361,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "kcp"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9be8f8058681ab8b7e4959a1ee88a4446f43b7c787f174d9d1b32ba493737a59"
-dependencies = [
- "bytes",
- "log",
- "thiserror",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -599,6 +588,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rnet-kcp"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "log",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "rnet-observe"
 version = "0.1.0"
 dependencies = [
@@ -631,9 +630,9 @@ name = "rnet-transport"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "kcp",
  "ring",
  "rnet-core",
+ "rnet-kcp",
  "rnet-observe",
  "rnet-protocol",
  "rnet-security",

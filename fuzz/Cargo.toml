@@ -61,13 +61,7 @@ bench = false
 [workspace]
 members = ["."]
 
-# Match cargo-fuzz's debug assertions explicitly so Cargo emits the per-package
-# overflow override instead of assuming release defaults before RUSTFLAGS are applied.
+# Keep all dependencies, including the patched KCP engine, checked under ASan.
 [profile.release]
 debug-assertions = true
 overflow-checks = true
-
-# KCP serial comparisons intentionally use C-compatible modulo-2^32 arithmetic;
-# RNet and the remaining dependencies retain checked arithmetic under ASan.
-[profile.release.package.kcp]
-overflow-checks = false

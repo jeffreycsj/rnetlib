@@ -46,6 +46,7 @@ jobs:
       - run: make doc-check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - run: make rust-consumer-check
       - run: make c-test
       - run: make cpp-test
       - run: make go-test

@@ -11,9 +11,14 @@ RNET_MSRV ?= 1.85.0
 .PHONY: abi-check build check c-test cpp-test csharp-test doc-check native-doc-check fuzz-asan-smoke go-test header-check header-update loom-test miri-test package structure-check test
 .PHONY: dependency-check go-race msrv-check package-smoke
 .PHONY: ops-test
+.PHONY: rust-consumer-check
 
 build: header-check
 	cargo build -p rnet-ffi --release
+
+rust-consumer-check:
+	cargo test --locked -p rnet-kcp --all-features
+	$(PYTHON) -B scripts/check_rust_consumer.py
 
 ops-test:
 	bash scripts/check-operations.sh
@@ -110,6 +115,7 @@ check:
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
 	$(MAKE) loom-test
+	$(MAKE) rust-consumer-check
 	$(MAKE) abi-check
 	$(MAKE) c-test
 	$(MAKE) cpp-test
@@ -139,6 +145,8 @@ dependency-check:
 	cargo deny --locked check
 	cargo audit --file fuzz/Cargo.lock --deny warnings
 	cargo deny --manifest-path fuzz/Cargo.toml --locked --config deny.toml check
+	# Retain vulnerability tracking for the renamed vendored source identity.
+	cargo audit --file vendor/rnet-kcp/upstream.Cargo.lock --deny warnings
 
 package-smoke:
 	bash scripts/test-package.sh

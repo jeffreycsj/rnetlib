@@ -28,6 +28,9 @@ C、Rust、C++11、Go 和 C# 示例演示二进制/空消息、日志注入、�
 其 `--deny` 模式预期失败；示例票据不能用于生产。其他片段不代表已经实现完整业务重试队列。
 所有语言的发送成功都只表示本地入队，不能当作送达；UDP 业务仍可能丢失/重复/乱序。
 
+Rust 调用方不需要为 KCP 关闭整数溢出检查或复制根目录的 Cargo profile / patch。
+`make rust-consumer-check` 会在独立 workspace 验证默认测试构建和开启溢出检查的 release。
+
 Rust 示例可选 tcp/udp/kcp（无参数默认 KCP），`--one-slot` 使用真实单消息预算演示背压，
 `--deny` 必须以 AuthRejected 失败，不能当作运行成功。`cargo test -p rnet-game --example game_quickstart`
 执行边界和联网回归；该测试目标已加入 workspace 测试，不只在文档编译时检查。

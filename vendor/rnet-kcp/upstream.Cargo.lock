@@ -1,0 +1,8 @@
+# Advisory sentinel for the vendored source identity, not a build dependency graph.
+version = 3
+
+[[package]]
+name = "kcp"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9be8f8058681ab8b7e4959a1ee88a4446f43b7c787f174d9d1b32ba493737a59"

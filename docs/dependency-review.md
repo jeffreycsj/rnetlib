@@ -10,16 +10,22 @@
 
 ## KCP
 
-- `kcp = 0.6.0`, MIT, repository `Matrix-Zhang/kcp`, describes itself as a Rust translation of the reference KCP implementation.
+- `rnet-kcp = 0.1.0` is an isolated local fork of `kcp = 0.6.0` (MIT,
+  `Matrix-Zhang/kcp`). [Provenance and patch scope](../vendor/rnet-kcp/UPSTREAM.md)
+  preserve the archive hash and upstream identity. It is a direct dependency,
+  not a root-only Cargo patch, and does not change the RNet API/ABI or wire format.
 - The crate is isolated behind `KcpEngine`; RNet controls MTU 1200, 128/128 windows, 10 ms interval, nodelay, resend 2, and congestion-control disablement.
 - The adapter has deterministic loss/reordering recovery coverage. End-to-end KCP additionally passes Noise handshake, explicit application authorization, 4096-byte message transfer, and shutdown tests.
 - Each connection negotiates a random nonzero conversation in the authenticated-cookie preflight. RNet rejects stale conversations and impossible future/older-than-60-second ACK timestamps before they enter the dependency; saved fuzz input and signed-wrap boundary regressions cover both cases.
-- KCP alone is built with wrapping arithmetic because its sequence calculations require modulo-2^32 behavior; overflow checks remain enabled for RNet workspace code.
-- The fuzz workspace explicitly enables release-profile debug assertions and overflow checks,
-  with only KCP exempted from overflow checks. This matches cargo-fuzz's compiler flags so
-  Cargo emits the KCP override; relying on implicit release defaults can accidentally enable
-  checked subtraction in KCP's serial comparisons. The 2026-10-26 ASan gate exposed this
-  configuration mismatch, and replaying its saved input after the profile fix succeeded.
+- Clock/sequence arithmetic now explicitly wraps; durations, counts and sizes do not.
+  No KCP overflow-check exception remains in either workspace. The earlier profile
+  workaround was insufficient for external Rust consumers, whose root profiles take
+  precedence. `make rust-consumer-check` exercises a genuinely separate workspace
+  in default test and checked release profiles, including loss and fragmentation.
+- `make dependency-check` additionally scans the fork's pinned upstream identity
+  using `vendor/rnet-kcp/upstream.Cargo.lock`. This advisory sentinel is not a full
+  build graph: the main and fuzz scans cover the actual dependency graphs. A local
+  rename does not remove the requirement to track upstream security fixes.
 - Residual qualification gaps are long-duration sanitizer/fuzz campaigns, broad `tc netem`
   matrices, independent dependency review, and production tuning against target latency/bandwidth
   profiles. Short ASan campaigns exercise all six fuzz boundaries, while Miri covers the pure core
