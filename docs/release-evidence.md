@@ -93,6 +93,11 @@ also rejects unlisted files and symlinks; keep example build output outside the 
 
 ## CI and remaining assurance
 
+Ordinary CI's supply-chain job invokes the same `make -j1 dependency-check` gate,
+using cargo-audit 0.22.2 and cargo-deny 0.20.2 with locked installation dependencies.
+It checks both graphs and propagates failures, rather than maintaining separate
+action defaults that may omit the fuzz workspace. It does not replace the full suite.
+
 The manual `release-qualification` workflow uses a **pre-provisioned**, dedicated
 self-hosted runner labeled `rnet-qualification`, with Linux/X64 labels. It does not
 create a machine, install system software, publish a release or run target soak.

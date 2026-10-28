@@ -16,6 +16,18 @@ CHECKS = [
 
 
 class DependencyGateTests(unittest.TestCase):
+    def test_ci_uses_the_same_gate_and_pinned_audit_tools(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        job = re.search(r"(?ms)^  supply-chain:\n(.*?)(?=^  [\w-]+:|\Z)", workflow)
+        self.assertIsNotNone(job)
+        body = job.group(1)
+        self.assertIn("- run: make -j1 dependency-check", body)
+        for tool, version in [("cargo-audit", "0.22.2"), ("cargo-deny", "0.20.2")]:
+            self.assertIn(f"cargo install {tool} --version {version} --locked", body)
+        self.assertNotIn("continue-on-error", body)
+        self.assertNotIn("rustsec/audit-check", body)
+        self.assertNotIn("EmbarkStudios/cargo-deny-action", body)
+
     def test_ncsa_is_only_allowed_for_the_approved_fuzzer_release(self):
         sections = re.split(r"(?m)(?=^\[)", (ROOT / "deny.toml").read_text())
         exceptions = [section for section in sections if '"NCSA"' in section]
