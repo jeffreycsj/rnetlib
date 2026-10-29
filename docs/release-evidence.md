@@ -112,8 +112,10 @@ create a machine, install system software, publish a release or run target soak.
 Only dispatch trusted commits on this runner; do not execute untrusted PR code.
 It archives evidence even after failure; packages are uploaded only on success.
 Keep durable release records beyond the workflow artifact retention period.
-The [manual Release archive design](../specs/release-evidence-archive/spec.md) is
-pending approval and implementation; it is not an active long-term archive yet.
+The manual Release archive design (`specs/release-evidence-archive/spec.md` in the
+source checkout) is being implemented. The offline preparation and verification
+stage below is available; GitHub origin checks, approval and publishing are not
+implemented or enabled yet. It is not an active long-term archive service.
 
 Existing CI additionally runs `make package-smoke` after packaging and before
 uploading its development SDK. This checks the actual archive and the shipped
@@ -126,3 +128,68 @@ mid-run, reused compiler caches, or a compromised host. Release infrastructure
 must provide an isolated trusted checkout and controlled toolchains. A clean
 repository-gate result still needs the documented independent review, real game
 integration, target weak-network matrix and final 24–72 hour soak.
+
+## Prepare and recheck offline Release attachments
+
+Run these source-checkout tools on a resource-qualified machine as described above.
+They never contact GitHub, create tags, request permissions, execute downloaded SDK
+code or publish anything. Successful verification means **offline consistency only**,
+not authenticated origin, human approval or production qualification.
+
+Provide a separate operator-owned identity JSON file with these string fields:
+
+| Field | Meaning |
+| --- | --- |
+| `repository` | Expected GitHub `owner/repository`. |
+| `commit` | Full lowercase 40-hex qualified source SHA, not a branch name. |
+| `tag` | Existing candidate tag; restricted to a conservative Git-ref character subset. |
+| `tag_commit` | Full commit SHA obtained by resolving that tag; must equal `commit`. |
+| `run_id` | Positive decimal GitHub qualification run ID. |
+| `attempt` | Positive decimal attempt; the reports must contain `run_id-attempt`. |
+| `validator_revision` | Full 40-hex trusted validator revision; never a script downloaded from evidence. |
+
+Do not derive expected identity from the bundle under test. The CLI only checks
+these supplied values for syntax and consistency; it cannot establish that a real
+GitHub run, tag or reviewer matches them. The future publisher must obtain those
+facts from trusted hosting metadata. Arbitrary local UUID run IDs are not accepted
+as GitHub qualification runs.
+
+With all nine gates passed on one clean source and one run/attempt, run:
+
+```sh
+# Replace these example paths with the exact qualified artifacts and identity file.
+# The SDK checksum must be adjacent: linux-x86_64.tar.gz.sha256.
+python3 -B scripts/release_archive.py prepare \
+  --identity /operator/expected-identity.json \
+  --evidence target/release-evidence/123456-1 \
+  --sdk dist/linux-x86_64.tar.gz \
+  --output target/release-archive/candidate-001
+
+# Does not need the original evidence directory or SDK build tree.
+python3 -B scripts/release_archive.py verify \
+  --identity /operator/expected-identity.json \
+  --archive-dir target/release-archive/candidate-001
+```
+
+The five output files are the unchanged SDK archive and checksum, deterministic
+`evidence.tar.gz` and its checksum, and `archive-manifest.json` binding their sizes,
+hashes, source and expected identity. Original reports, logs and environment records
+are preserved byte-for-byte, including historical paths. Verification opens only
+fixed relative paths and recomputes the gate and inner SDK manifest checks; a
+summary claiming `passed` is insufficient. Missing gates, unexpected files, resource
+skip markers and inconsistent build/smoke package records fail closed.
+
+Inputs and scratch directories must be caller-owned and free of concurrent writers.
+Preparation snapshots inputs, verifies them and writes the manifest last to a new
+output directory. Existing outputs are never overwritten. Filesystem errors during
+the final copy may leave incomplete output; verify rejects it, and retry must use a
+fresh path. The CLI returns nonzero on failure, not a partial success report.
+
+Current bounds: 10,000 entries, 256 MiB per regular file, 1 GiB total inventory or
+expanded tar stream (including headers/padding), and 1 MiB per JSON object file.
+Extraction rejects links, devices, sparse/PAX metadata, noncanonical paths and
+duplicate entries; permissions/ownership from archives are not restored. These
+limits are deliberate, not silently relaxed for large inputs. Keep adequate scratch
+disk space and the 15 GiB memory reserve. Review logs for secrets before any future
+publication. Hashes are unsigned and do not prevent an attacker forging an entirely
+self-consistent set; origin validation and approval remain mandatory next steps.
