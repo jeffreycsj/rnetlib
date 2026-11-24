@@ -103,7 +103,19 @@ The ordinary Linux SDK job requires 19 GiB available before building and sets
 including pressure detected after startup, rather than returning a passing skip.
 This flag is inherited by packaged probe tests too. Insufficient runner memory
 blocks SDK upload; provision an appropriate runner separately instead of lowering
-the reserve. Local developers may omit the flag to retain explicit resource skips;
+the reserve. The `linux` job selects `vars.RNET_LINUX_RUNNER`, falling back to
+`ubuntu-latest` when unset. Set that repository Actions variable to the exact label
+of an already provisioned Linux x86_64 runner with at least 19 GiB **available**
+memory (installed RAM alone is insufficient). No machine or paid capacity is
+provisioned by this setting. The preflight prints measured available memory and
+fails before toolchain setup/build/package upload if it is insufficient. Without
+a qualified runner, this CI job remains failing by design.
+
+This workflow runs pull-request code, so a custom runner must be isolated for
+untrusted CI workloads; do not point it at the trusted release-qualification host.
+The current CI checkout/setup-go actions use Node.js 24 and pinned upstream commits;
+custom runners must support that runtime (Actions Runner 2.327.1 or newer).
+Local developers may omit the resource flag to retain explicit resource skips;
 the qualification supervisor still rejects those skip markers.
 
 The manual `release-qualification` workflow uses a **pre-provisioned**, dedicated
@@ -112,10 +124,11 @@ create a machine, install system software, publish a release or run target soak.
 Only dispatch trusted commits on this runner; do not execute untrusted PR code.
 It archives evidence even after failure; packages are uploaded only on success.
 Keep durable release records beyond the workflow artifact retention period.
-The manual Release archive design (`specs/release-evidence-archive/spec.md` in the
-source checkout) is being implemented. The offline preparation and verification
-stage below is available; GitHub origin checks, approval and publishing are not
-implemented or enabled yet. It is not an active long-term archive service.
+The manual Release archive workflow and its GitHub origin/approval checks are now
+implemented, with local synthetic-hosting tests. It remains disabled until an
+administrator configures and rehearses the protection rules below. The offline
+preparation commands remain available independently. No real Release publication
+or isolated-repository exercise has been performed by these local tests.
 
 Existing CI additionally runs `make package-smoke` after packaging and before
 uploading its development SDK. This checks the actual archive and the shipped
@@ -150,8 +163,8 @@ Provide a separate operator-owned identity JSON file with these string fields:
 
 Do not derive expected identity from the bundle under test. The CLI only checks
 these supplied values for syntax and consistency; it cannot establish that a real
-GitHub run, tag or reviewer matches them. The future publisher must obtain those
-facts from trusted hosting metadata. Arbitrary local UUID run IDs are not accepted
+GitHub run, tag or reviewer matches them. The hosted publisher below obtains those facts from GitHub metadata; the offline
+CLI alone never authenticates them. Arbitrary local UUID run IDs are not accepted
 as GitHub qualification runs.
 
 With all nine gates passed on one clean source and one run/attempt, run:
@@ -192,4 +205,72 @@ duplicate entries; permissions/ownership from archives are not restored. These
 limits are deliberate, not silently relaxed for large inputs. Keep adequate scratch
 disk space and the 15 GiB memory reserve. Review logs for secrets before any future
 publication. Hashes are unsigned and do not prevent an attacker forging an entirely
-self-consistent set; origin validation and approval remain mandatory next steps.
+self-consistent set; use the hosted origin and approval checks below before publishing.
+
+## Hosted Release archive (implemented, disabled pending rehearsal)
+
+`.github/workflows/release-archive.yml` implements two jobs. A read-only job downloads
+only the selected qualification ZIPs and verifies their GitHub digests, bounded ZIP
+contents, all nine reports and the SDK. ZIP64 uses fixed-size end records only;
+extensible end records are rejected to keep prechecks consistent across Python versions.
+The environment-protected publisher repeats
+that process after approval, matches the first job's attachment binding, creates a
+candidate draft, uploads, checks remote hashes and only then publishes a prerelease.
+Downloaded scripts and binaries are never executed. The trusted checkout is pinned
+to the archive workflow commit, not the candidate or any downloaded source.
+
+Administrator prerequisites, **not configured automatically**:
+
+1. Provision the existing `rnet-qualification` self-hosted Linux/X64 label on a trusted,
+   dedicated runner with Python 3.10+ and at least 19 GiB available memory. Both archive
+   jobs monitor the 15 GiB reserve; unknown/low memory fails instead of continuing.
+2. Configure environment `rnet-release-archive` with individual User reviewers and
+   **Prevent self-review**. Its selected deployment branches must contain exactly
+   the default branch (for this repository, `main`), type `branch`, with no wildcard.
+   Team reviewers are deliberately rejected so the token needs no org membership scope.
+3. Protect the existing candidate tag using an **active** tag ruleset that restricts
+   updates and deletions, with empty excludes and either the exact `refs/tags/<tag>`
+   or `~ALL`. Arbitrary wildcard interpretation is not implemented. The script checks
+   the resolved commit again before publication; it never intentionally creates/moves tags.
+4. Rehearse in an isolated repository: no approval, rejection, unrelated reviewer,
+   failed upload, retry, conflicting asset and independent attachment verification.
+   Only after this rehearsal set repository variable `RNET_RELEASE_ARCHIVE_ENABLED=true`.
+   Keep it unset/false until then. This local implementation does not enable it.
+
+Dispatch **release-archive from the default branch**, supplying qualification run ID,
+exact successful latest attempt, full clean-source SHA and existing candidate tag.
+Review the read-only job summary and original qualification logs for secrets before
+approving the publisher. Required approvals are checked against actual GitHub review
+history and environment ID, not inferred from a workflow input or job starting.
+
+GitHub's [review-history API](https://docs.github.com/en/rest/actions/workflow-runs#get-the-review-history-for-a-workflow-run)
+does not provide an attempt identity. Therefore archive reruns are rejected: retry
+with a **new manual dispatch and fresh approval**. The candidate qualification run
+may itself have a later attempt, but it must match the explicit input and still be
+the latest successful attempt. Expired/deleted artifacts require fresh qualification.
+
+The six Release attachments are the original SDK/checksum, evidence tar/checksum,
+`archive-manifest.json` and `hosting-origin.json`. The last records GitHub artifact IDs,
+ZIP hashes, qualification URL and validator identity. The Release body binds all six
+files and records the initial and successful publication workflow URLs. To recheck
+the original offline format after downloading, place its five files in a directory
+separate from `hosting-origin.json` and run `release_archive.py verify` using an
+independently trusted identity. Hosting JSON alone is not a signature or proof of approval.
+
+Retries accept only the same input identity and exact attachment bytes. Existing
+identical assets are left untouched; missing assets may be added to the matching draft.
+Changed/unexpected/duplicate assets or incomplete `starter` uploads fail; the script
+never deletes or overwrites them. A validator update can change the identity/binding,
+requiring a new candidate tag. If the final publish response is lost, the Release may
+already be complete and public; a new approved dispatch reads and verifies that state.
+A failed upload does not deliberately expose a partial set. No automatic deletion of
+old Releases is configured; this is not an immutable or independent backup.
+
+Security boundary: administrators, trusted default-branch code and the dedicated host
+remain trusted. GitHub [ruleset reads](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset)
+may omit bypass actors for read-only callers. These checks do not promise protection
+against privileged concurrent changes to rules, tags, Releases or files on the runner.
+Do not run untrusted PR code on this host. [Artifact digests](https://docs.github.com/en/rest/actions/artifacts)
+and [Release asset digests](https://docs.github.com/en/rest/releases/assets) are compared
+without executing the content; no deployment or production certification follows from
+archiving successfully.

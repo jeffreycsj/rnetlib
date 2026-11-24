@@ -1,7 +1,7 @@
 # 人工批准的 Release 证据归档
 
-状态：2026-10-29 用户确认继续实施。离线归档阶段已实现；GitHub 来源核验、
-审批和发布工作流尚未实现、未启用，未变更仓库权限。
+状态：2026-11-24，离线归档、GitHub 来源核验和受审批发布的代码及本地回归已实现。
+工作流默认关闭；管理员配置和隔离仓库演练仍未完成，未变更远端权限、tag 或 Release。
 
 ## 目标与边界
 
@@ -62,8 +62,8 @@ tag。required-reviewer 可用性依套餐及仓库可见性而异，不能仅�
       可重复生成且不覆盖已有输出，manifest 不宣称来源认证或生产认证。
 - [x] 离线阶段对抗性回归：JSON 非有限数/深度、gzip CRC、伪造认证字段及外层摘要
       重算后的 SDK 内部损坏。后续流程仍需完整审查。
-- [ ] 核验实际 GitHub workflow/run/attempt、仓库、tag、artifact 来源及有效审批保护。
-- [ ] 实现只读验证、人工审批、最小权限发布以及冲突安全的重试。
+- [x] 实现 GitHub workflow/run/attempt、仓库、tag、artifact 来源与审批保护的在线核验逻辑；使用合成托管响应做回归，实际运行验收见下项。
+- [x] 实现只读验证、人工审批、最小权限发布以及冲突安全重试（默认禁用，未实际发布）。
 - [ ] 用隔离测试仓库验证：未批准/拒绝均无 Release 写入，上传失败只有 draft，
       下载附件可独立复核并追溯原始运行。
 - [ ] 对抗性审查通过，文档记录实际配置和演练结果后再启用。
@@ -74,6 +74,39 @@ tag。required-reviewer 可用性依套餐及仓库可见性而异，不能仅�
 summary、每项 report、日志与工具链文件、源码和原始 SDK archive；旧绝对路径只作
 元数据，绝不据此打开文件。归档读取、资格验证、交付入口分为三个模块。
 
-`--identity` 必须独立提供期望的 repository、commit、tag、tag_commit、run_id、attempt
-和 validator_revision。当前命令不联网，不能证明这些声明真实，不能替代 GitHub
-来源核验与人工审批。具体命令和资源上限见 `docs/release-evidence.md`。
+`release_archive.py` 的 `--identity` 必须独立提供 repository、commit、tag、tag_commit、run_id、attempt
+和 validator_revision；该离线入口仍不联网、不证明来源。新增 `github_archive.py` 仅在
+受信 GitHub Actions 上读取真实托管元数据，下载后复用离线验证器，批准后才写 Release。
+
+## 托管阶段的具体契约
+
+- `release-archive.yml` 只能手动触发且必须从默认分支运行；两阶段 checkout 同一个不可变 `github.workflow_sha`，不执行资格附件里的代码。资格运行也必须来自本仓库默认分支，成功且为指定的最新 attempt，候选提交必须是验证器提交的祖先。
+- `verify` 只有 contents/actions read；输出六份附件内容绑定的 SHA256。`publish` 在 `rnet-release-archive` environment 审批后获得 contents write，重新下载、验证原始内容并比对只读阶段的摘要。两个阶段都受启动 19 GiB、运行中 15 GiB 内存保护。
+- 审批环境使用个体 User 审核人（不要求组织成员读取权限），开启 prevent_self_review，唯一 deployment branch policy 是默认分支的精确名称。脚本独立核对审批历史、environment ID 和批准人，不能用管理员 bypass 代替独立审核。
+- 审批 API 不携带 attempt 身份，因此归档工作流只接受第 1 次 attempt；失败后新建 workflow_dispatch 并重新审批。资格运行本身可以是任意指定的成功最新 attempt。
+- tag 规则要求 active 的 update/deletion 限制，匹配候选 tag 精确名称或 ~ALL，exclude 为空。不解释任意通配符；发布前复查 tag。管理员仍是信任根，规则 bypass 信息在只读 token 下可能不可见，不宣称抵御有特权者并发修改策略/tag。
+- 保留原有五附件离线 manifest 格式，另附 `hosting-origin.json` 记录资格运行 URL、GitHub artifact ID/ZIP 摘要及验证器身份。Release 正文绑定六附件摘要，记录最初归档和最终公开的 workflow URL；避免把尚未发生的人工审批写进可重复生成的离线 manifest。
+- 先创建 prerelease draft，再上传并核对远端完整文件集合、大小和 digest。只对内容完全相同且为本流程创建的草稿补齐缺失附件，不覆盖或删除冲突内容。公开前再次核验审批、来源、tag、草稿元数据和附件完整性。
+- 最终公开请求若响应丢失，Release 可能已经完整公开；新触发根据远端实际状态核验，不能把网络失败当成肯定未发布。同名 starter/损坏附件拒绝自动清理，需管理员检查；验证器更新或源身份变化则使用新的候选 tag。
+- 工作流由仓库变量 `RNET_RELEASE_ARCHIVE_ENABLED=true` 启用；必须先完成管理员配置和隔离仓库演练。本轮不设置该变量、不创建 runner，也不运行外部发布。
+
+
+## 2026-11-24 本地对抗性复审与验证
+
+本轮只修改归档工具、工作流及说明，不改变网络库运行时或 SDK ABI。
+
+| 已修复问题 | 回归证据 |
+| --- | --- |
+| 普通 EOCD 字段可掩盖实际 ZIP64 中央目录大小，绕过对象分配前的上限检查 | 构造 ZIP64/普通尾记录冲突，在进入 ZipFile 前必须拒绝 |
+| 不同 Python 版本对 ZIP64 扩展尾记录的定位不同 | 只允许固定长度尾记录；正常 ZIP64 目录仍可解压，扩展尾记录提前拒绝 |
+| 上传期间 Release 名称、候选标志或作者变化未被完整复核 | 元数据漂移阻止最终公开；已有附件不删除、不覆盖 |
+| 新 dispatch 补齐草稿后缺少实际成功发布运行的记录 | 正文保留初始运行及成功发布运行 URL，新运行必须重新审批 |
+| 空用户名形式的下载地址绕过用户信息检查 | 拒绝 `https://@api.github.com/`，令牌仅发送到精确 GitHub API 主机 |
+
+验证：`make native-doc-check` 通过，包含 101 项脚本测试、生成头文件一致性及
+原生接口注释检查；actionlint 1.7.7 校验归档和资格工作流通过；`git diff --check`
+通过。脚本测试使用合成托管响应和实际 ZIP/离线校验流程，不是线上 GitHub 验收。
+
+未完成的验证：真实审批环境读取曾返回 403，无法确认远端配置，不能据此判定环境
+不存在；未执行真实上传、隔离仓库演练、目标环境弱网/长稳或本提交的完整发布资格。
+工作流保持默认关闭，管理员配置和演练完成后才可启用。

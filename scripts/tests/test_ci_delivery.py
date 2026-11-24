@@ -19,11 +19,13 @@ class CIDeliveryTests(unittest.TestCase):
             import release_evidence
             floor = 19 * 1024**3
             self.assertEqual(release_evidence.START_AVAILABLE, floor)
-            for available in (0, floor - 1):
+            for available in (0, 12 * 1024**3, floor - 1):
                 with self.subTest(available=available), mock.patch.object(
                         release_evidence, "memory_available", return_value=available):
-                    with self.assertRaisesRegex(SystemExit, "CI requires 19 GiB"):
+                    with self.assertRaisesRegex(SystemExit, "CI requires 19 GiB") as failure:
                         exec(code, {})
+                    self.assertIn(f"{available / 1024**3:.2f} GiB", str(failure.exception))
+                    self.assertIn("RNET_LINUX_RUNNER", str(failure.exception))
             with mock.patch.object(release_evidence, "memory_available", return_value=floor):
                 exec(code, {})
             with mock.patch.object(release_evidence, "memory_available", side_effect=OSError("unreadable")):
@@ -34,8 +36,9 @@ class CIDeliveryTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         body = re.search(r"(?ms)^  linux:\n(.*?)(?=^  [\w-]+:|\Z)", workflow).group(1)
         self.assertIn('RNET_REQUIRE_RESOURCE_TESTS: "1"', body)
-        self.assertIn("memory_available() < START_AVAILABLE", body)
-        self.assertLess(body.index("memory_available() < START_AVAILABLE"),
+        self.assertIn("runs-on: ${{ vars.RNET_LINUX_RUNNER || 'ubuntu-latest' }}", body)
+        self.assertIn("available < START_AVAILABLE", body)
+        self.assertLess(body.index("available < START_AVAILABLE"),
                         body.index("- run: cargo"))
 
     def test_linux_upload_requires_archived_package_smoke(self):

@@ -9,34 +9,37 @@ jobs:
   rust-msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: 1.85.0
       - run: cargo check --workspace --all-targets --locked
 
   linux:
-    runs-on: ubuntu-latest
+    # Set only after provisioning a suitable runner; the memory gate still applies.
+    runs-on: ${{ vars.RNET_LINUX_RUNNER || 'ubuntu-latest' }}
     env:
       CARGO_BUILD_JOBS: "1"
       RUST_TEST_THREADS: "1"
       RNET_REQUIRE_RESOURCE_TESTS: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
       - name: Require resource-qualified runner before building
         run: |
           python3 -B - <<'PY'
           import sys
           sys.path.insert(0, "scripts")
           from release_evidence import memory_available, START_AVAILABLE
-          if memory_available() < START_AVAILABLE:
-              raise SystemExit("CI requires 19 GiB available memory (15 GiB reserve + 4 GiB build headroom); configure a suitable runner")
+          available = memory_available()
+          print(f"CI MemAvailable: {available / 1024**3:.2f} GiB", flush=True)
+          if available < START_AVAILABLE:
+              raise SystemExit(f"CI requires 19 GiB available memory (15 GiB reserve + 4 GiB build headroom); found {available / 1024**3:.2f} GiB. Set RNET_LINUX_RUNNER to a provisioned runner label with sufficient memory.")
           PY
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: stable
           components: clippy,rustfmt
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0, Node.js 24
         with:
           go-version: "1.22.x"
       - uses: actions/setup-dotnet@v6
@@ -87,7 +90,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
@@ -102,7 +105,7 @@ jobs:
   concurrency-model:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: stable
@@ -111,7 +114,7 @@ jobs:
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-09-21
@@ -121,7 +124,7 @@ jobs:
   miri:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-09-21
