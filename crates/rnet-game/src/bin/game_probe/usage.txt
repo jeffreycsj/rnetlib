@@ -25,5 +25,7 @@ Options (defaults):
 
 Server lifetime must cover client joins + load + two drain periods.
 Exit 0 means run completed; unset SLOs are NOT evaluated. Not capacity certification.
-Startup requires 19 GiB available; ongoing memory reserve is 15 GiB.
+Default startup requires 19 GiB available; ongoing memory reserve is 15 GiB.
+Ordinary GitHub ci may explicitly select RNET_RESOURCE_PROFILE=github-ci (6/2 GiB).
+Local/release contexts retain strict defaults; see the release-evidence documentation.
 See docs/distributed-game-probe.md for setup, limits, and counter definitions.

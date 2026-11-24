@@ -1,5 +1,8 @@
 //! Independent, authenticated server/client probe. Not a production capacity certificate.
 
+#[path = "support/resource_budget.rs"]
+mod resource_budget;
+
 #[path = "game_probe/client.rs"]
 mod client;
 #[path = "game_probe/config.rs"]

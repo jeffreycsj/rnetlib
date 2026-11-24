@@ -6,7 +6,7 @@
 
 ## 准备凭据与启动
 
-所有参数采用 `--name value`，重复、未知参数报错；`--help` 查看摘要。负载启动至少需要 19 GiB MemAvailable，运行中每约 100 ms 检查 15 GiB 保留量。预算限制不是全进程 RSS 保证；不要同时启动其他重负载任务。
+所有参数采用 `--name value`，重复、未知参数报错；`--help` 查看摘要。本地与发布资格负载启动至少需要 19 GiB MemAvailable，运行中每约 100 ms 检查 15 GiB 保留量。普通 GitHub `ci` 工作流显式选择 `RNET_RESOURCE_PROFILE=github-ci` 时使用启动 6 GiB、运行保留 2 GiB；还要求 `GITHUB_ACTIONS=true`、`GITHUB_WORKFLOW=ci` 且无 `RNET_EVIDENCE_RUN_ID`，其他上下文维持严格默认值。预算限制不是全进程 RSS 保证；不要同时启动其他重负载任务。
 
 在可信机器上创建一个尚不存在的目录：
 

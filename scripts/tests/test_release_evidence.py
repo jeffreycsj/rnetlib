@@ -2,12 +2,14 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "release_evidence.py"
 
@@ -255,6 +257,12 @@ r.run_command({str(self.root)!r}, {str(self.output)!r}, 'signal',
         self.assertTrue(ready.exists(), "test did not exercise a running descendant")
         time.sleep(0.7)
         self.assertFalse(marker.exists(), "timed-out gate left a descendant running")
+
+    def test_release_children_cannot_inherit_ordinary_ci_resource_budget(self):
+        with mock.patch.dict(os.environ, {"RNET_RESOURCE_PROFILE": "github-ci",
+                                          "GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW": "ci"}):
+            self.assertEqual(self.run_probe("import os; print(os.environ.get('RNET_RESOURCE_PROFILE'))"), 0)
+        self.assertEqual((self.output / "command.log").read_text().strip(), "strict")
 
 
 if __name__ == "__main__":

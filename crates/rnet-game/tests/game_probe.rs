@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 #[path = "game_probe/faults.rs"]
 mod faults;
 
+#[path = "../src/bin/support/resource_budget.rs"]
+mod resource_budget;
+
 #[path = "support/resource_skip.rs"]
 mod resource_skip;
 
@@ -139,8 +142,11 @@ fn resources_available() -> bool {
         .unwrap()
         .parse::<u64>()
         .unwrap();
-    if available < 19 * 1024 * 1024 {
-        resource_skip::report("SKIPPED game probe smoke: startup needs 19 GiB available");
+    let minimum_gib = resource_budget::minimum_gib(true);
+    if available < minimum_gib * 1024 * 1024 {
+        resource_skip::report(&format!(
+            "SKIPPED game probe smoke: startup needs {minimum_gib} GiB available"
+        ));
         return false;
     }
     true

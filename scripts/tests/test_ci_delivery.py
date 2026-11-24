@@ -17,17 +17,19 @@ class CIDeliveryTests(unittest.TestCase):
         code = compile(textwrap.dedent(block.group(1)), "ci-memory-preflight", "exec")
         with mock.patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
             import release_evidence
-            floor = 19 * 1024**3
-            self.assertEqual(release_evidence.START_AVAILABLE, floor)
-            for available in (0, 12 * 1024**3, floor - 1):
+            floor = 6 * 1024**3
+            self.assertEqual(release_evidence.START_AVAILABLE, 19 * 1024**3)
+            self.assertEqual(release_evidence.MIN_AVAILABLE, 15 * 1024**3)
+            for available in (0, floor - 1):
                 with self.subTest(available=available), mock.patch.object(
                         release_evidence, "memory_available", return_value=available):
-                    with self.assertRaisesRegex(SystemExit, "CI requires 19 GiB") as failure:
+                    with self.assertRaisesRegex(SystemExit, "CI requires 6 GiB") as failure:
                         exec(code, {})
                     self.assertIn(f"{available / 1024**3:.2f} GiB", str(failure.exception))
                     self.assertIn("RNET_LINUX_RUNNER", str(failure.exception))
-            with mock.patch.object(release_evidence, "memory_available", return_value=floor):
-                exec(code, {})
+            for available in (floor, int(14.71 * 1024**3)):
+                with mock.patch.object(release_evidence, "memory_available", return_value=available):
+                    exec(code, {})
             with mock.patch.object(release_evidence, "memory_available", side_effect=OSError("unreadable")):
                 with self.assertRaises(OSError):
                     exec(code, {})
@@ -37,8 +39,9 @@ class CIDeliveryTests(unittest.TestCase):
         body = re.search(r"(?ms)^  linux:\n(.*?)(?=^  [\w-]+:|\Z)", workflow).group(1)
         self.assertIn('RNET_REQUIRE_RESOURCE_TESTS: "1"', body)
         self.assertIn("runs-on: ${{ vars.RNET_LINUX_RUNNER || 'ubuntu-latest' }}", body)
-        self.assertIn("available < START_AVAILABLE", body)
-        self.assertLess(body.index("available < START_AVAILABLE"),
+        self.assertIn('RNET_RESOURCE_PROFILE: "github-ci"', body)
+        self.assertIn("available < 6 * 1024**3", body)
+        self.assertLess(body.index("available < 6 * 1024**3"),
                         body.index("- run: cargo"))
 
     def test_linux_upload_requires_archived_package_smoke(self):

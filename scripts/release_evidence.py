@@ -109,7 +109,9 @@ def run_command(root, output, name, command, *, require_clean=False,
             elif memory_reader() < START_AVAILABLE:
                 report.update(status="blocked", reason="memory below 19 GiB startup floor (15 GiB reserve plus build headroom)")
             else:
-                env = dict(os.environ, CARGO_BUILD_JOBS="1", RUST_TEST_THREADS="1", RUST_TEST_NOCAPTURE="1")
+                # Qualification never inherits the lower ordinary-CI probe budget.
+                env = dict(os.environ, CARGO_BUILD_JOBS="1", RUST_TEST_THREADS="1",
+                           RUST_TEST_NOCAPTURE="1", RNET_RESOURCE_PROFILE="strict")
                 process = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.DEVNULL,
                                            stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
                 while process.poll() is None:

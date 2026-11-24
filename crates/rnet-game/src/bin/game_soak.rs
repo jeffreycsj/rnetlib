@@ -1,5 +1,8 @@
 //! Local game-facade soak probe; completion alone does not certify deployment SLOs.
 
+#[path = "support/resource_budget.rs"]
+mod resource_budget;
+
 #[path = "game_soak/receiver.rs"]
 mod receiver;
 
@@ -389,15 +392,19 @@ fn rss_kib() -> Option<u64> {
 }
 
 fn guard_available_memory() -> Result<(), Box<dyn std::error::Error>> {
-    const MINIMUM_KIB: u64 = 15 * 1024 * 1024;
+    let minimum_gib = resource_budget::minimum_gib(false);
+    let minimum_kib = minimum_gib * 1024 * 1024;
     let available = std::fs::read_to_string("/proc/meminfo")?
         .lines()
         .find_map(|line| line.strip_prefix("MemAvailable:"))
         .and_then(|value| value.split_whitespace().next())
         .ok_or("MemAvailable is unavailable")?
         .parse::<u64>()?;
-    if available < MINIMUM_KIB {
-        return Err(format!("soak stopped: MemAvailable {available} KiB is below 15 GiB").into());
+    if available < minimum_kib {
+        return Err(format!(
+            "soak stopped: MemAvailable {available} KiB is below {minimum_gib} GiB"
+        )
+        .into());
     }
     Ok(())
 }

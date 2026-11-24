@@ -22,18 +22,19 @@ jobs:
       CARGO_BUILD_JOBS: "1"
       RUST_TEST_THREADS: "1"
       RNET_REQUIRE_RESOURCE_TESTS: "1"
+      RNET_RESOURCE_PROFILE: "github-ci"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
-      - name: Require resource-qualified runner before building
+      - name: Check ordinary CI memory budget before building
         run: |
           python3 -B - <<'PY'
           import sys
           sys.path.insert(0, "scripts")
-          from release_evidence import memory_available, START_AVAILABLE
+          from release_evidence import memory_available
           available = memory_available()
           print(f"CI MemAvailable: {available / 1024**3:.2f} GiB", flush=True)
-          if available < START_AVAILABLE:
-              raise SystemExit(f"CI requires 19 GiB available memory (15 GiB reserve + 4 GiB build headroom); found {available / 1024**3:.2f} GiB. Set RNET_LINUX_RUNNER to a provisioned runner label with sufficient memory.")
+          if available < 6 * 1024**3:
+              raise SystemExit(f"CI requires 6 GiB available memory (2 GiB probe reserve + 4 GiB build headroom); found {available / 1024**3:.2f} GiB. Set RNET_LINUX_RUNNER to a provisioned runner label with sufficient memory.")
           PY
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:

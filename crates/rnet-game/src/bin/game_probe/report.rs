@@ -216,7 +216,7 @@ pub fn guard_memory(startup: bool) -> Result<()> {
         })
         .ok_or("MemAvailable unavailable")?
         .parse::<u64>()?;
-    let minimum = if startup { 19 } else { 15 } * 1024 * 1024;
+    let minimum = crate::resource_budget::minimum_gib(startup) * 1024 * 1024;
     if available < minimum {
         return Err(
             format!("probe_memory_guard available_kib={available} minimum_kib={minimum}").into(),

@@ -98,25 +98,31 @@ using cargo-audit 0.22.2 and cargo-deny 0.20.2 with locked installation dependen
 It checks both graphs and propagates failures, rather than maintaining separate
 action defaults that may omit the fuzz workspace. It does not replace the full suite.
 
-The ordinary Linux SDK job requires 19 GiB available before building and sets
-`RNET_REQUIRE_RESOURCE_TESTS=1`. Probe/soak resource refusals then fail the test,
-including pressure detected after startup, rather than returning a passing skip.
-This flag is inherited by packaged probe tests too. Insufficient runner memory
-blocks SDK upload; provision an appropriate runner separately instead of lowering
-the reserve. The `linux` job selects `vars.RNET_LINUX_RUNNER`, falling back to
-`ubuntu-latest` when unset. Set that repository Actions variable to the exact label
-of an already provisioned Linux x86_64 runner with at least 19 GiB **available**
-memory (installed RAM alone is insufficient). No machine or paid capacity is
-provisioned by this setting. The preflight prints measured available memory and
-fails before toolchain setup/build/package upload if it is insufficient. Without
-a qualified runner, this CI job remains failing by design.
+The ordinary Linux SDK job uses a separate **6 GiB available startup / 2 GiB
+probe reserve** budget, with serial Cargo builds and Rust tests. It explicitly sets
+`RNET_RESOURCE_PROFILE=github-ci` and `RNET_REQUIRE_RESOURCE_TESTS=1`. The lower
+probe/soak budget applies only when `GITHUB_ACTIONS=true`, `GITHUB_WORKFLOW=ci`, and
+`RNET_EVIDENCE_RUN_ID` is absent. Missing/unknown profiles, local execution and
+release contexts retain the strict defaults. This is a smoke-test budget, not a
+capacity or RSS guarantee; it does not reduce connections, durations or coverage.
 
-This workflow runs pull-request code, so a custom runner must be isolated for
+Probe/soak resource refusals still fail ordinary CI, including pressure detected
+after startup, instead of becoming passing skips. Packaged probe tests inherit the
+same policy. An unknown memory reading or less than 6 GiB available blocks the
+Linux build and SDK upload. The preflight prints measured available memory.
+`vars.RNET_LINUX_RUNNER` optionally selects an already provisioned runner label;
+when unset, the job uses `ubuntu-latest`. No paid capacity or machine is provisioned.
+
+This workflow runs pull-request code, so any custom runner must be isolated for
 untrusted CI workloads; do not point it at the trusted release-qualification host.
-The current CI checkout/setup-go actions use Node.js 24 and pinned upstream commits;
+The CI checkout/setup-go actions use Node.js 24 and pinned upstream commits;
 custom runners must support that runtime (Actions Runner 2.327.1 or newer).
-Local developers may omit the resource flag to retain explicit resource skips;
-the qualification supervisor still rejects those skip markers.
+
+Local probe defaults remain **19/15 GiB** and local soak retains its **15 GiB**
+guard. Local tests may still explicitly report resource skips when coverage is not
+required. Release qualification keeps the **19/15 GiB** supervisor floors, rejects
+skip markers and forces `RNET_RESOURCE_PROFILE=strict` in every child, even if
+invoked from ordinary CI. The Release archive supervisor also remains unchanged.
 
 The manual `release-qualification` workflow uses a **pre-provisioned**, dedicated
 self-hosted runner labeled `rnet-qualification`, with Linux/X64 labels. It does not

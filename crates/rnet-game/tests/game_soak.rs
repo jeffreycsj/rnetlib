@@ -1,9 +1,10 @@
 use std::process::Command;
 
+#[path = "../src/bin/support/resource_budget.rs"]
+mod resource_budget;
+
 #[path = "support/resource_skip.rs"]
 mod resource_skip;
-
-const MIN_AVAILABLE_KIB: u64 = 15 * 1024 * 1024;
 
 fn available_memory_kib() -> Option<u64> {
     std::fs::read_to_string("/proc/meminfo")
@@ -16,13 +17,13 @@ fn available_memory_kib() -> Option<u64> {
         .ok()
 }
 
-fn is_memory_guard_refusal(stderr: &str) -> bool {
+fn is_memory_guard_refusal(stderr: &str, minimum_gib: u64) -> bool {
     stderr
         .trim()
         .strip_prefix("Error: \"soak stopped: MemAvailable ")
-        .and_then(|value| value.strip_suffix(" KiB is below 15 GiB\""))
+        .and_then(|value| value.strip_suffix(format!(" KiB is below {minimum_gib} GiB\"").as_str()))
         .and_then(|value| value.parse::<u64>().ok())
-        .is_some_and(|available| available < MIN_AVAILABLE_KIB)
+        .is_some_and(|available| available < minimum_gib * 1024 * 1024)
 }
 
 fn report_counter(line: &str, name: &str) -> u64 {
@@ -36,21 +37,36 @@ fn report_counter(line: &str, name: &str) -> u64 {
 #[test]
 fn only_a_real_memory_guard_refusal_is_skippable() {
     assert!(is_memory_guard_refusal(
-        "Error: \"soak stopped: MemAvailable 14813880 KiB is below 15 GiB\"\n"
+        "Error: \"soak stopped: MemAvailable 14813880 KiB is below 15 GiB\"\n",
+        15
     ));
     assert!(!is_memory_guard_refusal(
-        "Error: \"soak stopped: MemAvailable 15728640 KiB is below 15 GiB\"\n"
+        "Error: \"soak stopped: MemAvailable 15728640 KiB is below 15 GiB\"\n",
+        15
     ));
-    assert!(!is_memory_guard_refusal("Error: \"join failed\"\n"));
+    assert!(!is_memory_guard_refusal("Error: \"join failed\"\n", 15));
+}
+
+#[test]
+fn ci_guard_refusals_are_checked_against_the_ci_floor() {
+    let refusal = "Error: \"soak stopped: MemAvailable 1048576 KiB is below 2 GiB\"\n";
+    assert!(is_memory_guard_refusal(refusal, 2));
+    assert!(!is_memory_guard_refusal(refusal, 15));
+    assert!(!is_memory_guard_refusal(
+        "Error: \"soak stopped: MemAvailable 2097152 KiB is below 2 GiB\"\n",
+        2
+    ));
 }
 
 #[test]
 fn game_soak_smoke_covers_all_transports_when_memory_available() {
-    // The probe's memory floor protects the machine. On a smaller CI runner this smoke test
-    // has no valid execution environment; resource rejection is not a network failure.
-    if let Some(available) = available_memory_kib().filter(|value| *value < MIN_AVAILABLE_KIB) {
+    // CI must execute the smoke workload under its explicit budget, never skip it.
+    let minimum_gib = resource_budget::minimum_gib(false);
+    if let Some(available) =
+        available_memory_kib().filter(|value| *value < minimum_gib * 1024 * 1024)
+    {
         resource_skip::report(&format!(
-            "SKIPPED game soak smoke: MemAvailable {available} KiB is below the 15 GiB guard"
+            "SKIPPED game soak smoke: MemAvailable {available} KiB is below the {minimum_gib} GiB guard"
         ));
         return;
     }
@@ -61,9 +77,9 @@ fn game_soak_smoke_covers_all_transports_when_memory_available() {
             .expect("run game soak probe");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if !output.status.success() && is_memory_guard_refusal(&stderr) {
+        if !output.status.success() && is_memory_guard_refusal(&stderr, minimum_gib) {
             resource_skip::report(&format!(
-                "SKIPPED remaining game soak smoke: {transport} hit the 15 GiB guard"
+                "SKIPPED remaining game soak smoke: {transport} hit the {minimum_gib} GiB guard"
             ));
             return;
         }
