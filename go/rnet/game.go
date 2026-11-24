@@ -238,6 +238,42 @@ func (r *GameRuntime) SendLatest(session Session, key uint64, payload []byte) er
 	return statusError(status)
 }
 
+// SendLatestWithTick copies a ready-session snapshot with an explicit simulation tick.
+// Zero is valid; replacement updates payload and tick. Use SendLatest to omit tick.
+// The session-local key and replacement/delivery limits are identical to SendLatest.
+func (r *GameRuntime) SendLatestWithTick(session Session, key uint64, payload []byte, tick uint32) error {
+	defer lockNativeThread()()
+	handle, err := r.handleValue()
+	if err != nil {
+		return err
+	}
+	native := C.rnet_slice_t{ptr: bytePointer(payload), len: C.size_t(len(payload))}
+	status := C.rnet_game_send_latest_with_tick(handle, C.rnet_session_t(session), C.uint64_t(key), native, C.uint32_t(tick))
+	runtime.KeepAlive(payload)
+	return statusError(status)
+}
+
+// FlushRealtime attempts at most capacity realtime snapshots and returns transport admissions,
+// not peer deliveries. Negative capacity is invalid; zero sends nothing but validates runtime.
+// It can wait for the shared poll lock, drives no timers and consumes no events. Keep polling
+// with positive capacity; transport backpressure retains snapshots for a later attempt.
+func (r *GameRuntime) FlushRealtime(capacity int) (int, error) {
+	defer lockNativeThread()()
+	handle, err := r.handleValue()
+	if err != nil {
+		return 0, err
+	}
+	if capacity < 0 {
+		return 0, StatusError{Code: int32(C.RNET_E_INVALID_ARGUMENT), Message: "capacity must not be negative"}
+	}
+	var forwarded C.size_t
+	if err := statusError(C.rnet_game_flush_realtime(handle, C.size_t(capacity), &forwarded)); err != nil {
+		return 0, err
+	}
+	// Native admissions cannot exceed capacity, which already fits in a Go int.
+	return int(forwarded), nil
+}
+
 // CloseSession closes the local session, clears staging and revokes its resume state.
 // It is an explicit kick, not a recoverable network disconnect; stale handles fail.
 func (r *GameRuntime) CloseSession(session Session) error {

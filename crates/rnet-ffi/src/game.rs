@@ -328,3 +328,56 @@ pub unsafe extern "C" fn rnet_game_send_latest(
         }
     })
 }
+
+#[no_mangle]
+/// Copies a replaceable snapshot with an explicitly present simulation tick.
+/// Uses the same ready-session, session-local key and queue limits as rnet_game_send_latest.
+/// Tick is forwarded unchanged, including zero; replacement updates both payload and tick.
+/// Use rnet_game_send_latest to omit tick. Tick is application metadata, not trusted time.
+///
+/// # Safety
+/// A nonempty payload must point to readable memory for the call; it is copied before return.
+pub unsafe extern "C" fn rnet_game_send_latest_with_tick(
+    runtime: u64,
+    session: u64,
+    key: u64,
+    payload: RnetSlice,
+    tick: u32,
+) -> i32 {
+    ffi_status(|| {
+        let entry = game_registry::lease(runtime)?;
+        unsafe {
+            with_borrowed_slice(payload, |bytes| {
+                entry
+                    .runtime
+                    .send_latest_with_tick(session, key, bytes, Some(tick))
+            })
+        }
+    })
+}
+
+#[no_mangle]
+/// Attempts at most capacity staged realtime snapshots, reporting transport admissions.
+/// Required out_forwarded is zeroed before handle validation; success is not peer delivery.
+/// Zero capacity performs no sends but still validates runtime. Backpressure retains snapshots.
+/// May wait for the shared poll lock. Does not drive timers or consume application events;
+/// both peers must continue positive-capacity polling. A stopped runtime has no queued work.
+///
+/// # Safety
+/// out_forwarded must point to aligned writable storage for one size_t for the entire call.
+pub unsafe extern "C" fn rnet_game_flush_realtime(
+    runtime: u64,
+    capacity: usize,
+    out_forwarded: *mut usize,
+) -> i32 {
+    ffi_status(|| {
+        if out_forwarded.is_null() {
+            return invalid_argument("realtime flush output is null");
+        }
+        unsafe { out_forwarded.write(0) };
+        let entry = game_registry::lease(runtime)?;
+        let forwarded = entry.runtime.flush_realtime(capacity);
+        unsafe { out_forwarded.write(forwarded) };
+        Ok(())
+    })
+}

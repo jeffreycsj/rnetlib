@@ -69,6 +69,7 @@ LD_LIBRARY_PATH="$PWD/lib" dotnet run --project csharp/RNet.Quickstart -c Releas
 - 所有接收数据已复制成托管数组，SDK 在 `finally` 中释放原生 token。不要把 `Data`、`AuxiliaryData` 或票据写入通用日志。用完敏感数组后主动清零。
 - 创建时通过 `GameOptions` 设置线程数、帧大小、队列字节/条数、连接和握手上限、超时、TCP buffer/NoDelay、rekey 阈值等。nullable 网络选项的 `null` 使用 native 默认；显式非法的零值由 native 校验。游戏队列字段的零值使用默认预算，不能用零取消所有限制。创建参数不支持在活跃会话上随意修改。
 - 服务端 `SetEncryption(session, bool)` / `Rekey(session)` 是异步操作，以 `SecurityChanged` 确认本地完成；请求已经启用的模式可能不产生新事件。客户端没有加密选择项。默认拒绝服务端明文策略；确有需求时服务端 runtime 设置 `AllowPlaintextBusinessData=true`，客户端自动跟随，不要求设置该标记。控制消息仍受保护。明文业务**没有机密性或完整性**，不适合公网敏感数据。
+- `SendLatestWithTick(session, key, payload, tick)` 设置快照 envelope 的 tick（`0` 和 `uint.MaxValue` 都有效）；同键替换同时更新内容和 tick。`SendLatest` 省略 tick。`FlushRealtime(capacity)` 最多尝试指定条数，返回传输层接受数量（不是送达量）；容量 `0` 不发送，已 Dispose 会抛异常。它可能等待 poll 锁，不取事件、不推进定时器，仍须持续正容量 Poll。
 - `SendLatest` 按 session/key 尽力替换尚未交给 I/O worker 的快照。进入 socket 或 KCP 缓存后不可撤回。带 `GameSendOptions` 的发送可设置 priority、expiry、tick、sequence、correlation；expiry 也只作用于本地暂存。
 - `Listen` / `Connect` 的配置统一使用 `MinVersion` / `MaxVersion` 闭区间，两者相等表示精确业务版本（默认均为 1）。双方须持续 poll 至游戏就绪；`SelectedProtocolVersion` 查询服务端选定版本。没有独立 Range 入口；旧 SDK/ABI 不兼容，必须与当前 native 库一起重建。
 - `IssueResumeTicket` → `ResumeTicket` → `ConnectResume` → 服务端 `ResumeRequest` 再授权 → `SessionResumed`。恢复分配新句柄，通过 `RelatedSession` 映射旧句柄；失败不代表旧会话已失效。票据一次性且限同一服务端 runtime，不能跨进程恢复；新的版本范围须包含票据绑定的原选定版本。

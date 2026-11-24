@@ -1,22 +1,22 @@
 use rnet::{
     rnet_game_auth_decide, rnet_game_buffer_release, rnet_game_client_connect,
     rnet_game_client_resume_connect, rnet_game_clock_micros, rnet_game_clock_sync_snapshot,
-    rnet_game_config_init, rnet_game_endpoint_local_port, rnet_game_issue_resume_ticket,
-    rnet_game_metrics_snapshot, rnet_game_network_quality, rnet_game_poll_events,
-    rnet_game_profile_defaults, rnet_game_prometheus_snapshot, rnet_game_range_buffer_snapshot,
-    rnet_game_realtime_queue_snapshot, rnet_game_runtime_create, rnet_game_runtime_destroy,
-    rnet_game_runtime_stop, rnet_game_scheduled_queue_snapshot, rnet_game_send, rnet_game_send_ex,
-    rnet_game_send_latest, rnet_game_server_listen, rnet_game_session_close, rnet_runtime_create,
-    rnet_runtime_destroy, rnet_runtime_stop, RnetClientSecurity, RnetConfig, RnetGameBuffer,
-    RnetGameClientConfig, RnetGameClockSync, RnetGameConfig, RnetGameEvent, RnetGameMetrics,
-    RnetGameQuality, RnetGameRangeBuffer, RnetGameRealtimeQueue, RnetGameScheduledQueue,
-    RnetGameSendOptions, RnetGameServerConfig, RnetLogger, RnetSlice, RNET_ABI_VERSION,
-    RNET_E_HANDSHAKE_REQUIRED, RNET_E_INVALID_ARGUMENT, RNET_E_INVALID_HANDLE,
-    RNET_E_INVALID_STATE, RNET_E_WOULD_BLOCK, RNET_GAME_AUTH_REQUEST, RNET_GAME_MESSAGE,
-    RNET_GAME_PRIORITY_HIGH, RNET_GAME_PROFILE_REALTIME, RNET_GAME_PROFILE_RELIABLE_REALTIME,
-    RNET_GAME_PROFILE_SESSION, RNET_GAME_RESUME_REQUEST, RNET_GAME_RESUME_TICKET,
-    RNET_GAME_SESSION_READY, RNET_GAME_SESSION_RESUMED, RNET_LOG_INFO, RNET_OK, RNET_TRANSPORT_KCP,
-    RNET_TRANSPORT_TCP, RNET_TRANSPORT_UDP,
+    rnet_game_config_init, rnet_game_endpoint_local_port, rnet_game_flush_realtime,
+    rnet_game_issue_resume_ticket, rnet_game_metrics_snapshot, rnet_game_network_quality,
+    rnet_game_poll_events, rnet_game_profile_defaults, rnet_game_prometheus_snapshot,
+    rnet_game_range_buffer_snapshot, rnet_game_realtime_queue_snapshot, rnet_game_runtime_create,
+    rnet_game_runtime_destroy, rnet_game_runtime_stop, rnet_game_scheduled_queue_snapshot,
+    rnet_game_send, rnet_game_send_ex, rnet_game_send_latest, rnet_game_send_latest_with_tick,
+    rnet_game_server_listen, rnet_game_session_close, rnet_runtime_create, rnet_runtime_destroy,
+    rnet_runtime_stop, RnetClientSecurity, RnetConfig, RnetGameBuffer, RnetGameClientConfig,
+    RnetGameClockSync, RnetGameConfig, RnetGameEvent, RnetGameMetrics, RnetGameQuality,
+    RnetGameRangeBuffer, RnetGameRealtimeQueue, RnetGameScheduledQueue, RnetGameSendOptions,
+    RnetGameServerConfig, RnetLogger, RnetSlice, RNET_ABI_VERSION, RNET_E_HANDSHAKE_REQUIRED,
+    RNET_E_INVALID_ARGUMENT, RNET_E_INVALID_HANDLE, RNET_E_INVALID_STATE, RNET_E_WOULD_BLOCK,
+    RNET_GAME_AUTH_REQUEST, RNET_GAME_MESSAGE, RNET_GAME_PRIORITY_HIGH, RNET_GAME_PROFILE_REALTIME,
+    RNET_GAME_PROFILE_RELIABLE_REALTIME, RNET_GAME_PROFILE_SESSION, RNET_GAME_RESUME_REQUEST,
+    RNET_GAME_RESUME_TICKET, RNET_GAME_SESSION_READY, RNET_GAME_SESSION_RESUMED, RNET_LOG_INFO,
+    RNET_OK, RNET_TRANSPORT_KCP, RNET_TRANSPORT_TCP, RNET_TRANSPORT_UDP,
 };
 use rnet_security::Keypair;
 use std::mem::size_of;
@@ -681,55 +681,132 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
         unsafe { rnet_game_realtime_queue_snapshot(runtime, std::ptr::null_mut()) },
         RNET_E_INVALID_ARGUMENT
     );
-    assert_eq!(
-        unsafe { rnet_game_send_latest(runtime, client_session.unwrap(), 7, slice(b"stale")) },
-        RNET_OK
-    );
-    assert_eq!(
-        unsafe { rnet_game_send_latest(runtime, client_session.unwrap(), 7, slice(b"latest")) },
-        RNET_OK
-    );
-    assert_eq!(
-        unsafe { rnet_game_realtime_queue_snapshot(runtime, &mut realtime) },
-        RNET_OK
-    );
-    assert_eq!(realtime.queued_messages, 1);
-    assert!(realtime.queued_bytes >= b"latest".len() as u64);
-    assert_eq!(realtime.replaced, 1);
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let mut latest_received = false;
-    while Instant::now() < deadline && !latest_received {
-        let mut events = [RnetGameEvent::default(); 16];
-        let mut count = 0;
+    for tick in [None, Some(0), Some(u32::MAX)] {
+        let replaced_before = realtime.replaced;
         assert_eq!(
             unsafe {
-                rnet_game_poll_events(runtime, events.as_mut_ptr(), events.len(), 10, &mut count)
+                rnet_game_send_latest_with_tick(
+                    runtime,
+                    client_session.unwrap(),
+                    7,
+                    slice(b"stale"),
+                    17,
+                )
             },
             RNET_OK
         );
-        for event in events.iter().take(count) {
-            if event.event_type == RNET_GAME_MESSAGE && event.session == server_session.unwrap() {
-                assert_eq!(
-                    unsafe { std::slice::from_raw_parts(event.data, event.data_len) },
-                    b"latest"
-                );
-                latest_received = true;
-            }
-            if event.buffer_token != 0 {
-                assert_eq!(
-                    rnet_game_buffer_release(runtime, event.buffer_token),
-                    RNET_OK
-                );
+        assert_eq!(
+            unsafe {
+                match tick {
+                    Some(tick) => rnet_game_send_latest_with_tick(
+                        runtime,
+                        client_session.unwrap(),
+                        7,
+                        slice(b"latest"),
+                        tick,
+                    ),
+                    None => {
+                        rnet_game_send_latest(runtime, client_session.unwrap(), 7, slice(b"latest"))
+                    }
+                }
+            },
+            RNET_OK
+        );
+        assert_eq!(
+            unsafe { rnet_game_realtime_queue_snapshot(runtime, &mut realtime) },
+            RNET_OK
+        );
+        assert_eq!(realtime.queued_messages, 1);
+        assert!(realtime.queued_bytes >= b"latest".len() as u64);
+        assert_eq!(realtime.replaced, replaced_before + 1);
+        // A second key tests a positive batch limit; it also covers empty snapshots without tick.
+        assert_eq!(
+            unsafe { rnet_game_send_latest(runtime, client_session.unwrap(), 8, slice(b"")) },
+            RNET_OK
+        );
+        let mut forwarded = usize::MAX;
+        assert_eq!(
+            unsafe { rnet_game_flush_realtime(runtime, 0, &mut forwarded) },
+            RNET_OK
+        );
+        assert_eq!(forwarded, 0);
+        assert_eq!(
+            unsafe { rnet_game_realtime_queue_snapshot(runtime, &mut realtime) },
+            RNET_OK
+        );
+        assert_eq!(realtime.queued_messages, 2);
+        assert_eq!(
+            unsafe { rnet_game_flush_realtime(runtime, 1, &mut forwarded) },
+            RNET_OK
+        );
+        assert_eq!(forwarded, 1);
+        assert_eq!(
+            unsafe { rnet_game_realtime_queue_snapshot(runtime, &mut realtime) },
+            RNET_OK
+        );
+        assert_eq!(realtime.queued_messages, 1);
+        assert_eq!(
+            unsafe { rnet_game_flush_realtime(runtime, usize::MAX, &mut forwarded) },
+            RNET_OK
+        );
+        assert_eq!(forwarded, 1);
+        assert_eq!(
+            unsafe { rnet_game_flush_realtime(runtime, usize::MAX, &mut forwarded) },
+            RNET_OK
+        );
+        assert_eq!(forwarded, 0);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut latest_received = false;
+        let mut empty_received = false;
+        while Instant::now() < deadline && !(latest_received && empty_received) {
+            let mut events = [RnetGameEvent::default(); 16];
+            let mut count = 0;
+            assert_eq!(
+                unsafe {
+                    rnet_game_poll_events(
+                        runtime,
+                        events.as_mut_ptr(),
+                        events.len(),
+                        10,
+                        &mut count,
+                    )
+                },
+                RNET_OK
+            );
+            for event in events.iter().take(count) {
+                if event.event_type == RNET_GAME_MESSAGE && event.session == server_session.unwrap()
+                {
+                    if event.data_len == 0 {
+                        assert!(!empty_received);
+                        assert_eq!(event.has_tick, 0);
+                        empty_received = true;
+                    } else {
+                        assert!(!latest_received);
+                        assert_eq!(
+                            unsafe { std::slice::from_raw_parts(event.data, event.data_len) },
+                            b"latest"
+                        );
+                        assert_eq!(event.has_tick, u32::from(tick.is_some()));
+                        assert_eq!(event.tick, tick.unwrap_or(0));
+                        latest_received = true;
+                    }
+                }
+                if event.buffer_token != 0 {
+                    assert_eq!(
+                        rnet_game_buffer_release(runtime, event.buffer_token),
+                        RNET_OK
+                    );
+                }
             }
         }
+        assert!(latest_received && empty_received);
+        assert_eq!(
+            unsafe { rnet_game_realtime_queue_snapshot(runtime, &mut realtime) },
+            RNET_OK
+        );
+        assert_eq!(realtime.queued_messages, 0);
+        assert!(realtime.forwarded >= 1);
     }
-    assert!(latest_received);
-    assert_eq!(
-        unsafe { rnet_game_realtime_queue_snapshot(runtime, &mut realtime) },
-        RNET_OK
-    );
-    assert_eq!(realtime.queued_messages, 0);
-    assert!(realtime.forwarded >= 1);
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut quality = RnetGameQuality::default();
     while Instant::now() < deadline && quality.available == 0 {
@@ -953,4 +1030,62 @@ fn game_c_api_waits_for_authorization_and_sends_opaque_payload() {
     assert_eq!(rnet_game_runtime_destroy(runtime), RNET_E_INVALID_STATE);
     assert_eq!(rnet_game_buffer_release(runtime, message_token), RNET_OK);
     assert_eq!(rnet_game_runtime_destroy(runtime), RNET_OK);
+}
+
+#[test]
+fn realtime_flush_validates_handles_and_output_even_at_zero_capacity() {
+    let mut forwarded = usize::MAX;
+    assert_eq!(
+        unsafe { rnet_game_flush_realtime(0, 0, &mut forwarded) },
+        RNET_E_INVALID_HANDLE
+    );
+    assert_eq!(forwarded, 0);
+    assert_eq!(
+        unsafe { rnet_game_flush_realtime(0, 0, std::ptr::null_mut()) },
+        RNET_E_INVALID_ARGUMENT
+    );
+    let mut runtime = 0;
+    assert_eq!(
+        unsafe {
+            rnet_game_runtime_create(&RnetGameConfig::default(), std::ptr::null(), &mut runtime)
+        },
+        RNET_OK
+    );
+    assert_eq!(
+        unsafe { rnet_game_flush_realtime(runtime, usize::MAX, &mut forwarded) },
+        RNET_OK
+    );
+    assert_eq!(forwarded, 0);
+    assert_eq!(
+        unsafe { rnet_game_send_latest_with_tick(runtime, 0, 0, slice(b""), 0) },
+        RNET_E_INVALID_HANDLE
+    );
+    assert_eq!(
+        unsafe {
+            rnet_game_send_latest_with_tick(
+                runtime,
+                0,
+                0,
+                RnetSlice {
+                    ptr: std::ptr::null(),
+                    len: 1,
+                },
+                0,
+            )
+        },
+        RNET_E_INVALID_ARGUMENT
+    );
+    assert_eq!(rnet_game_runtime_stop(runtime, 0), RNET_OK);
+    assert_eq!(
+        unsafe { rnet_game_flush_realtime(runtime, 1, &mut forwarded) },
+        RNET_OK
+    );
+    assert_eq!(forwarded, 0);
+    assert_eq!(rnet_game_runtime_destroy(runtime), RNET_OK);
+    forwarded = usize::MAX;
+    assert_eq!(
+        unsafe { rnet_game_flush_realtime(runtime, 0, &mut forwarded) },
+        RNET_E_INVALID_HANDLE
+    );
+    assert_eq!(forwarded, 0);
 }

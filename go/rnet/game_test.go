@@ -230,35 +230,59 @@ func TestGameFacadeJoinsAndExchangesOpaquePayload(t *testing.T) {
 				scheduled.QueueDelaySamples == 0 || scheduled.TickQueueDelaySamples == 0 {
 				t.Fatalf("advanced send telemetry=%+v err=%v", scheduled, err)
 			}
-			if err := runtime.SendLatest(clientSession, 7, []byte("go-latest")); err != nil {
-				t.Fatal(err)
-			}
-			queue, err := runtime.RealtimeQueueSnapshot()
-			if err != nil || queue.QueuedMessages != 1 || queue.QueuedBytes == 0 {
-				t.Fatalf("snapshot not staged: %+v, %v", queue, err)
-			}
-			deadline = time.Now().Add(3 * time.Second)
-			latestReceived := false
-			for time.Now().Before(deadline) && !latestReceived {
-				events, err := runtime.Poll(16, 10*time.Millisecond)
-				if err != nil {
+			for _, metadata := range []struct {
+				present bool
+				tick    uint32
+			}{{}, {true, 0}, {true, ^uint32(0)}} {
+				if err := runtime.SendLatestWithTick(clientSession, 7, []byte("stale"), 17); err != nil {
 					t.Fatal(err)
 				}
-				for _, event := range events {
-					if event.Type == GameMessage && event.Session == serverSession {
-						if !bytes.Equal(event.Data, []byte("go-latest")) {
-							t.Fatalf("latest payload = %q", event.Data)
+				var sendErr error
+				if metadata.present {
+					sendErr = runtime.SendLatestWithTick(clientSession, 7, []byte("go-latest"), metadata.tick)
+				} else {
+					sendErr = runtime.SendLatest(clientSession, 7, []byte("go-latest"))
+				}
+				if err := sendErr; err != nil {
+					t.Fatal(err)
+				}
+				queue, err := runtime.RealtimeQueueSnapshot()
+				if err != nil || queue.QueuedMessages != 1 || queue.QueuedBytes == 0 {
+					t.Fatalf("snapshot not staged: %+v, %v", queue, err)
+				}
+				if n, err := runtime.FlushRealtime(0); err != nil || n != 0 {
+					t.Fatalf("zero flush: %d, %v", n, err)
+				}
+				if n, err := runtime.FlushRealtime(1); err != nil || n != 1 {
+					t.Fatalf("explicit flush: %d, %v", n, err)
+				}
+				queue, err = runtime.RealtimeQueueSnapshot()
+				if err != nil || queue.QueuedMessages != 0 {
+					t.Fatalf("flush did not drain: %+v, %v", queue, err)
+				}
+				deadline = time.Now().Add(3 * time.Second)
+				latestReceived := false
+				for time.Now().Before(deadline) && !latestReceived {
+					events, err := runtime.Poll(16, 10*time.Millisecond)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, event := range events {
+						if event.Type == GameMessage && event.Session == serverSession {
+							if !bytes.Equal(event.Data, []byte("go-latest")) || event.HasTick != metadata.present || event.Tick != metadata.tick {
+								t.Fatalf("latest payload=%q hasTick=%v tick=%d; want %+v", event.Data, event.HasTick, event.Tick, metadata)
+							}
+							latestReceived = true
 						}
-						latestReceived = true
 					}
 				}
-			}
-			if !latestReceived {
-				t.Fatal("game latest message did not arrive")
-			}
-			queue, err = runtime.RealtimeQueueSnapshot()
-			if err != nil || queue.QueuedMessages != 0 || queue.Forwarded == 0 {
-				t.Fatalf("snapshot not forwarded: %+v, %v", queue, err)
+				if !latestReceived {
+					t.Fatal("game latest message did not arrive")
+				}
+				queue, err = runtime.RealtimeQueueSnapshot()
+				if err != nil || queue.QueuedMessages != 0 || queue.Forwarded == 0 {
+					t.Fatalf("snapshot not forwarded: %+v, %v", queue, err)
+				}
 			}
 			deadline = time.Now().Add(3 * time.Second)
 			var quality GameQuality
@@ -464,5 +488,31 @@ func TestGameNetworkConfigRejectsTransportLogger(t *testing.T) {
 	network.Logger = func(LogRecord) {}
 	if _, err := NewGameRuntime(nil, GameConfig{Network: &network}); err == nil {
 		t.Fatal("transport logger was silently ignored by game runtime")
+	}
+}
+
+func TestGameRealtimeRejectsInvalidCapacityAndClosedRuntime(t *testing.T) {
+	r, err := NewGameRuntime(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if n, err := r.FlushRealtime(-1); err == nil || n != 0 {
+		t.Fatalf("negative capacity: %d, %v", n, err)
+	}
+	if n, err := r.FlushRealtime(0); err != nil || n != 0 {
+		t.Fatalf("zero capacity: %d, %v", n, err)
+	}
+	if err := r.SendLatestWithTick(0, 0, nil, 0); err == nil {
+		t.Fatal("invalid session accepted")
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := r.FlushRealtime(0); err == nil || n != 0 {
+		t.Fatalf("closed runtime: %d, %v", n, err)
+	}
+	if err := r.SendLatestWithTick(0, 0, nil, 0); err == nil {
+		t.Fatal("closed runtime accepted")
 	}
 }

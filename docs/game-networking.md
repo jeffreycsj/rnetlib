@@ -309,7 +309,19 @@ A unified TCP client endpoint belongs to one connection: it is reclaimed when th
 
 All bindings support replaceable snapshots with session, key and payload: Rust/C++11 `send_latest`, C `rnet_game_send_latest`, and Go/C# `SendLatest`. They stage snapshots in a separate bounded queue, which every binding's game `poll`/`Poll` flushes internally. Keys are scoped to one session; replacing a pending key releases its previous budget and preserves fair key order.
 
-Rust alone additionally exposes `send_latest_with_tick(session, key, payload, tick)` and explicit `flush_realtime(capacity)`. C ABI, C++11, Go and C# do not expose either capability: their LatestOnly send has no network-envelope tick parameter and they must poll to flush it. If those bindings need a business tick, encode it in the application payload; it will not populate the envelope tick. Rust's explicit flush does not drive heartbeat/clock/negotiation timers and is not a replacement for continuous positive-capacity polling.
+Every binding exposes an explicit snapshot tick and a bounded realtime flush:
+
+| Binding | Snapshot with tick | Explicit flush |
+| --- | --- | --- |
+| Rust | `send_latest_with_tick(session, key, payload, Some(tick))` | `flush_realtime(capacity) -> usize` |
+| C | `rnet_game_send_latest_with_tick(runtime, session, key, payload, tick)` | `rnet_game_flush_realtime(runtime, capacity, &forwarded)` |
+| C++11 | `send_latest_with_tick(session, key, payload, tick)` | `flush_realtime(capacity) -> size_t` |
+| Go | `SendLatestWithTick(session, key, payload, tick)` | `FlushRealtime(capacity) (int, error)` |
+| C# | `SendLatestWithTick(session, key, payload, tick)` | `FlushRealtime(capacity) -> nuint` |
+
+Tick is an unsigned 32-bit application value; zero and the maximum value are both present ticks, not sentinels. Same-key replacement replaces both bytes and tick. Keep using `send_latest` / `SendLatest` to omit tick (Rust also accepts `None`). Empty and binary snapshots are valid.
+
+Flush attempts at most `capacity` pending snapshots and reports how many transport accepted, not how many the peer received. It consumes no application events and drives no heartbeat/clock/negotiation timers; continue positive-capacity polling on both peers. It can wait for the shared poll lock. Transport backpressure retains snapshots, so the count can be smaller than capacity. Zero sends nothing but still validates runtime lifetime; Go rejects negative capacity. C requires a non-null `size_t *out_forwarded`, clears it before handle validation and returns an error code separately. Other wrappers use their normal error/exception handling. A stopped, still-owned runtime has no pending snapshots; a destroyed/disposed runtime is invalid. Deploy the rebuilt native library and SDK together: an older library with the same layout ABI may lack these new symbols.
 
 If the transport queue is full, the pending key rotates behind others instead of blocking the event loop. `RealtimeQueueConfig` caps total bytes, per-session bytes, keys per session, and each flush batch. `realtime_queue_snapshot()` and Prometheus expose queued bytes/messages, game-stage replacements, close/backpressure drops, send failures, and forwarded totals. For TCP/KCP, a keyed slot can also be replaced after transport admission while it is still waiting for the I/O worker; `transport_latest_snapshot()` reports those replacements, worker pickups and admission failures split by stable reason. Worker pickup is the recall boundary: a partly written TCP record or data already given to KCP cannot be withdrawn, including KCP's own deferred/retransmission queues. A pickup does **not** prove delivery; a later I/O failure is traced through the existing session-close/error metrics. UDP retains game-stage-only replacement. Use ordinary `send` for messages that must not be dropped or replaced. A successful forward means queued locally, **not delivered**.
 

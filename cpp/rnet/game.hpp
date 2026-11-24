@@ -228,6 +228,28 @@ class GameRuntime {
     check(rnet_game_send_latest(handle_, session, key, bytes(payload)));
   }
 
+  /// Copies a ready-session snapshot with an explicit simulation tick, including zero.
+  /// Key is session-local; replacement updates payload and tick. Use send_latest to omit tick.
+  void send_latest_with_tick(rnet_session_t session, uint64_t key,
+                            const std::vector<uint8_t> &payload, uint32_t tick) const {
+    check(rnet_game_send_latest_with_tick(handle_, session, key, bytes(payload), tick));
+  }
+
+  /// Binary-safe tick snapshot overload; preserves embedded NULs and copies before returning.
+  void send_latest_with_tick(rnet_session_t session, uint64_t key,
+                            const std::string &payload, uint32_t tick) const {
+    check(rnet_game_send_latest_with_tick(handle_, session, key, bytes(payload), tick));
+  }
+
+  /// Attempts at most capacity realtime snapshots; returns transport admissions, not deliveries.
+  /// Zero sends nothing but validates the runtime. May wait for poll's lock; drives no timers
+  /// and consumes no events. Continue positive-capacity polling; backpressure retains snapshots.
+  size_t flush_realtime(size_t capacity) const {
+    size_t forwarded = 0;
+    check(rnet_game_flush_realtime(handle_, capacity, &forwarded));
+    return forwarded;
+  }
+
   /// Closes peer and revokes its resume/staged state; listener remains open.
   void close_session(rnet_session_t session) const {
     check(rnet_game_session_close(handle_, session));

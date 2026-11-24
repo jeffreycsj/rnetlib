@@ -125,6 +125,27 @@ public sealed unsafe partial class GameRuntime {
         using var h = Lease(); fixed (byte* ptr = payload)
             Native.Check(Native.rnet_game_send_latest(h.Value, session, key, new Native.Slice(ptr, payload.Length)));
     }
+    /// <summary>Copies a replaceable snapshot carrying an explicit simulation tick.</summary>
+    /// <param name="session">Ready local game session.</param>
+    /// <param name="key">Session-local replacement key; zero is valid.</param>
+    /// <param name="payload">Snapshot bytes copied before return, including empty payloads.</param>
+    /// <param name="tick">Application tick forwarded unchanged; zero is present, not omitted.</param>
+    /// <remarks>Replacement updates both payload and tick. Use SendLatest to omit tick.
+    /// Replacement and delivery limits are identical to SendLatest.</remarks>
+    public void SendLatestWithTick(ulong session, ulong key, ReadOnlySpan<byte> payload, uint tick) {
+        using var h = Lease(); fixed (byte* ptr = payload)
+            Native.Check(Native.rnet_game_send_latest_with_tick(h.Value, session, key, new Native.Slice(ptr, payload.Length), tick));
+    }
+    /// <summary>Forwards a bounded batch of realtime snapshots without consuming application events.</summary>
+    /// <param name="capacity">Maximum attempts; zero sends nothing but still validates runtime lifetime.</param>
+    /// <returns>Snapshots accepted by transport, not delivered to the peer.</returns>
+    /// <remarks>May wait for the shared poll lock. Does not drive heartbeat, clock or negotiation timers.
+    /// Continue positive-capacity Poll calls; backpressure retains snapshots for a later attempt.</remarks>
+    public nuint FlushRealtime(nuint capacity) {
+        using var h = Lease();
+        Native.Check(Native.rnet_game_flush_realtime(h.Value, capacity, out nuint forwarded));
+        return forwarded;
+    }
     /// <summary>Drives game state and returns owned event copies, releasing native tokens in finally.</summary>
     /// <param name="capacity">Maximum returned events, 0..4096; default 64. Zero still drives nonblocking
     /// maintenance.</param>

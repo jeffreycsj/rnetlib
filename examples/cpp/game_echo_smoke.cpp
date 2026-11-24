@@ -43,6 +43,7 @@ int main() {
   rnet_session_t client_session = 0;
   bool first_received = false;
   bool second_received = false;
+  bool plain_received = false;
   bool server_mapped = false;
   bool client_mapped = false;
   rnet_endpoint_t resumed_endpoint = 0;
@@ -84,15 +85,27 @@ int main() {
               scheduled.queue_delay_samples == 0 ||
               scheduled.tick_queue_delay_samples == 0)
             return 10;
-          runtime.send_latest(client_session, 7, std::string("cpp-latest"));
+          runtime.send_latest_with_tick(client_session, 7, std::vector<uint8_t>{'o', 'l', 'd'}, UINT32_MAX);
+          runtime.send_latest_with_tick(client_session, 7, std::string("cpp-latest"), 0);
           const rnet::GameRealtimeQueue queue = runtime.realtime_queue_snapshot();
           if (queue.queued_messages != 1 || queue.queued_bytes == 0)
             return 8;
+          if (runtime.flush_realtime(0) != 0 || runtime.flush_realtime(1) != 1 ||
+              runtime.realtime_queue_snapshot().queued_messages != 0 || runtime.flush_realtime(1) != 0)
+            return 11;
           continue;
         }
-        if (second_received || payload != "cpp-latest")
+        if (!second_received) {
+          if (payload != "cpp-latest" || !event.has_tick || event.tick != 0)
+            return 3;
+          second_received = true;
+          runtime.send_latest_with_tick(client_session, 7, std::string("stale"), 17);
+          runtime.send_latest(client_session, 7, std::string("cpp-no-tick"));
+          continue;
+        }
+        if (plain_received || payload != "cpp-no-tick" || event.has_tick)
           return 3;
-        second_received = true;
+        plain_received = true;
         const rnet::GameRealtimeQueue queue = runtime.realtime_queue_snapshot();
         if (queue.queued_messages != 0 || queue.forwarded == 0)
           return 8;

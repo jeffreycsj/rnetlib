@@ -2169,6 +2169,33 @@ int32_t rnet_game_send_latest(uint64_t runtime,
                               struct rnet_slice payload);
 
 /**
+ * Copies a replaceable snapshot with an explicitly present simulation tick.
+ * Uses the same ready-session, session-local key and queue limits as rnet_game_send_latest.
+ * Tick is forwarded unchanged, including zero; replacement updates both payload and tick.
+ * Use rnet_game_send_latest to omit tick. Tick is application metadata, not trusted time.
+ *
+ * # Safety
+ * A nonempty payload must point to readable memory for the call; it is copied before return.
+ */
+int32_t rnet_game_send_latest_with_tick(uint64_t runtime,
+                                        uint64_t session,
+                                        uint64_t key,
+                                        struct rnet_slice payload,
+                                        uint32_t tick);
+
+/**
+ * Attempts at most capacity staged realtime snapshots, reporting transport admissions.
+ * Required out_forwarded is zeroed before handle validation; success is not peer delivery.
+ * Zero capacity performs no sends but still validates runtime. Backpressure retains snapshots.
+ * May wait for the shared poll lock. Does not drive timers or consume application events;
+ * both peers must continue positive-capacity polling. A stopped runtime has no queued work.
+ *
+ * # Safety
+ * out_forwarded must point to aligned writable storage for one size_t for the entire call.
+ */
+int32_t rnet_game_flush_realtime(uint64_t runtime, size_t capacity, size_t *out_forwarded);
+
+/**
  * Explicitly closes session, drops staged work and revokes its resume state; keeps listener.
  */
 int32_t rnet_game_session_close(uint64_t runtime, uint64_t session);

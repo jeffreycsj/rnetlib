@@ -26,6 +26,8 @@ internal static unsafe partial class Native
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_send(ulong runtime, ulong session, Slice payload);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_send_ex(ulong runtime, ulong session, Slice payload, SendOptions* options);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_send_latest(ulong runtime, ulong session, ulong key, Slice payload);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_send_latest_with_tick(ulong runtime, ulong session, ulong key, Slice payload, uint tick);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_flush_realtime(ulong runtime, nuint capacity, out nuint forwarded);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_session_close(ulong runtime, ulong session);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_endpoint_close(ulong runtime, ulong endpoint);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rnet_game_rekey(ulong runtime, ulong session);

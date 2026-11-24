@@ -47,6 +47,8 @@ doc-check: native-doc-check
 
 c-test: header-check
 	cargo build -p rnet-ffi
+	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude examples/c/tests/realtime.c target/debug/librnet.a -lpthread -ldl -lm -o target/rnet-c-realtime
+	./target/rnet-c-realtime
 	$(CC) -std=c11 -Wall -Wextra -Werror -Iinclude examples/c/tests/poll_ownership.c target/debug/librnet.a -Wl,--wrap=rnet_game_poll_events -lpthread -ldl -lm -o target/rnet-c-poll-ownership
 	./target/rnet-c-poll-ownership poll-error
 	./target/rnet-c-poll-ownership handler-error

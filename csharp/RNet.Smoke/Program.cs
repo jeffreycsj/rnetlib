@@ -55,12 +55,21 @@ foreach (var transport in new[] { Transport.Tcp, Transport.Udp, Transport.Kcp })
             e => { if (e.Type == GameEventType.Message) server.Send(e.Session, e.Data); },
             e => { if (e.Type == GameEventType.Message) { Require(e.Data.SequenceEqual(payload), "opaque echo"); received = true; } });
     }
-    server.SendLatest(ss, 7, new byte[] { 1 });
-    server.SendLatest(ss, 7, new byte[] { 2 });
-    bool latest = false;
-    Pump(server, client, () => latest, null, e => {
-        if (e.Type == GameEventType.Message) { Require(e.Data.SequenceEqual(new byte[] { 2 }), "latest coalescing"); latest = true; }
-    });
+    foreach (uint? tick in new uint?[] { null, 0, uint.MaxValue }) {
+        server.SendLatestWithTick(ss, 7, new byte[] { 1 }, 17);
+        if (tick.HasValue) server.SendLatestWithTick(ss, 7, new byte[] { 0, 255, 2 }, tick.Value);
+        else server.SendLatest(ss, 7, new byte[] { 0, 255, 2 });
+        Require(server.FlushRealtime(0) == 0, "zero flush");
+        Require(server.FlushRealtime(1) == 1, "explicit flush before polling");
+        Require(server.FlushRealtime(nuint.MaxValue) == 0, "empty flush");
+        bool latest = false;
+        Pump(server, client, () => latest, null, e => {
+            if (e.Type == GameEventType.Message) {
+                Require(e.Data.SequenceEqual(new byte[] { 0, 255, 2 }) && e.Tick == tick, "latest payload/tick coalescing");
+                latest = true;
+            }
+        });
+    }
     try { client.SetEncryption(cs, true); throw new Exception("client changed server policy"); }
     catch (RNetException error) { Require(error.Code == -3, "client must not control encryption"); }
     bool rekeyed = false;
@@ -104,6 +113,8 @@ foreach (var transport in new[] { Transport.Tcp, Transport.Udp, Transport.Kcp })
     server.CloseSession(ss);
     server.CloseEndpoint(listener);
     client.Dispose(); client.Dispose();
+    try { client.FlushRealtime(0); throw new Exception("disposed flush accepted"); } catch (ObjectDisposedException) { }
+    try { client.SendLatestWithTick(0, 0, Array.Empty<byte>(), 0); throw new Exception("disposed latest accepted"); } catch (ObjectDisposedException) { }
     try { client.Poll(); throw new Exception("disposed runtime accepted"); } catch (ObjectDisposedException) { }
     Console.WriteLine($"PASS {transport}: auth, echo, dynamic encryption/rekey, latest, metadata, resume/range, metrics, GC/logger, errors, dispose");
 }
