@@ -2,13 +2,13 @@
 
 This record separates repository qualification from target-environment certification.
 
-## Current release status (2026-10-28)
+## Current release status (2026-11-25)
 
-**Candidate, not certified; all nine local repository gates passed on the development snapshot
-identified below, but clean-release and target-environment qualification remain incomplete.**
-The fresh results do not turn the historical 2026-09-23 evidence into current evidence, nor
-qualify subsequent source changes. See the [incremental migration record](single-current-api.md)
-for earlier, narrower checks.
+**Candidate, not certified. Ordinary CI passed on clean commit
+`8be4ae41cc07bee7896685b80509d559693540ef`; final release and target-environment
+qualification remain incomplete.** The October local suites below are historical
+snapshots, not evidence for this commit or later changes. See the
+[incremental migration record](single-current-api.md) for earlier checks.
 
 Final qualification must reference one clean release commit and its exact native/SDK package
 hashes. Old-endpoint removal, single-wire game negotiation, public exact/range API consolidation
@@ -20,6 +20,29 @@ independent audit of snow, ring or their Noise/KCP integration.
 Linux guard-page ABI checks do not qualify other operating systems. Managed integration evidence
 is limited to Linux x86_64 / .NET 8, not Windows, macOS, Unity/IL2CPP or mobile. Target capacity and
 long-term stability remain unmeasured; short loopback probes are not substitutes.
+
+## Ordinary CI verification (2026-11-25)
+
+[Run 45579973608, attempt 1](https://github.com/jeffreycsj/rnetlib/actions/runs/45579973608)
+passed all eight jobs: Python 3.10/3.14 compatibility, Linux SDK checks, Rust MSRV,
+supply-chain, Loom, ASan fuzz smoke and Miri. The Linux job passed documentation,
+Clippy, workspace tests, independent Rust consumption, C/C++/Go/C# integration,
+Go race, ABI checks, packaging and extracted-package smoke before upload.
+The two Python jobs each passed 109 script tests.
+
+The [Linux job](https://github.com/jeffreycsj/rnetlib/actions/runs/45579973608/job/139087515947)
+reported `dirty: false`, source SHA256
+`8a14a170d86652145a9b05e1d4ebde86eee7dd1d4fe015258b0db9b3e96b984f`, and SDK
+manifest SHA256 `058c7ec706a54b7593b042ca635d0671ec8d9329781709e5632213b0be2556a1`.
+[Artifact 15006368176](https://github.com/jeffreycsj/rnetlib/actions/runs/45579973608/artifacts/15006368176)
+has GitHub ZIP SHA256 `fe3d62fcc7995f5a380643e2c9a2fef03371eaef143856d27dc995981163da7b`;
+this identifies the outer artifact ZIP, not the enclosed SDK tarball. Its scheduled
+expiry is 2026-12-09 09:01:53 UTC; it is not a permanent Release attachment.
+
+This run used the ordinary CI resource budget. It is not the strict nine-gate
+`release-qualification` suite, a long fuzz campaign, target soak or an independent
+security audit. Final qualification, approved permanent archival and target tests
+remain required. This documentation update was written after the verified commit.
 
 ## Development verification (2026-10-28): external Rust KCP consumers
 

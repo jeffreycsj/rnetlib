@@ -19,24 +19,28 @@ jobs:
       CARGO_BUILD_JOBS: "1"
       RNET_EVIDENCE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
         with:
           persist-credentials: false
       - name: Run serial repository qualification
         run: python3 -B scripts/release_evidence.py suite --release --output "target/release-evidence/${RNET_EVIDENCE_RUN_ID}"
       - name: Archive partial or complete evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, Node.js 24
         with:
           name: evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/release-evidence/${{ env.RNET_EVIDENCE_RUN_ID }}/
           if-no-files-found: error
+          archive: true
+          overwrite: false
           retention-days: 30
       - name: Archive repository-qualified candidate
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, Node.js 24
         with:
           name: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/linux-x86_64.tar.gz*
           if-no-files-found: error
+          archive: true
+          overwrite: false
           retention-days: 30

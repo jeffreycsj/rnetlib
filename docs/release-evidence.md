@@ -227,6 +227,11 @@ candidate draft, uploads, checks remote hashes and only then publishes a prerele
 Downloaded scripts and binaries are never executed. The trusted checkout is pinned
 to the archive workflow commit, not the candidate or any downloaded source.
 
+The qualification workflow uses SHA-pinned Node.js 24 actions; provision Actions
+Runner 2.327.1 or newer ([checkout runtime requirement](https://github.com/actions/checkout/tree/v7.0.1#checkout-v5)).
+Artifact uploads explicitly retain ZIP wrapping and refuse replacement, matching
+the archive verifier's input contract. Ordinary CI has the same upload settings.
+
 Administrator prerequisites, **not configured automatically**:
 
 1. Provision the existing `rnet-qualification` self-hosted Linux/X64 label on a trusted,

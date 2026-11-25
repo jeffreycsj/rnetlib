@@ -83,3 +83,23 @@ class CIDeliveryTests(unittest.TestCase):
         linux = re.search(r"(?ms)^  linux:\n(.*?)(?=^  [\w-]+:|\Z)", workflow).group(1)
         self.assertIn("needs: python-compat", linux)
         self.assertNotIn("if: always()", linux)
+
+    def test_remote_workflow_actions_use_immutable_commits(self):
+        for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            actions = re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*(\S+)", path.read_text())
+            for action in actions:
+                if not action.startswith("./"):
+                    with self.subTest(workflow=path.name, action=action):
+                        self.assertRegex(action, r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
+
+    def test_artifact_uploads_preserve_zip_and_refuse_replacement(self):
+        for name in ("ci.yml", "release-qualification.yml"):
+            workflow = (ROOT / ".github/workflows" / name).read_text()
+            uploads = re.findall(
+                r"(?ms)^        uses: actions/upload-artifact@[^\n]+\n(.*?)(?=^      - |\Z)", workflow)
+            self.assertTrue(uploads, name)
+            for body in uploads:
+                with self.subTest(workflow=name, upload=body):
+                    self.assertIn("archive: true", body)
+                    self.assertIn("overwrite: false", body)
+                    self.assertIn("if-no-files-found: error", body)
