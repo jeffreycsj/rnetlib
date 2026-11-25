@@ -15,6 +15,7 @@ import tarfile
 MAX_BYTES = 1024**3
 MAX_MEMBER = 256 * 1024**2
 MAX_ENTRIES = 10000
+MAX_JSON_DEPTH = 64
 
 
 def no_symlinks(path):
@@ -32,8 +33,37 @@ def regular_file(path, maximum=MAX_MEMBER):
     return path
 
 
+def _check_json_depth(text):
+    # Bound containers before decoding allocates a nested object graph. Python's
+    # recursion limit is interpreter-dependent and is not our archive contract.
+    # Ignore structural characters inside strings, including escaped quotes.
+    depth, quoted, escaped = 0, False, False
+    for char in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError("JSON nesting exceeds 64 container levels")
+        elif char in "]}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("unbalanced JSON container")
+    # The JSON decoder remains responsible for all syntax validation.
+
+
 def read_json(path, maximum=1024**2):
-    """Reject duplicate keys, nonfinite numbers and oversized metadata."""
+    """Reject duplicate keys, nonfinite numbers, oversized or >64-level metadata.
+
+    The root object counts as one container level; quoted brackets do not count.
+    """
     def pairs(items):
         result = {}
         for key, value in items:
@@ -55,8 +85,11 @@ def read_json(path, maximum=1024**2):
         data = stream.read(maximum + 1)
     if len(data) > maximum:
         raise ValueError("JSON size limit exceeded")
+    # Use the decoder's UTF-8/16/32 detection so encoding cannot bypass the scan.
+    text = data.decode(json.detect_encoding(data), "surrogatepass")
+    _check_json_depth(text)
     try:
-        value = json.loads(data, object_pairs_hook=pairs, parse_constant=constant, parse_float=number)
+        value = json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=number)
     except RecursionError as error:
         raise ValueError("JSON nesting is too deep") from error
     if not isinstance(value, dict):

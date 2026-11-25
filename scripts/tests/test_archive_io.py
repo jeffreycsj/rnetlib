@@ -1,6 +1,7 @@
 """Exercise hostile archives without executing their contents or large allocations."""
 import importlib
 import io
+import json
 from pathlib import Path
 import sys
 import tarfile
@@ -99,3 +100,34 @@ class ArchiveIOTests(unittest.TestCase):
         path.write_bytes(data)
         with self.assertRaises((ValueError, OSError)):
             self.module.extract_tar(path, self.root / "output")
+
+    def test_json_depth_limit_is_independent_of_interpreter_recursion(self):
+        path = self.root / "nested.json"
+        previous = sys.getrecursionlimit()
+        try:
+            # A decoder able to accept 2000 levels must still respect our own bound.
+            sys.setrecursionlimit(10000)
+            for opening, closing in (("[", "]"), ('{"k":', "}")):
+                for containers in (64, 65, 2001):
+                    raw = '{"data":' + opening * (containers - 1) + '0' + closing * (containers - 1) + '}'
+                    path.write_text(raw)
+                    with self.subTest(opening=opening, containers=containers):
+                        if containers == 64:
+                            self.assertEqual(self.module.read_json(path), json.loads(raw))
+                        else:
+                            with self.assertRaisesRegex(ValueError, "JSON nesting"):
+                                self.module.read_json(path)
+        finally:
+            sys.setrecursionlimit(previous)
+
+    def test_json_depth_ignores_quoted_brackets_and_handles_supported_encodings(self):
+        path = self.root / "encoded.json"
+        record = {"text": '[{]}"\\' * 100, "nested": [{"value": "雪"}]}
+        raw = json.dumps(record, ensure_ascii=False)
+        for encoding in ("utf-8", "utf-8-sig", "utf-16", "utf-16-be", "utf-32", "utf-32-be"):
+            with self.subTest(encoding=encoding):
+                path.write_bytes(raw.encode(encoding))
+                self.assertEqual(self.module.read_json(path), record)
+                path.write_bytes(('{"data":' + '[' * 64 + '0' + ']' * 64 + '}').encode(encoding))
+                with self.assertRaisesRegex(ValueError, "JSON nesting"):
+                    self.module.read_json(path)

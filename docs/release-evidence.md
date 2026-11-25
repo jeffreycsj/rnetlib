@@ -206,6 +206,8 @@ fresh path. The CLI returns nonzero on failure, not a partial success report.
 
 Current bounds: 10,000 entries, 256 MiB per regular file, 1 GiB total inventory or
 expanded tar stream (including headers/padding), and 1 MiB per JSON object file.
+JSON metadata allows at most 64 nested object/array levels, counting the root object;
+this bound is checked before decoding and does not depend on Python recursion limits.
 Extraction rejects links, devices, sparse/PAX metadata, noncanonical paths and
 duplicate entries; permissions/ownership from archives are not restored. These
 limits are deliberate, not silently relaxed for large inputs. Keep adequate scratch
