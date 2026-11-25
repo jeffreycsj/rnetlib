@@ -6,6 +6,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  python-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install native documentation test dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Test scripts on the selected interpreter
+        run: |
+          python3 --version
+          clang --version
+          python3 -B -m unittest discover -s scripts/tests -v
+
   rust-msrv:
     runs-on: ubuntu-latest
     steps:
@@ -16,6 +40,7 @@ jobs:
       - run: cargo check --workspace --all-targets --locked
 
   linux:
+    needs: python-compat
     # Set only after provisioning a suitable runner; the memory gate still applies.
     runs-on: ${{ vars.RNET_LINUX_RUNNER || 'ubuntu-latest' }}
     env:
@@ -74,7 +99,6 @@ jobs:
       - run: make package
       # Extract the archive and final-link all language examples before upload.
       - run: make package-smoke
-      - run: LD_LIBRARY_PATH="$PWD/dist/linux-x86_64/lib" dotnet run --project dist/linux-x86_64/csharp/RNet.Smoke -c Release -p:RNetDll="$PWD/dist/linux-x86_64/lib/RNet.dll"
       - name: Archive development SDK package (not full release qualification)
         uses: actions/upload-artifact@v4
         with:

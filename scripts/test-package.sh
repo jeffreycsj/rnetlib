@@ -38,6 +38,7 @@ test -x "${package_dir}/bin/game_probe"
 )
 # Build managed example copies so qualification does not alter packaged sources.
 cp -R "${package_dir}/csharp/RNet.Quickstart" "${test_dir}/RNet.Quickstart"
+cp -R "${package_dir}/csharp/RNet.Smoke" "${test_dir}/RNet.Smoke"
 "${DOTNET:-dotnet}" build "${test_dir}/RNet.Quickstart" -c Release \
   -p:RNetDll="${package_dir}/lib/RNet.dll"
 for transport in tcp udp kcp; do
@@ -48,6 +49,10 @@ for transport in tcp udp kcp; do
     "${DOTNET:-dotnet}" "${test_dir}/RNet.Quickstart/bin/Release/net8.0/RNet.Quickstart.dll" \
     "${transport}" --one-slot
 done
+# Smoke builds create bin/obj; keep them outside both sealed SDK directories.
+LD_LIBRARY_PATH="${package_dir}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+  "${DOTNET:-dotnet}" run --project "${test_dir}/RNet.Smoke" -c Release \
+  -p:RNetDll="${package_dir}/lib/RNet.dll"
 # The child processes must execute the archived binary, not Cargo's debug binary.
 RNET_GAME_PROBE_BINARY="${package_dir}/bin/game_probe" \
   cargo test -p rnet-game --test game_probe -- --test-threads=1

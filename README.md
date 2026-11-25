@@ -107,7 +107,7 @@ See [Getting started](docs/getting-started.md) for transport-level Rust, C, C++1
 
 ## Build and test
 
-Requirements are Rust 1.85 or newer, C11 and C++11 compilers, Go 1.22 or newer, .NET SDK 8+ for the C# checks/package, and a Linux-like linker. Header automation and packaging require Python 3; documentation checks additionally require Clang/Clang++ with JSON AST support (validated locally with Clang 17). No Python packages are required. C example failure tests use Linux linker `--wrap` support.
+Requirements are Rust 1.85 or newer, C11 and C++11 compilers, Go 1.22 or newer, .NET SDK 8+ for the C# checks/package, and a Linux-like linker. Header automation and packaging require Python 3.10 or newer; documentation checks additionally require Clang/Clang++ with JSON AST support (validated locally with Clang 17). No Python packages are required. CI runs the script tests on Python 3.10 and 3.14; both must pass before the Linux SDK build and upload job can run. C example failure tests use Linux linker `--wrap` support.
 
 `include/rnet.h` is generated, not hand-maintained. Edit the Rust FFI declarations
 and their documentation, then run `make header-update` and review the diff.

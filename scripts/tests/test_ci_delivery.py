@@ -56,3 +56,30 @@ class CIDeliveryTests(unittest.TestCase):
                         body.index("uses: actions/upload-artifact@"))
         self.assertNotIn("continue-on-error", body)
         self.assertNotIn("if: always()", body)
+
+    def test_packaged_csharp_smoke_cannot_write_into_the_sealed_sdk(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertNotIn("dotnet run --project dist/", workflow)
+        script = (ROOT / "scripts/test-package.sh").read_text()
+        copy = 'cp -R "${package_dir}/csharp/RNet.Smoke" "${test_dir}/RNet.Smoke"'
+        run = '"${DOTNET:-dotnet}" run --project "${test_dir}/RNet.Smoke"'
+        self.assertIn(copy, script)
+        self.assertIn(run, script)
+        self.assertLess(script.index(copy), script.index(run))
+        self.assertLess(script.index(run), script.rindex('scripts/package_evidence.py verify'))
+        self.assertIn('-p:RNetDll="${package_dir}/lib/RNet.dll"', script[script.index(run):])
+
+    def test_sdk_upload_requires_supported_python_script_matrix(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        job = re.search(r"(?ms)^  python-compat:\n(.*?)(?=^  [\w-]+:|\Z)", workflow)
+        self.assertIsNotNone(job, "SDK delivery needs cross-version script validation")
+        body = job.group(1)
+        self.assertIn('python-version: ["3.10", "3.14"]', body)
+        self.assertIn("python-version: ${{ matrix.python-version }}", body)
+        self.assertRegex(body, r"uses: actions/setup-python@[0-9a-f]{40}\b")
+        self.assertIn("python3 -B -m unittest discover -s scripts/tests -v", body)
+        self.assertIn("fail-fast: false", body)
+        self.assertNotIn("continue-on-error", body)
+        linux = re.search(r"(?ms)^  linux:\n(.*?)(?=^  [\w-]+:|\Z)", workflow).group(1)
+        self.assertIn("needs: python-compat", linux)
+        self.assertNotIn("if: always()", linux)
