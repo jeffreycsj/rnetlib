@@ -12,6 +12,8 @@ import unittest
 from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "release_evidence.py"
+FIXTURE_TOOLCHAIN = {"platform": "test fixture", "machine": "fixture",
+                     "tools": {"python": {"exit_code": 0, "version": "fixture"}}}
 
 
 class ReleaseEvidenceTests(unittest.TestCase):
@@ -25,6 +27,11 @@ class ReleaseEvidenceTests(unittest.TestCase):
         spec.loader.exec_module(cls.module)
 
     def setUp(self):
+        # Host SDK cold starts must not consume the short child-process deadlines.
+        # Keep real Git snapshots, child execution, evidence sealing and validation.
+        snapshot = mock.patch.object(self.module, "toolchain_snapshot", return_value=FIXTURE_TOOLCHAIN)
+        snapshot.start()
+        self.addCleanup(snapshot.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="rnet evidence ")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -48,7 +55,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
         return json.loads((self.output / "report.json").read_text())
 
     def test_success_records_source_log_and_exit_status(self):
-        self.assertEqual(self.run_probe(), 0)
+        self.assertEqual(self.run_probe(), 0, self.report())
         report = self.report()
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["exit_code"], 0)
@@ -71,7 +78,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
 
     def test_dirty_development_run_is_labeled_and_release_refuses_it(self):
         (self.root / "new-source.rs").write_text("untracked input")
-        self.assertEqual(self.run_probe(), 0)
+        self.assertEqual(self.run_probe(), 0, self.report())
         self.assertTrue(self.report()["source_before"]["dirty"])
         self.output = self.root / "target" / "release"
         self.assertNotEqual(self.run_probe(require_clean=True), 0)
@@ -111,7 +118,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
         self.assertEqual(self.report()["status"], "blocked")
 
     def test_existing_evidence_cannot_be_overwritten(self):
-        self.assertEqual(self.run_probe(), 0)
+        self.assertEqual(self.run_probe(), 0, self.report())
         before = (self.output / "report.json").read_bytes()
         with self.assertRaises(FileExistsError):
             self.run_probe("raise SystemExit(9)")
@@ -129,7 +136,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
             self.run_probe()
 
     def test_summary_rejects_missing_tampered_and_mixed_revision_evidence(self):
-        self.assertEqual(self.run_probe(), 0)
+        self.assertEqual(self.run_probe(), 0, self.report())
         path = self.output / "report.json"
         result = self.module.summarize([path], ["fixture"])
         self.assertEqual(result["status"], "passed")
@@ -140,14 +147,14 @@ class ReleaseEvidenceTests(unittest.TestCase):
         self.assertNotEqual(self.module.summarize([path], ["fixture"])["status"], "passed")
 
     def test_summary_requires_same_source_and_unique_gates(self):
-        self.assertEqual(self.run_probe(), 0)
+        self.assertEqual(self.run_probe(), 0, self.report())
         first = self.output / "report.json"
         self.assertNotEqual(self.module.summarize([first, first], ["fixture"])["status"], "passed")
         (self.root / "Cargo.lock").write_text("next revision")
         self.git("add", "Cargo.lock")
         self.git("-c", "user.name=Test", "-c", "user.email=test@invalid", "commit", "-qm", "next")
         self.output = self.root / "target" / "next"
-        self.assertEqual(self.run_probe(), 0)
+        self.assertEqual(self.run_probe(), 0, self.report())
         second = self.output / "report.json"
         report = self.report()
         report["gate"] = "other"
@@ -160,6 +167,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
 import sys, signal
 sys.path.insert(0, {str(SCRIPT.parent)!r})
 import release_evidence as r
+r.toolchain_snapshot = lambda: {FIXTURE_TOOLCHAIN!r}
 signal.signal(signal.SIGTERM, r.interrupt)
 r.run_command({str(self.root)!r}, {str(self.output)!r}, 'signal',
               [sys.executable, '-c', "print('started', flush=True); import time; time.sleep(30)"],
@@ -214,7 +222,7 @@ r.run_command({str(self.root)!r}, {str(self.output)!r}, 'signal',
                     package_module.verify(package, self.module.source_snapshot(self.root))
 
     def test_record_binds_environment_and_summary_checks_its_hash(self):
-        self.assertEqual(self.run_probe(), 0)
+        self.assertEqual(self.run_probe(), 0, self.report())
         path = self.output / "environment.json"
         self.assertTrue(path.is_file())
         self.assertEqual(self.report()["environment_sha256"], self.module.sha256(path))
