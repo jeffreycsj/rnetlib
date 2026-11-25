@@ -251,14 +251,10 @@ pub(crate) fn log_event(entry: &RuntimeEntry, runtime: u64, event: &Event) {
         EventType::SecurityChanged => ("security_changed", LogLevel::Info),
         EventType::Message | EventType::Writable | EventType::GameControl => return,
     };
-    let transport = if event.endpoint == 0 {
-        0
-    } else {
-        entry
-            .network
-            .endpoint_transport(event.endpoint)
-            .map_or(0, |transport| transport as u32)
-    };
+    let transport = event
+        .transport
+        .or_else(|| entry.network.endpoint_transport(event.endpoint).ok())
+        .map_or(0, |transport| transport as u32);
     if let Some(logger) = entry.logger.lock().expect("logger lock poisoned").as_ref() {
         let message = if matches!(
             event.event_type,

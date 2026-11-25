@@ -299,6 +299,15 @@ pub(crate) enum SessionTarget {
 }
 
 impl SessionTarget {
+    // The route owns this identity even after its endpoint has left the registry.
+    pub(crate) fn transport(&self) -> rnet_core::Transport {
+        match self {
+            Self::Tcp(_) => rnet_core::Transport::Tcp,
+            Self::Udp { .. } => rnet_core::Transport::Udp,
+            Self::Kcp { .. } => rnet_core::Transport::Kcp,
+        }
+    }
+
     pub(crate) fn request_cleanup(&self, session: Handle) {
         let addressed = match self {
             Self::Udp { peer, cleanup, .. } | Self::Kcp { peer, cleanup, .. } => {
@@ -513,6 +522,7 @@ pub(crate) fn message_event_with_integrity(
 ) -> Event {
     Event {
         event_type: EventType::Message,
+        transport: None,
         endpoint,
         session,
         correlation_id: frame.header.correlation_id,

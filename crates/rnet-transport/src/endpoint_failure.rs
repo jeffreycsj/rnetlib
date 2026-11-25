@@ -16,7 +16,7 @@ pub(crate) fn fail_endpoint(
     error: RnetError,
 ) {
     let mut endpoints = shared.endpoints.lock().expect("endpoint table poisoned");
-    let Some(_record) = endpoints.remove(endpoint) else {
+    let Some(record) = endpoints.remove(endpoint) else {
         return;
     };
     let sessions: Vec<_> = {
@@ -31,6 +31,7 @@ pub(crate) fn fail_endpoint(
             .collect()
     };
     let mut event = session_event(EventType::EndpointError, endpoint, 0);
+    event.transport = Some(record.transport);
     event.status = error.code();
     event.data = diagnostic_bytes(phase, &error);
     publish_lifecycle(shared, event);

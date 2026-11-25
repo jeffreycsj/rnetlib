@@ -59,6 +59,7 @@ fn close(
         route.target.request_cleanup(session);
         if joining && !route.established {
             let mut event = session_event(EventType::JoinFailed, route.endpoint, session);
+            event.transport = Some(route.target.transport());
             event.status = reason;
             if let Some((phase, error)) = detail {
                 event.data = diagnostic_bytes(phase, error);
@@ -66,6 +67,7 @@ fn close(
             publish_lifecycle(shared, event);
         }
         let mut event = session_event(EventType::SessionClosed, route.endpoint, session);
+        event.transport = Some(route.target.transport());
         event.status = reason;
         if let Some((phase, error)) = detail {
             event.data = diagnostic_bytes(phase, error);
@@ -183,6 +185,69 @@ mod tests {
             );
             let text = std::str::from_utf8(&bytes).unwrap();
             assert!(text.starts_with("phase=tcp_read IoError:"));
+        }
+    }
+
+    #[test]
+    fn teardown_events_keep_transport_after_endpoint_removal() {
+        use rnet_core::{EventType, Transport};
+        for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+            for operation in ["session", "endpoint", "io", "endpoint_error"] {
+                let runtime = NetworkRuntime::new(RuntimeConfig::production()).unwrap();
+                runtime.poll_events(8, Duration::ZERO);
+                let peer = "127.0.0.1:1".parse().unwrap();
+                let endpoint = runtime.insert_endpoint(peer, transport).unwrap();
+                let target = match transport {
+                    Transport::Tcp => SessionTarget::Tcp(mpsc::channel(1).0),
+                    Transport::Udp => SessionTarget::Udp {
+                        sender: mpsc::channel(1).0,
+                        peer,
+                        max_frame_len: 4096,
+                        cleanup: None,
+                    },
+                    Transport::Kcp => SessionTarget::Kcp {
+                        sender: mpsc::channel(1).0,
+                        peer,
+                        cleanup: None,
+                    },
+                };
+                let session = runtime.insert_session(endpoint, target);
+                let error = RnetError::new(ErrorCode::IoError, "fixture I/O error");
+                match operation {
+                    "session" => runtime
+                        .close_session(session, ErrorCode::Cancelled)
+                        .unwrap(),
+                    "endpoint" => runtime.close_endpoint(endpoint).unwrap(),
+                    "io" => remove_session_with_error(&runtime.shared, session, "read", error),
+                    _ => crate::endpoint_failure::fail_endpoint(
+                        &runtime.shared,
+                        endpoint,
+                        None,
+                        "read",
+                        error,
+                    ),
+                }
+                let _ = runtime.close_endpoint(endpoint);
+                assert!(runtime.endpoint_transport(endpoint).is_err());
+                let events = runtime.poll_events(8, Duration::ZERO);
+                assert_eq!(
+                    events.len(),
+                    if operation == "endpoint_error" { 2 } else { 1 }
+                );
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| event.transport == Some(transport)),
+                    "{transport:?} {operation}: {events:?}"
+                );
+                let closes: Vec<_> = events
+                    .iter()
+                    .filter(|event| event.event_type == EventType::SessionClosed)
+                    .collect();
+                assert_eq!(closes.len(), 1);
+                assert_eq!(closes[0].session, session);
+                runtime.stop(Duration::ZERO).unwrap();
+            }
         }
     }
 }

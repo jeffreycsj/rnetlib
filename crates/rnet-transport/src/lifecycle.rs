@@ -57,6 +57,7 @@ impl NetworkRuntime {
         self.shared.metrics.record_session_closed(reason);
         route.target.request_cleanup(session);
         let mut event = session_event(EventType::SessionClosed, route.endpoint, session);
+        event.transport = Some(route.target.transport());
         event.status = reason;
         publish_lifecycle(&self.shared, event);
         Ok(())
@@ -156,10 +157,9 @@ fn close_endpoint_sessions(shared: &Arc<Shared>, endpoint: Handle) {
             shared.latest.forget_session(session);
             release_pending_session(shared, &route);
             shared.metrics.record_session_closed(ErrorCode::Ok);
-            publish_lifecycle(
-                shared,
-                session_event(EventType::SessionClosed, endpoint, session),
-            );
+            let mut event = session_event(EventType::SessionClosed, endpoint, session);
+            event.transport = Some(route.target.transport());
+            publish_lifecycle(shared, event);
         }
     }
 }

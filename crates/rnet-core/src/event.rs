@@ -81,6 +81,9 @@ pub struct Event {
     pub event_type: EventType,
     /// Local owning endpoint; zero for runtime-wide notifications.
     pub endpoint: Handle,
+    /// Transport retained by teardown diagnostics after endpoint/session handles become invalid.
+    /// None when no snapshot is supplied; consumers may query a still-live endpoint as a fallback.
+    pub transport: Option<Transport>,
     /// Local peer handle; zero when no session applies or allocation never occurred.
     pub session: Handle,
     /// Optional caller correlation carried by message events; zero means unspecified.
@@ -105,6 +108,7 @@ impl std::fmt::Debug for Event {
             .debug_struct("Event")
             .field("event_type", &self.event_type)
             .field("endpoint", &self.endpoint)
+            .field("transport", &self.transport)
             .field("session", &self.session)
             .field("correlation_id", &self.correlation_id)
             .field("status", &self.status)
@@ -122,6 +126,7 @@ impl Event {
         Self {
             event_type,
             endpoint: 0,
+            transport: None,
             session: 0,
             correlation_id: 0,
             status: ErrorCode::Ok,

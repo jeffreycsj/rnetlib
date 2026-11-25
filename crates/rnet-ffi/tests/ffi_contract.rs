@@ -197,8 +197,28 @@ fn structured_logger_receives_runtime_identity_and_event_name() {
         rnet_session_close(runtime, client_session, RNET_E_CANCELLED),
         RNET_OK
     );
+    // Force worker cleanup before polling: close diagnostics must not depend on a live endpoint.
+    let cleanup_deadline = Instant::now() + Duration::from_secs(3);
+    let mut port = 0;
+    loop {
+        let status = unsafe { rnet_endpoint_local_port(runtime, client, &mut port) };
+        if status == RNET_E_INVALID_HANDLE {
+            break;
+        }
+        assert_eq!(status, RNET_OK);
+        assert!(
+            Instant::now() < cleanup_deadline,
+            "client endpoint was not cleaned up"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
     let mut events = [RnetEvent::default(); 8];
-    let _ = unsafe { poll_checked(runtime, events.as_mut_ptr(), events.len(), 100) };
+    let count = unsafe { poll_checked(runtime, events.as_mut_ptr(), events.len(), 100) };
+    for event in &events[..count] {
+        if event.buffer_token != 0 {
+            assert_eq!(rnet_buffer_release(runtime, event.buffer_token), RNET_OK);
+        }
+    }
     let deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < deadline
         && !CAPTURED_LOGS_V2
