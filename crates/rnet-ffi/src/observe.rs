@@ -259,7 +259,10 @@ pub(crate) fn log_event(entry: &RuntimeEntry, runtime: u64, event: &Event) {
         let message = if matches!(
             event.event_type,
             EventType::EndpointError | EventType::JoinFailed
-        ) {
+        ) || (event.event_type == EventType::SessionClosed
+            && !event.data.is_empty())
+        {
+            // Terminal details are generated locally; authorization and business bytes stay private.
             let detail = String::from_utf8_lossy(&event.data);
             format!(
                 "{event_name} status={} detail={:.512}",
@@ -332,4 +335,93 @@ fn latency_snapshots(
         snapshots[LatencyKind::LoggerCallback as usize - 1].latency = logger.callback_latency();
     }
     snapshots
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_event;
+    use crate::registry::RuntimeEntry;
+    use rnet_core::{BufferStore, ErrorCode, Event, EventType, Transport};
+    use rnet_observe::{BoundedLogger, LoggerConfig};
+    use rnet_transport::{NetworkRuntime, RuntimeConfig};
+    use std::sync::{
+        atomic::{AtomicU64, AtomicUsize},
+        mpsc, Mutex,
+    };
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn lifecycle_logs_keep_bounded_local_details_without_logging_peer_payloads() {
+        let (sender, receiver) = mpsc::channel();
+        let logger = BoundedLogger::new(LoggerConfig::default(), move |record| {
+            sender.send(record).unwrap();
+        })
+        .unwrap();
+        let entry = RuntimeEntry {
+            network: NetworkRuntime::new(RuntimeConfig::production()).unwrap(),
+            buffers: BufferStore::new(),
+            logger: Mutex::new(Some(logger)),
+            metrics_log_interval_ms: AtomicU64::new(0),
+            last_metrics_log: Mutex::new(Instant::now()),
+            active_calls: AtomicUsize::new(0),
+        };
+        for kind in [
+            EventType::SessionClosed,
+            EventType::JoinFailed,
+            EventType::EndpointError,
+        ] {
+            for data in [
+                b"phase=tcp_read peer closed TCP stream".to_vec(),
+                "中".repeat(700).into_bytes(),
+                vec![0xff; 700],
+            ] {
+                let mut event = Event::simple(kind);
+                event.endpoint = 7;
+                event.session = 8;
+                event.transport = Some(Transport::Tcp);
+                event.status = ErrorCode::IoError;
+                event.data = data;
+                log_event(&entry, 9, &event);
+                let record = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+                let expected: String = String::from_utf8_lossy(&event.data)
+                    .chars()
+                    .take(512)
+                    .collect();
+                assert_eq!(
+                    record
+                        .message
+                        .split_once(" detail=")
+                        .map(|(_, detail)| detail),
+                    Some(expected.as_str())
+                );
+                assert_eq!((record.runtime, record.endpoint, record.session), (9, 7, 8));
+                assert_eq!(record.transport, Transport::Tcp as u32);
+                assert_eq!(record.error_code, ErrorCode::IoError);
+            }
+        }
+        log_event(&entry, 9, &Event::simple(EventType::SessionClosed));
+        assert_eq!(
+            receiver
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .message,
+            "session_closed status=0"
+        );
+        for kind in [
+            EventType::AuthRequest,
+            EventType::Message,
+            EventType::RuntimeStopped,
+        ] {
+            let mut event = Event::simple(kind);
+            event.data = b"secret-peer-payload".to_vec();
+            log_event(&entry, 9, &event);
+        }
+        // The final record is a FIFO barrier: business messages must not produce a log.
+        for name in ["auth_requested", "runtime_stopped"] {
+            let record = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(record.event_name, name);
+            assert!(!record.message.contains("secret-peer-payload"));
+        }
+        entry.network.stop(Duration::ZERO).unwrap();
+    }
 }
