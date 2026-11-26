@@ -10,15 +10,19 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn optional_game_logger_records_auth_and_denial_without_credentials() {
-    verify_auth_diagnostics(false);
+    for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+        verify_auth_diagnostics(false, transport);
+    }
 }
 
 #[test]
 fn range_auth_logs_selected_version_not_listener_upper_bound() {
-    verify_auth_diagnostics(true);
+    for transport in [Transport::Tcp, Transport::Udp, Transport::Kcp] {
+        verify_auth_diagnostics(true, transport);
+    }
 }
 
-fn verify_auth_diagnostics(range: bool) {
+fn verify_auth_diagnostics(range: bool, transport: Transport) {
     let (sender, receiver) = mpsc::channel();
     let logger = BoundedLogger::new(LoggerConfig::default(), move |record| {
         let _ = sender.send(record);
@@ -33,7 +37,7 @@ fn verify_auth_diagnostics(range: bool) {
     .unwrap()
     .with_logger(logger);
     let config = GameServerConfig {
-        transport: Transport::Tcp,
+        transport,
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         local_key: server_key,
         initial_encryption: true,
@@ -50,7 +54,7 @@ fn verify_auth_diagnostics(range: bool) {
     .unwrap();
     let client = runtime
         .connect(GameClientConfig {
-            transport: Transport::Tcp,
+            transport,
             bind_addr: None,
             remote_addr: runtime.endpoint_local_addr(listener).unwrap(),
             join_ticket: b"private-login-proof".to_vec(),
@@ -79,18 +83,21 @@ fn verify_auth_diagnostics(range: bool) {
 
     let mut names = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(2);
-    while names.len() < 2 && Instant::now() < deadline {
+    while names.len() < 3 && Instant::now() < deadline {
+        // Join failure and close may arrive in separate batches; polling produces both logs.
+        runtime.poll(16, Duration::ZERO);
         if let Ok(record) = receiver.recv_timeout(Duration::from_millis(20)) {
             assert!(!record.message.contains("private-login-proof"));
             assert!(record.runtime != 0);
             assert_eq!(record.target, "rnet.game");
             if record.event_name == "game_auth_requested" {
                 assert_eq!(record.endpoint, listener);
-                assert_eq!(record.transport, Transport::Tcp as u32);
+                assert_eq!(record.transport, transport as u32);
                 assert!(record.message.contains("protocol_id=42"));
                 assert!(record.message.contains("protocol_version=3 "));
                 names.push(record.event_name);
             } else if record.event_name == "game_join_failed" && record.endpoint == client {
+                assert_eq!(record.transport, transport as u32);
                 assert_eq!(record.error_code, ErrorCode::AuthRejected);
                 assert!(
                     record.message.contains("authentication rejected"),
@@ -98,9 +105,13 @@ fn verify_auth_diagnostics(range: bool) {
                     record.message
                 );
                 names.push(record.event_name);
+            } else if record.event_name == "game_session_closed" && record.endpoint == client {
+                assert_eq!(record.transport, transport as u32);
+                names.push(record.event_name);
             }
         }
     }
+    assert!(names.iter().any(|name| name == "game_session_closed"));
     assert!(names.iter().any(|name| name == "game_auth_requested"));
     assert!(names.iter().any(|name| name == "game_join_failed"));
     let logger = runtime.game_logger_snapshot().expect("logger configured");

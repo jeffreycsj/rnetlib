@@ -2,7 +2,7 @@
 
 use crate::event::GameEvent;
 use crate::runtime::GameRuntime;
-use rnet_core::{ErrorCode, Handle, RnetError};
+use rnet_core::{ErrorCode, Handle, RnetError, Transport};
 use rnet_observe::{BoundedLogger, LatencySnapshot, LogLevel, LogRecord};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -137,19 +137,28 @@ impl GameRuntime {
             .map(BoundedLogger::callback_latency)
     }
 
-    pub(crate) fn log_game_event_detail(&self, event: &GameEvent, detail: Option<&str>) {
+    pub(crate) fn log_game_event_detail(
+        &self,
+        event: &GameEvent,
+        detail: Option<&str>,
+        transport: Option<Transport>,
+    ) {
         if self.diagnostics.logger.is_none()
             || matches!(event, GameEvent::Message(_) | GameEvent::Writable { .. })
         {
             return;
         }
         let endpoint = event_endpoint(event);
-        let transport = self
-            .endpoint_transports
-            .lock()
-            .expect("game endpoint table poisoned")
-            .get(&endpoint)
-            .map_or(0, |transport| *transport as u32);
+        // Cleanup can retire the endpoint policy before its queued failure is converted.
+        let transport = transport
+            .or_else(|| {
+                self.endpoint_transports
+                    .lock()
+                    .expect("game endpoint table poisoned")
+                    .get(&endpoint)
+                    .copied()
+            })
+            .map_or(0, |transport| transport as u32);
         // Authorization logs describe the selected version, not the listener's upper bound.
         let protocol = match event {
             GameEvent::AuthRequest { session, .. } | GameEvent::ResumeRequest { session, .. } => {

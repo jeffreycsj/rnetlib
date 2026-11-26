@@ -167,6 +167,7 @@ impl GameRuntime {
         for event in events {
             let admitted_bytes = event.data.len();
             let endpoint = event.endpoint;
+            let transport = event.transport;
             let session = event.session;
             // These lifecycle payloads are local diagnostics, unlike opaque application bytes
             // and authentication tickets. Preserve the cause before typed conversion drops it.
@@ -180,7 +181,7 @@ impl GameRuntime {
                     debug_assert!(
                         crate::range_state::public_payload_bytes(&event) <= admitted_bytes
                     );
-                    self.log_game_event_detail(&event, detail.as_deref());
+                    self.log_game_event_detail(&event, detail.as_deref(), transport);
                     deferred_public |= self
                         .range
                         .lock()
@@ -195,7 +196,7 @@ impl GameRuntime {
                             .close_session(session, ErrorCode::ProtocolError);
                     }
                     let violation = GameEvent::ProtocolViolation { endpoint, session };
-                    self.log_game_event_detail(&violation, Some(&error.to_string()));
+                    self.log_game_event_detail(&violation, Some(&error.to_string()), transport);
                     deferred_public |= self
                         .range
                         .lock()
