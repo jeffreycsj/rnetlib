@@ -170,3 +170,5 @@ using (var runtime = new GameRuntime()) {
     Require(poll.Wait(2000), "in-flight poll must release its SafeHandle lease");
 }
 Console.WriteLine("PASS invalid config and concurrent disposal");
+
+LifecycleTests.Run();

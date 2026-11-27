@@ -84,3 +84,13 @@ LD_LIBRARY_PATH="$PWD/lib" dotnet run --project csharp/RNet.Quickstart -c Releas
 `MetricsSnapshot()` 返回类型化游戏指标，`PrometheusSnapshot()` 覆盖传输/排队/恢复/协商等完整文本指标。`QualitySnapshot(session)` 和 `ClockSyncSnapshot(session)` 未采样返回 null。时钟偏移是含排队的近似传输测量，不是可信反外挂时钟。日志以 runtime/endpoint/session/correlation 关联事件；聚合指标不包含玩家标签。
 
 完整多传输、动态加密、重连、版本范围、GC 与回调测试见 [RNet.Smoke](../csharp/RNet.Smoke/Program.cs)。
+
+## 生命周期验证范围
+
+[生命周期回归](../csharp/RNet.Smoke/LifecycleTests.cs) 随 `make csharp-test` 和发布包中的 Smoke 程序执行，使用真实原生库验证：
+
+- 日志回调内 `Stop` 和 `Dispose` 都被拒绝，回调仍可查询指标，调用方随后能够正常停止。
+- 没有在途 SDK 调用时，阻塞的日志回调会延迟原生销毁完成；关闭开始后新调用被拒绝，重叠/重复 Dispose 不重复销毁，释放回调后清理完成。
+- 重复 Stop 保留一次最终停止事件（测试队列有空间），停止后可继续 Poll 和查询指标，但不能重新监听；Dispose 后原生操作抛出 ObjectDisposedException。
+
+这些测试不提供 C# 原生销毁失败的显式重试接口，也不保证任意并发调用下 Dispose 返回就代表销毁结束。带有在途 SafeHandle lease 的延迟释放、永久阻塞 logger 的中断、真实资源耗尽和目标平台长稳仍不能由此得出保证。调用方应先停止并发业务调用，确保日志回调及时退出。

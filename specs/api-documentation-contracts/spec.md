@@ -534,3 +534,25 @@
 - 临时证据：`/tmp/netlib-lifecycle-baseline.log`、`/tmp/netlib-lifecycle-contracts.log`、`/tmp/netlib-lifecycle-race.log`、`/tmp/netlib-lifecycle-repeat.log`、`/tmp/netlib-lifecycle-final.log`。构建串行，使用至少保留 15 GiB 可用内存的守护。
 - 本批未重跑完整 Rust workspace/严格 Clippy、C/C++/C# 集成、ASan/Miri/Loom、独立审计、完整发布包或远端 CI，也未执行目标环境弱网/长稳。
 - 本批未执行提交或推送；不将测试工作树的通过记录视为生产发布资格。
+
+
+## 第六阶段 C：C# 日志回调与关闭契约（2026-11-27）
+
+继续已确认的第 6 项。本批补生命周期保护测试和接入说明，不改变 SDK API、ABI、wire 或运行逻辑。新增测试在当前实现首次运行即通过，不能称为修复生产缺陷的 RED → GREEN。
+
+### 已实现与对抗性复核
+
+- 独立 `RNet.Smoke/LifecycleTests.cs` 使用真实公开 GameRuntime 和原生库；Stop、Dispose、metrics 和日志回调均未被 mock。Smoke 项目及现有发布脚本自动包含新源文件。
+- 回调 Stop/Dispose 同时拒绝，检查具体托管异常、回调内查询成功和 LoggerExceptions 为零，再验证外部 Stop 仍可用。
+- 阻塞 logger 建立关闭窗口；确认 SafeHandle 已关闭后再验证新调用被拒绝，重叠 Dispose 返回、第一次清理等待回调、释放回调后完成。所有测试等待都有期限，finally 放行回调并等待清理，避免断言失败遗留线程。
+- Stop 的重复调用不重复产生最终事件；停止后指标/Poll 可用、重新监听返回 InvalidState，Dispose 后 Stop 拒绝。
+- 测试竞态复核：不能用不断获取 metrics lease 来判断关闭开始，否则最后一个 lease 可能在测试主线程触发清理、自行等待阻塞 logger。现仅反射读取既有私有 SafeHandle 的 IsClosed 来观察状态，不改字段、不暴露生产测试接口、不替换释放逻辑。之后的公开调用必定在关闭后尝试。
+
+### 验证与剩余边界
+
+- 原 `make -j1 csharp-test` 基线通过（`/tmp/netlib-csharp-lifecycle-baseline.log`）；新增三组保护测试及原 Smoke/Quickstart/CLI 用例通过（`/tmp/netlib-csharp-lifecycle-contracts.log`）。
+- 最终 `make -j1 csharp-test doc-check structure-check DOTNET=/data/tmp/rnet-dotnet/dotnet` 通过，C# 构建零警告/错误，包含既有脚本门禁、严格 Rust 文档及 doctest（`/tmp/netlib-csharp-lifecycle-final.log`）。修正测试观察竞态后完整 Smoke 串行重复 10 次全部通过（`/tmp/netlib-csharp-lifecycle-repeat.log`）；不是长稳或容量测试。
+- 运行使用内存守护保留至少 15 GiB；最终 diff 检查通过。未重跑完整 Rust workspace/Clippy、其他语言动态集成、ASan/Miri/Loom、完整发布包或远端 CI，不扩大资格声明。
+- 本批只覆盖 Linux x86_64 / .NET 8；不验证 Unity/IL2CPP/AOT，不把托管测试等同于原生 race 检测。未覆盖 OS 资源耗尽、永不返回的 logger 中断、SafeHandle 最后一个 lease 恰在回调内释放的完整故障矩阵。
+- C# Dispose 原生清理失败不显式报告、也没有受检查的销毁重试 API，仍是明确接入边界。checked cleanup 的所有权和并发设计需独立方案，不把保护测试当成功能交付。第 6 项仍未整体勾选。
+- 后续顺序：剩余跨语言高级接口/生命周期边界 → 干净候选提交的发布资格与 SDK 消费验证 → 最后执行目标环境弱网及 24–72 小时长稳。跨实例恢复仍不在范围；本批未提交、推送或发布。
