@@ -21,7 +21,7 @@ try {
 
 try {
     var report = GameExample.Run(transport, deny, oneSlot);
-    Console.WriteLine($"game echo complete: received={report.Received} blocked={report.Blocked}; both Stop/Dispose sequences completed");
+    Console.WriteLine($"game echo complete: received={report.Received} blocked={report.Blocked}; both checked Close calls completed");
     return 0;
 } catch (Exception error) {
     ReportError(error);

@@ -556,3 +556,12 @@
 - 本批只覆盖 Linux x86_64 / .NET 8；不验证 Unity/IL2CPP/AOT，不把托管测试等同于原生 race 检测。未覆盖 OS 资源耗尽、永不返回的 logger 中断、SafeHandle 最后一个 lease 恰在回调内释放的完整故障矩阵。
 - C# Dispose 原生清理失败不显式报告、也没有受检查的销毁重试 API，仍是明确接入边界。checked cleanup 的所有权和并发设计需独立方案，不把保护测试当成功能交付。第 6 项仍未整体勾选。
 - 后续顺序：剩余跨语言高级接口/生命周期边界 → 干净候选提交的发布资格与 SDK 消费验证 → 最后执行目标环境弱网及 24–72 小时长稳。跨实例恢复仍不在范围；本批未提交、推送或发布。
+
+
+## 第六阶段 D：C# checked Close（2026-11-27）
+
+用户已确认并完成 [显式关闭规格](../csharp-checked-close/spec.md)。C# 新增 Close(drainTimeoutMs)，原生 stop/destroy 错误可观察、失败保留句柄与日志上下文，解决原因后可重试；成功才表示原生销毁完成。新调用/Close/Dispose 在关闭期间有明确拒绝语义，既有 Dispose 仍保留延迟释放行为。
+
+Quickstart 已使用 checked Close；失败即使进入 Dispose 兜底也不会输出成功。真实 native 失败和并发测试、原 C# 全套、doc-check/structure-check 均通过；无 SDK 源码的独立 DLL 消费完整 Smoke 连续十次及三传输 CLI 通过。详细证据和未覆盖边界见上述规格。阶段 A–C 中“尚无 C# checked cleanup”的描述属于当时记录，本批已补齐，不再作为现行缺口。
+
+第 6 项仍不整体勾选：其他高级接口完整契约复查、干净候选提交的发布资格、最后的目标环境弱网/长稳仍待完成。没有把本轮工作树通过记录视为生产认证，未提交或推送。

@@ -67,7 +67,7 @@ Go 导出项的 AST 注释检查随 `make go-test` 执行；C# 的缺失 XML 文
 | 无时钟样本 | None | available=0 | available=false | Available=false | null |
 | 时钟偏移单位 | i64 微秒 | int64_t 微秒 | int64_t 微秒 | time.Duration 纳秒，越界限幅至有符号整微秒边界 | long 微秒 |
 | 发送过期禁用值 | None；Some(0) 则立即过期 | expiry_ms=0 | expiry_ms=0 | Expiry=0；正值向上取整到毫秒 | ExpiryMs=0 |
-| 检查关闭错误 | stop 返回 Result | stop/release/destroy 分别检查返回码 | 显式 close；析构仅尽力清理 | Close 返回 error，失败保留句柄以便处理/重试 | 显式 Stop 观察错误；Dispose 不报告 SafeHandle 内部 native 清理失败 |
+| 检查关闭错误 | stop 返回 Result | stop/release/destroy 分别检查返回码 | 显式 close；析构仅尽力清理 | Close 返回 error，失败保留句柄以便处理/重试 | Close 检查 stop/destroy，失败保留句柄供重试；Dispose 仍是无错误报告的兜底 |
 
 共同要求：所有句柄只属于各自 runtime；先授权并等到游戏就绪，再发送 opaque payload。
 发送成功仅代表本地接受；Send 的错误和后续失败事件都须处理。Poll 失败/转换失败时，已消费事件不保证重放。

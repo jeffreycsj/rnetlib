@@ -21,7 +21,7 @@ class CSharpGameExampleTests(unittest.TestCase):
                     result = self.run_example(transport, *flags)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn("received=2", result.stdout)
-                    self.assertIn("both Stop/Dispose sequences completed", result.stdout)
+                    self.assertIn("both checked Close calls completed", result.stdout)
                     self.assertIn("runtime=", result.stderr)
                     blocked = re.search(r"blocked=(\d+)", result.stdout)
                     self.assertIsNotNone(blocked)

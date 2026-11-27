@@ -172,3 +172,5 @@ using (var runtime = new GameRuntime()) {
 Console.WriteLine("PASS invalid config and concurrent disposal");
 
 LifecycleTests.Run();
+
+CheckedCloseTests.Run();

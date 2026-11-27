@@ -36,6 +36,57 @@ internal sealed unsafe class RuntimeOwner : SafeHandleZeroOrMinusOneIsInvalid {
     internal RuntimeOwner(ulong runtime, nint context) : base(true) {
         SetHandle(unchecked((nint)runtime)); logContext = context;
     }
+    private readonly object gate = new();
+    private int leases;
+    private bool closing, disposed, checkedClosed;
+
+    internal ulong AcquireLease() {
+        lock (gate) {
+            if (closing) throw new RNetException(-4, "game runtime is closing");
+            ObjectDisposedException.ThrowIf(disposed || IsClosed, this);
+            bool acquired = false;
+            DangerousAddRef(ref acquired);
+            leases++;
+            return unchecked((ulong)handle);
+        }
+    }
+    internal void ReleaseLease() {
+        // DangerousRelease can run native cleanup and join the logger. Never hold gate here.
+        try { DangerousRelease(); }
+        finally { lock (gate) { leases--; } }
+    }
+    internal void DisposeRuntime() {
+        lock (gate) {
+            if (closing) throw new InvalidOperationException("Dispose cannot overlap checked Close.");
+            if (disposed || checkedClosed) return;
+            disposed = true;
+        }
+        Dispose();
+    }
+    internal void Close(uint drainTimeoutMs) {
+        lock (gate) {
+            if (checkedClosed) return;
+            ObjectDisposedException.ThrowIf(disposed || IsClosed, this);
+            if (closing) throw new RNetException(-4, "game runtime is closing");
+            if (leases != 0) throw new RNetException(-4, "game runtime has active managed calls");
+            closing = true;
+        }
+        try {
+            // No new managed leases or Dispose can enter. Do not keep gate across native teardown:
+            // the logger may query this wrapper and must receive an error without waiting for us.
+            ulong runtime = unchecked((ulong)handle);
+            Native.Check(Native.rnet_game_runtime_stop(runtime, drainTimeoutMs));
+            Native.Check(Native.rnet_game_runtime_destroy(runtime));
+            // Destroy succeeded and joined native callbacks. Transfer ownership before freeing their root.
+            SetHandleAsInvalid();
+            if (logContext != 0) GCHandle.FromIntPtr(logContext).Free();
+            lock (gate) { checkedClosed = true; }
+        } finally {
+            lock (gate) { closing = false; }
+            // Direct P/Invoke uses the numeric handle, so retain its owner through the entire call.
+            GC.KeepAlive(this);
+        }
+    }
     protected override bool ReleaseHandle() {
         ulong runtime = unchecked((ulong)handle);
         // A concurrent Dispose may release the last lease inside a logger's metrics query.
@@ -72,10 +123,8 @@ internal readonly struct RuntimeLease : IDisposable {
     private readonly RuntimeOwner owner;
     internal readonly ulong Value;
     internal RuntimeLease(RuntimeOwner owner) {
-        bool acquired = false;
-        owner.DangerousAddRef(ref acquired);
+        Value = owner.AcquireLease();
         this.owner = owner;
-        Value = unchecked((ulong)owner.DangerousGetHandle());
     }
-    public void Dispose() => owner.DangerousRelease();
+    public void Dispose() => owner.ReleaseLease();
 }

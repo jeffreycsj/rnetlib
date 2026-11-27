@@ -11,7 +11,7 @@ internal sealed class EchoReport {
 internal static class GameExample {
     // transport is fixed at endpoint creation; deny is only a demo login policy.
     // oneSlot requests real scheduler admission pressure, not simulated packet loss.
-    // No application workers race Stop/Dispose; only native logging runs concurrently.
+    // No application workers race Close/Dispose; only native logging runs concurrently.
     internal static EchoReport Run(Transport transport, bool deny, bool oneSlot) {
         // Production loads persistent identity and distributes the public-key pin
         // through a trusted channel, never from the unauthenticated connection.
@@ -21,7 +21,7 @@ internal static class GameExample {
             ScheduledMaxMessages = oneSlot ? 1UL : 0,
             Logger = record => {
                 // Console.Error serializes writes. Production injects a fast sink,
-                // monitors dropped logs, and never Stop/Dispose from this callback.
+                // monitors dropped logs, and never Close/Dispose from this callback.
                 // No credentials or business payloads are formatted here.
                 Console.Error.WriteLine($"timestamp_ms={record.TimestampUnixMs} level={record.Level} runtime={record.Runtime} endpoint={record.Endpoint} session={record.Session} correlation={record.CorrelationId} code={record.ErrorCode} {record.EventName} {record.Message}");
             }
@@ -125,16 +125,16 @@ internal static class GameExample {
         throw new RNetException(code, $"event={e.Type} endpoint={e.Endpoint} session={e.Session}; inspect lifecycle logs");
     }
 
-    // Stop exposes native errors before SafeHandle disposal. The five-second
-    // deadline bounds retry attempts, not a native call or a blocked user logger.
-    // Dispose cannot report native teardown failures; do not claim otherwise.
+    // Checked Close reports both stop and destroy failures. The five-second deadline bounds
+    // retries, not native calls or a blocked logger. Dispose is a fallback after terminal failure;
+    // the original Close error is still propagated even if that fallback happens to succeed.
     private static void CloseRuntime(string name, GameRuntime? runtime) {
         if (runtime == null) return;
         Exception? primary = null;
         try {
             long deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
             while (true) {
-                try { runtime.Stop(); break; }
+                try { runtime.Close(); break; }
                 catch (RNetException error) when (error.Code == -4 && Stopwatch.GetTimestamp() < deadline) {
                     runtime.Poll(64, 1); // Discard owned final events; native tokens are already released.
                     Thread.Sleep(1);

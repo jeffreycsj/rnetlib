@@ -40,9 +40,9 @@ LD_LIBRARY_PATH="$PWD/target/debug" dotnet run --project csharp/RNet.Quickstart 
 不会仅依赖 Writable 或无限忙重试。UDP 仍可能丢失/重复/乱序，严格回显失败不代表库承诺可靠 UDP。
 线上多人队列需要另外制定每玩家预算、截止与过载策略。
 
-交换的十秒截止使用单调 Stopwatch；清理各有五秒 Stop 背压重试期限。这些限制约束重试次数/时机，
-不能抢占原生调用、Dispose 或阻塞的日志组件。成功输出表示收到回显并完成显式 Stop/Dispose 调用序列，
-**不表示已检查 SafeHandle 内部的原生销毁结果**。即使第一端清理失败仍尝试第二端；单异常保留原类型和
+交换的十秒截止使用单调 Stopwatch；清理各有五秒 Close 背压重试期限。这些限制约束重试次数/时机，
+不能抢占原生调用或阻塞的日志组件。成功输出表示收到回显，并且双方 checked Close 都已成功、
+原生资源已经销毁。若 Close 失败，即使后续 Dispose 兜底成功也会保留清理错误并失败退出。即使第一端清理失败仍尝试第二端；单异常保留原类型和
 堆栈，多异常用 AggregateException 按主错误在前的顺序保存，命令行逐项打印 native 错误类别。
 
 示例保持加密。服务器私钥应从安全存储加载并持久化，客户端通过可信渠道获得公钥固定值；
@@ -77,7 +77,7 @@ LD_LIBRARY_PATH="$PWD/lib" dotnet run --project csharp/RNet.Quickstart -c Releas
 
 ## 接入自己的日志与监控
 
-把日志组件适配为 `Action<LogRecord>`，通过 `GameOptions.Logger` 注入。回调在 native 有界日志线程上执行，应快速返回；可查询指标，禁止回调内 Stop/Dispose（SDK 抛 `InvalidOperationException` 防自等待）。异常不会越过 native 边界，`LoggerExceptions` 和 `rnet_game_csharp_logger_exceptions_total` 记录次数。队列拥塞丢日志而不阻塞网络；务必监控丢弃数。
+把日志组件适配为 `Action<LogRecord>`，通过 `GameOptions.Logger` 注入。回调在 native 有界日志线程上执行，应快速返回；可查询指标，禁止回调内 Stop/Close/Dispose（SDK 抛 `InvalidOperationException` 防自等待）。异常不会越过 native 边界，`LoggerExceptions` 和 `rnet_game_csharp_logger_exceptions_total` 记录次数。队列拥塞丢日志而不阻塞网络；务必监控丢弃数。
 
 `SetMetricsLogInterval(ms)` 默认 30 秒，0 关闭，由 poll 触发 `game_latency_summary`：累计样本 count、P90/P95/P99/P99.9/max（微秒）、发送队列和 logger 丢弃/异常。不是每包日志，也不是滑动窗口 SLO；无样本的零不能解释为零延迟。
 
@@ -93,4 +93,35 @@ LD_LIBRARY_PATH="$PWD/lib" dotnet run --project csharp/RNet.Quickstart -c Releas
 - 没有在途 SDK 调用时，阻塞的日志回调会延迟原生销毁完成；关闭开始后新调用被拒绝，重叠/重复 Dispose 不重复销毁，释放回调后清理完成。
 - 重复 Stop 保留一次最终停止事件（测试队列有空间），停止后可继续 Poll 和查询指标，但不能重新监听；Dispose 后原生操作抛出 ObjectDisposedException。
 
-这些测试不提供 C# 原生销毁失败的显式重试接口，也不保证任意并发调用下 Dispose 返回就代表销毁结束。带有在途 SafeHandle lease 的延迟释放、永久阻塞 logger 的中断、真实资源耗尽和目标平台长稳仍不能由此得出保证。调用方应先停止并发业务调用，确保日志回调及时退出。
+这些 Dispose 保护测试不保证任意并发调用下 Dispose 返回就代表销毁结束。需要确认原生清理结果时使用 Close；永久阻塞 logger 的中断、真实资源耗尽及目标平台长稳仍不在本批验证范围。
+
+## 检查关闭结果并重试
+
+`runtime.Close(uint drainTimeoutMs = 0)` 依次停止并销毁原生 runtime。成功返回意味着 native 资源已销毁、日志回调已结束且其上下文已释放。`drainTimeoutMs` 只是发送排空预算，不能中断原生调用或卡住的 logger；零表示不等待排空。Close 和 Dispose 都不保证消息已送达对端。
+
+```csharp
+// 先停止业务并发调用，确保 logger 会及时返回。
+try {
+    runtime.Close();
+} catch (RNetException error) {
+    // 记录 error.Code / error.Message，处理原因后再调用 Close。
+    // -4 可表示仍有在途调用或已有 Close；不要在关闭尚进行时自行销毁。
+    // 若 stop 已成功，此时只能做最终 Poll/查询和清理重试，不能重启网络 I/O。
+    throw;
+}
+```
+
+| 情形 | 行为 |
+| --- | --- |
+| 原生 stop/destroy 失败 | 抛原始 RNetException，保留句柄和日志上下文，可处理原因后重试 |
+| 已有托管调用仍持有 lease | 在开始原生 stop 前返回 -4；停止并发调用者后重试 |
+| Close 正在执行 | 另一个 Close 或新 SDK 调用返回 -4；Dispose 抛 InvalidOperationException |
+| Close 成功后重复 Close/Dispose | 无害；其他原生操作抛 ObjectDisposedException |
+| Dispose 已开始后调用 Close | 抛 ObjectDisposedException；不能把先前 Dispose 当成 checked 成功 |
+| 日志回调内 Close | 抛 InvalidOperationException，避免关闭等待自身 |
+
+Close 不在内部无限 poll/retry。调用方应设置有界重试策略，保留 logger 的外部资源直到 Close 成功。对 -4 应按具体原因处理：退出并发调用者、等待其他 Close，或在仍可操作时 Poll 推进事件；不能把所有错误当作背压无限重试。
+
+保留 `using` / Dispose 作为兜底。若需要保留对象重试 Close，应在离开 using 作用域前处理异常；一旦进入 Dispose，便不再承诺显式重试。纯托管 API 会自动释放事件/指标 token，原生 outstanding-buffer 失败回归仅通过测试侧真实 ABI 留存 token 构造，不要求业务自行管理 SDK 内部 buffer。
+
+[CheckedCloseTests](../csharp/RNet.Smoke/CheckedCloseTests.cs) 覆盖真实 destroy 连续失败、释放 token 后重试、原生句柄失效、在途调用、关闭/回调并发，以及旧 Dispose 的延迟释放。现有所有三传输 Smoke/Quickstart 回归继续执行。

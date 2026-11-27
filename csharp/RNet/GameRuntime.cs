@@ -8,7 +8,7 @@ namespace RNet;
 /// concurrently; native polls serialize. Never copy handles between runtimes. Native failures throw RNetException with
 /// status/detail; native operations after disposal throw ObjectDisposedException. Dispose prevents new calls but
 /// in-flight leases can defer native teardown beyond its return. Logger callbacks must return promptly and never call
-/// Stop/Dispose. Only the current SDK/native ABI pair is accepted; this SDK validates the 64-bit layout.</remarks>
+/// Stop/Close/Dispose. Only the current SDK/native ABI pair is accepted; this SDK validates the 64-bit layout.</remarks>
 public sealed unsafe partial class GameRuntime : IDisposable {
     private readonly RuntimeOwner owner;
     private readonly LogState? logState;
@@ -127,13 +127,28 @@ public sealed unsafe partial class GameRuntime : IDisposable {
     public void Stop(uint drainTimeoutMs = 0) {
         RejectCallbackShutdown(); using var h = Lease(); Native.Check(Native.rnet_game_runtime_stop(h.Value, drainTimeoutMs));
     }
+    /// <summary>Stops and destroys the native runtime, reporting failure and preserving ownership for retry.</summary>
+    /// <param name="drainTimeoutMs">Best-effort send-drain budget in milliseconds; zero skips draining.
+    /// This does not bound the whole call or interrupt a blocked logger.</param>
+    /// <remarks>Quiesce concurrent callers first. Active calls or overlapping Close return code -4 before
+    /// acquiring ownership. During Close, new calls return -4 and Dispose throws InvalidOperationException.
+    /// Native failure retains the handle and logger for retry; stop may already have succeeded, so polling
+    /// and queries remain possible but network I/O cannot restart. Keep logger dependencies alive until success.
+    /// Success joins callbacks and releases native ownership; repeated Close and later Dispose are harmless.
+    /// Retry before leaving a using scope, whose Dispose fallback does not report native cleanup failures.</remarks>
+    /// <exception cref="RNetException">Native stop/destroy failed, or another call owns the runtime.</exception>
+    /// <exception cref="InvalidOperationException">Called from a native logger callback.</exception>
+    /// <exception cref="ObjectDisposedException">Dispose already started; its result cannot certify Close success.</exception>
+    public void Close(uint drainTimeoutMs = 0) {
+        RejectCallbackShutdown(); owner.Close(drainTimeoutMs);
+    }
     /// <summary>Closes the managed handle; native cleanup follows once in-flight leases finish.</summary>
     /// <remarks>Idempotent outside callbacks. Remaining events may be discarded. Native cleanup failures are not
-    /// surfaced as RNetException by SafeHandle; use Stop to observe stop errors. Concurrent calls may delay native
+    /// surfaced as RNetException by SafeHandle; use Close to observe stop and destroy errors. Concurrent calls may delay native
     /// teardown/callback completion beyond this return.</remarks>
-    /// <exception cref="InvalidOperationException">Called from a native logger callback.</exception>
-    public void Dispose() { RejectCallbackShutdown(); owner.Dispose(); }
+    /// <exception cref="InvalidOperationException">Called from a native logger callback, or a checked Close is in progress.</exception>
+    public void Dispose() { RejectCallbackShutdown(); owner.DisposeRuntime(); }
     private static void RejectCallbackShutdown() {
-        if (LogBridge.InCallback) throw new InvalidOperationException("Stop/Dispose cannot run in a native logger callback.");
+        if (LogBridge.InCallback) throw new InvalidOperationException("Stop/Close/Dispose cannot run in a native logger callback.");
     }
 }

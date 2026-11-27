@@ -124,7 +124,7 @@ public sealed class GameOptions {
     public ulong ScheduledMaxMessages { get; init; }
     /// <summary>Ordinary/priority forwarding attempts per Poll; zero selects 256.</summary>
     public ulong ScheduledFlushBatch { get; init; }
-    /// <summary>Runs on the bounded native logging thread. Return promptly; never call Stop/Dispose.
+    /// <summary>Runs on the bounded native logging thread. Return promptly; never call Stop/Close/Dispose.
     /// Exceptions are caught and counted in LoggerExceptions. Metrics queries are allowed.</summary>
     public Action<LogRecord>? Logger { get; init; }
     /// <summary>Minimum inclusive callback severity; defaults to Info. Values outside the enum are rejected.</summary>
