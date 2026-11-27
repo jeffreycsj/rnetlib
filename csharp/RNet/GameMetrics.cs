@@ -2,6 +2,29 @@ using System.Runtime.InteropServices;
 
 namespace RNet;
 
+/// <summary>Runtime-wide LatestOnly game-staging gauges and cumulative counters.
+/// Excludes snapshots already handed to transport; querying does not flush or reset the queue.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct GameRealtimeQueue {
+    internal uint Size, Abi;
+    /// <summary>Current distinct pending (session, key) entries.</summary>
+    public ulong QueuedMessages;
+    /// <summary>Current payload plus reserved envelope bytes; not allocator memory usage.</summary>
+    public ulong QueuedBytes;
+    /// <summary>Cumulative budget/key-cap rejections, including failed requeues.</summary>
+    public ulong AdmissionRejected;
+    /// <summary>Cumulative pending snapshots superseded by newer same-key values.</summary>
+    public ulong Replaced;
+    /// <summary>Cumulative staged snapshots discarded by session cleanup or shutdown.</summary>
+    public ulong ClosedDropped;
+    /// <summary>Cumulative snapshots unable to reenter staging after transport backpressure.</summary>
+    public ulong BackpressureDropped;
+    /// <summary>Cumulative snapshots discarded after other forwarding failures.</summary>
+    public ulong SendFailed;
+    /// <summary>Cumulative transport admissions; does not establish peer delivery.</summary>
+    public ulong Forwarded;
+}
+
 /// <summary>Cumulative runtime-wide metrics; times are microseconds, zero samples means unavailable.
 /// Managed callback exceptions are separately exposed as GameRuntime.LoggerExceptions.</summary>
 [StructLayout(LayoutKind.Sequential)]
@@ -105,10 +128,21 @@ public sealed record ClockSample(long ServerMinusClientUs, ulong RttUs, ulong Sa
 
 internal static unsafe partial class Native {
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rnet_game_realtime_queue_snapshot(ulong runtime, GameRealtimeQueue* snapshot);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int rnet_game_metrics_snapshot(ulong runtime, GameMetrics* metrics);
 }
 
 public sealed unsafe partial class GameRuntime {
+    /// <summary>Copies LatestOnly game-staging gauges and counters without advancing sends or timers.</summary>
+    /// <returns>An owned snapshot; later queue activity does not modify it.</returns>
+    /// <exception cref="ObjectDisposedException">The runtime has been disposed or successfully closed.</exception>
+    /// <exception cref="RNetException">The runtime is closing or the native query fails.</exception>
+    public GameRealtimeQueue RealtimeQueueSnapshot() {
+        using var h = Lease(); GameRealtimeQueue snapshot = default;
+        Native.Check(Native.rnet_game_realtime_queue_snapshot(h.Value, &snapshot)); return snapshot;
+    }
+
     /// <summary>Copies runtime-wide cumulative counters and live gauges without resetting them.</summary>
     /// <returns>A non-atomic cross-field observation; sample counts distinguish unavailable percentiles.</returns>
     public GameMetrics MetricsSnapshot() {

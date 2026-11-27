@@ -565,3 +565,12 @@
 Quickstart 已使用 checked Close；失败即使进入 Dispose 兜底也不会输出成功。真实 native 失败和并发测试、原 C# 全套、doc-check/structure-check 均通过；无 SDK 源码的独立 DLL 消费完整 Smoke 连续十次及三传输 CLI 通过。详细证据和未覆盖边界见上述规格。阶段 A–C 中“尚无 C# checked cleanup”的描述属于当时记录，本批已补齐，不再作为现行缺口。
 
 第 6 项仍不整体勾选：其他高级接口完整契约复查、干净候选提交的发布资格、最后的目标环境弱网/长稳仍待完成。没有把本轮工作树通过记录视为生产认证，未提交或推送。
+
+
+## 第六阶段 E：C# 实时队列快照（2026-11-27）
+
+继续第 6 项，补齐 C# `RealtimeQueueSnapshot()`，复用现有 C ABI，未修改 wire 或原生逻辑。返回 LatestOnly 游戏待发计数、预留字节以及替换、拒绝、丢弃和转交累计值；转交不等于送达。成员、错误和调用副作用已补 XML 注释及接入文档。
+
+修改前 C# 全套基线通过；新增回归首先因接口缺失而编译失败（并非运行时行为失败），实现后通过。真实 TCP/UDP/KCP 覆盖同键替换、字节调整、查询不重置、不隐式冲刷、零容量 flush、转交后清空、会话关闭丢弃及 Dispose 后拒绝。`make -j1 csharp-test`、`make -j1 doc-check structure-check`、独立 DLL/原生库消费的 Smoke 均通过，C# 构建零警告。最终 diff 检查通过，运行使用至少保留 15 GiB 的内存守护。
+
+临时证据：`/tmp/netlib-realtime-{baseline,red,green,checks,consumer}.log`。本批只验证 Linux x86_64 / .NET 8，未新增回压丢弃或发送失败故障注入；未重跑完整 Rust workspace/Clippy、其他语言集成、完整发布资格或远端 CI。C# 优先级队列、协商缓冲和传输待发快照的类型化查询尚待补齐，相关数据目前可从 Prometheus 文本读取。第 6 项不整体勾选，目标弱网/长稳仍在功能完善后执行；未提交、推送或发布。

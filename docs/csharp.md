@@ -81,6 +81,8 @@ LD_LIBRARY_PATH="$PWD/lib" dotnet run --project csharp/RNet.Quickstart -c Releas
 
 `SetMetricsLogInterval(ms)` 默认 30 秒，0 关闭，由 poll 触发 `game_latency_summary`：累计样本 count、P90/P95/P99/P99.9/max（微秒）、发送队列和 logger 丢弃/异常。不是每包日志，也不是滑动窗口 SLO；无样本的零不能解释为零延迟。
 
+`RealtimeQueueSnapshot()` 返回 LatestOnly 游戏待发队列的类型化快照，不发送消息、不重置计数。`QueuedMessages`/`QueuedBytes` 是当前待发键数和含 envelope 预留的字节数；`Replaced` 是同键替换累计次数；`ClosedDropped`、`BackpressureDropped`、`SendFailed` 区分清理、回压后无法重新入队和其他发送失败；`AdmissionRejected` 包含预算/键数上限拒绝；`Forwarded` 只表示传输层已接受，不表示送达。传输层后续替换、优先级队列和协商缓冲的指标仍从 Prometheus 文本查询。
+
 `MetricsSnapshot()` 返回类型化游戏指标，`PrometheusSnapshot()` 覆盖传输/排队/恢复/协商等完整文本指标。`QualitySnapshot(session)` 和 `ClockSyncSnapshot(session)` 未采样返回 null。时钟偏移是含排队的近似传输测量，不是可信反外挂时钟。日志以 runtime/endpoint/session/correlation 关联事件；聚合指标不包含玩家标签。
 
 完整多传输、动态加密、重连、版本范围、GC 与回调测试见 [RNet.Smoke](../csharp/RNet.Smoke/Program.cs)。

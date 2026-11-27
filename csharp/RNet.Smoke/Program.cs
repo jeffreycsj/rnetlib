@@ -56,12 +56,26 @@ foreach (var transport in new[] { Transport.Tcp, Transport.Udp, Transport.Kcp })
             e => { if (e.Type == GameEventType.Message) { Require(e.Data.SequenceEqual(payload), "opaque echo"); received = true; } });
     }
     foreach (uint? tick in new uint?[] { null, 0, uint.MaxValue }) {
+        var before = server.RealtimeQueueSnapshot();
+        Require(before.QueuedMessages == 0 && before.QueuedBytes == 0, "initial realtime queue empty");
         server.SendLatestWithTick(ss, 7, new byte[] { 1 }, 17);
+        var first = server.RealtimeQueueSnapshot();
         if (tick.HasValue) server.SendLatestWithTick(ss, 7, new byte[] { 0, 255, 2 }, tick.Value);
         else server.SendLatest(ss, 7, new byte[] { 0, 255, 2 });
-        Require(server.FlushRealtime(0) == 0, "zero flush");
+        var replaced = server.RealtimeQueueSnapshot();
+        Require(first.QueuedMessages == 1 && replaced.QueuedMessages == 1 &&
+            first.QueuedBytes > 1 && replaced.QueuedBytes == first.QueuedBytes + 2,
+            "realtime replacement retains one entry and adjusts reserved bytes");
+        Require(replaced.Replaced == before.Replaced + 1 && replaced.Forwarded == before.Forwarded &&
+            replaced.AdmissionRejected == 0 && replaced.ClosedDropped == 0 &&
+            replaced.BackpressureDropped == 0 && replaced.SendFailed == 0, "realtime cumulative counters");
+        Require(server.RealtimeQueueSnapshot().Replaced == replaced.Replaced, "snapshot must not reset counters");
+        Require(server.FlushRealtime(0) == 0 && server.RealtimeQueueSnapshot().QueuedMessages == 1, "zero flush");
         Require(server.FlushRealtime(1) == 1, "explicit flush before polling");
         Require(server.FlushRealtime(nuint.MaxValue) == 0, "empty flush");
+        var flushed = server.RealtimeQueueSnapshot();
+        Require(flushed.QueuedMessages == 0 && flushed.QueuedBytes == 0 &&
+            flushed.Forwarded == before.Forwarded + 1, "realtime transport admission frees staging");
         bool latest = false;
         Pump(server, client, () => latest, null, e => {
             if (e.Type == GameEventType.Message) {
@@ -110,9 +124,15 @@ foreach (var transport in new[] { Transport.Tcp, Transport.Udp, Transport.Kcp })
     try { client.Send(0, new byte[] { 1 }); throw new Exception("invalid handle accepted"); }
     catch (RNetException error) { Require(error.Code != 0 && !string.IsNullOrWhiteSpace(error.Message), "detailed native error"); }
     queryRuntime = null;
+    var closingQueue = server.RealtimeQueueSnapshot();
+    server.SendLatest(ss, 99, Array.Empty<byte>());
     server.CloseSession(ss);
+    var closedQueue = server.RealtimeQueueSnapshot();
+    Require(closedQueue.QueuedMessages == 0 && closedQueue.QueuedBytes == 0 &&
+        closedQueue.ClosedDropped == closingQueue.ClosedDropped + 1, "session close discards staged snapshot");
     server.CloseEndpoint(listener);
     client.Dispose(); client.Dispose();
+    try { client.RealtimeQueueSnapshot(); throw new Exception("disposed queue snapshot accepted"); } catch (ObjectDisposedException) { }
     try { client.FlushRealtime(0); throw new Exception("disposed flush accepted"); } catch (ObjectDisposedException) { }
     try { client.SendLatestWithTick(0, 0, Array.Empty<byte>(), 0); throw new Exception("disposed latest accepted"); } catch (ObjectDisposedException) { }
     try { client.Poll(); throw new Exception("disposed runtime accepted"); } catch (ObjectDisposedException) { }
